@@ -15,6 +15,7 @@
 #include "components/UITheme.h"
 #include "components/icons/bookmark.h"
 #include "fontIds.h"
+#include "util/DynamicFont.h"
 
 // Internal constants
 namespace {
@@ -260,7 +261,7 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
                          const std::function<std::string(int index)>& rowSubtitle,
                          const std::function<UIIcon(int index)>& rowIcon,
                          const std::function<std::string(int index)>& rowValue, bool highlightValue,
-                         const std::function<bool(int index)>& rowDimmed) const {
+                         const std::function<bool(int index)>& rowDimmed, int titleFontId) const {
   int rowHeight =
       (rowSubtitle != nullptr) ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
   int pageItems = rect.height / rowHeight;
@@ -316,7 +317,7 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     }
 
     auto itemName = rowTitle(i);
-    auto font = UI_10_FONT_ID;
+    const auto font = titleFontId != 0 ? titleFontId : UI_10_FONT_ID;
     auto item = renderer.truncatedText(font, itemName.c_str(), rowTextWidth);
     renderer.drawText(font, rect.x + BaseMetrics::values.contentSidePadding, itemY, item.c_str(), i != selectedIndex);
 
@@ -577,17 +578,26 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
   if (hasContinueReading) {
     const std::string& lastBookTitle = recentBooks[0].title;
     const std::string& lastBookAuthor = recentBooks[0].author;
+    std::string bookText = lastBookTitle;
+    bookText += '\n';
+    bookText += lastBookAuthor;
+    bookText += "\n\xe2\x80\xa6";
+    const int bookTitleFontId = DynamicFont::fontForCjkText(renderer, lastBookTitle.c_str(), UI_12_FONT_ID);
+    const int bookAuthorFontId = DynamicFont::fontForCjkText(renderer, lastBookAuthor.c_str(), UI_10_FONT_ID);
+    const auto bookTitleStyle = renderer.isSdCardFont(bookTitleFontId) ? EpdFontFamily::REGULAR : EpdFontFamily::BOLD;
+    DynamicFont::prewarmIfSdFont(renderer, bookTitleFontId, bookText);
+    DynamicFont::prewarmIfSdFont(renderer, bookAuthorFontId, bookText);
 
     // Invert text colors based on selection state:
     // - With cover: selected = white text on black box, unselected = black text on white box
     // - Without cover: selected = white text on black card, unselected = black text on white card
 
-    auto lines = renderer.wrappedText(UI_12_FONT_ID, lastBookTitle.c_str(), bookWidth - 40, 3);
+    auto lines = renderer.wrappedText(bookTitleFontId, lastBookTitle.c_str(), bookWidth - 40, 3, bookTitleStyle);
 
     // Book title text
-    int totalTextHeight = renderer.getLineHeight(UI_12_FONT_ID) * static_cast<int>(lines.size());
+    int totalTextHeight = renderer.getLineHeight(bookTitleFontId) * static_cast<int>(lines.size());
     if (!lastBookAuthor.empty()) {
-      totalTextHeight += renderer.getLineHeight(UI_10_FONT_ID) * 3 / 2;
+      totalTextHeight += renderer.getLineHeight(bookAuthorFontId) * 3 / 2;
     }
 
     // Vertically center the title block within the card
@@ -595,7 +605,7 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
 
     const auto truncatedAuthor = lastBookAuthor.empty()
                                      ? std::string{}
-                                     : renderer.truncatedText(UI_10_FONT_ID, lastBookAuthor.c_str(), bookWidth - 40);
+                                     : renderer.truncatedText(bookAuthorFontId, lastBookAuthor.c_str(), bookWidth - 40);
 
     // If cover image was rendered, draw box behind title and author
     if (coverRendered) {
@@ -603,13 +613,13 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
       // Calculate the max text width for the box
       int maxTextWidth = 0;
       for (const auto& line : lines) {
-        const int lineWidth = renderer.getTextWidth(UI_12_FONT_ID, line.c_str());
+        const int lineWidth = renderer.getTextWidth(bookTitleFontId, line.c_str(), bookTitleStyle);
         if (lineWidth > maxTextWidth) {
           maxTextWidth = lineWidth;
         }
       }
       if (!truncatedAuthor.empty()) {
-        const int authorWidth = renderer.getTextWidth(UI_10_FONT_ID, truncatedAuthor.c_str());
+        const int authorWidth = renderer.getTextWidth(bookAuthorFontId, truncatedAuthor.c_str());
         if (authorWidth > maxTextWidth) {
           maxTextWidth = authorWidth;
         }
@@ -627,13 +637,13 @@ void BaseTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
     }
 
     for (const auto& line : lines) {
-      renderer.drawCenteredText(UI_12_FONT_ID, titleYStart, line.c_str(), !bookSelected);
-      titleYStart += renderer.getLineHeight(UI_12_FONT_ID);
+      renderer.drawCenteredText(bookTitleFontId, titleYStart, line.c_str(), !bookSelected, bookTitleStyle);
+      titleYStart += renderer.getLineHeight(bookTitleFontId);
     }
 
     if (!truncatedAuthor.empty()) {
-      titleYStart += renderer.getLineHeight(UI_10_FONT_ID) / 2;
-      renderer.drawCenteredText(UI_10_FONT_ID, titleYStart, truncatedAuthor.c_str(), !bookSelected);
+      titleYStart += renderer.getLineHeight(bookAuthorFontId) / 2;
+      renderer.drawCenteredText(bookAuthorFontId, titleYStart, truncatedAuthor.c_str(), !bookSelected);
     }
 
     // "Continue Reading" label at the bottom
@@ -853,6 +863,12 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
   // Draw Title
   if (!title.empty()) {
     textY -= textYOffset;
+    const int titleFontId = DynamicFont::fontForCjkText(renderer, title.c_str(), SMALL_FONT_ID);
+    if (renderer.isSdCardFont(titleFontId)) {
+      std::string prewarmText = title;
+      prewarmText += "\xe2\x80\xa6";
+      DynamicFont::prewarmIfSdFont(renderer, titleFontId, prewarmText);
+    }
     // Centered chapter title text
     // Page width minus existing content with 30px padding on each side
     const int rendererableScreenWidth =
@@ -867,18 +883,18 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     int availableTitleSpace = rendererableScreenWidth - 2 * titleMarginLeftAdjusted;
 
     int titleWidth;
-    titleWidth = renderer.getTextWidth(SMALL_FONT_ID, title.c_str());
+    titleWidth = renderer.getTextWidth(titleFontId, title.c_str());
     if (titleWidth > availableTitleSpace) {
       // Not enough space to center on the screen, center it within the remaining space instead
       availableTitleSpace = rendererableScreenWidth - titleMarginLeft - titleMarginRight;
       titleMarginLeftAdjusted = titleMarginLeft;
     }
     if (titleWidth > availableTitleSpace) {
-      title = renderer.truncatedText(SMALL_FONT_ID, title.c_str(), availableTitleSpace);
-      titleWidth = renderer.getTextWidth(SMALL_FONT_ID, title.c_str());
+      title = renderer.truncatedText(titleFontId, title.c_str(), availableTitleSpace);
+      titleWidth = renderer.getTextWidth(titleFontId, title.c_str());
     }
 
-    renderer.drawText(SMALL_FONT_ID,
+    renderer.drawText(titleFontId,
                       titleMarginLeftAdjusted + metrics.statusBarHorizontalMargin + orientedMarginLeft +
                           (availableTitleSpace - titleWidth) / 2,
                       textY, title.c_str());

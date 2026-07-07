@@ -92,3 +92,8 @@ int SdCardFontManager::getFontId(const std::string& familyName) const {
   if (familyName != loadedFamilyName_ || loaded_.empty()) return 0;
   return loaded_.front().fontId;
 }
+
+int SdCardFontManager::getLoadedFontId() const {
+  if (loaded_.empty()) return 0;
+  return loaded_.front().fontId;
+}

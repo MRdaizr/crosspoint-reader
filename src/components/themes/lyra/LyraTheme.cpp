@@ -28,6 +28,7 @@
 #include "components/icons/transfer.h"
 #include "components/icons/wifi.h"
 #include "fontIds.h"
+#include "util/DynamicFont.h"
 
 // Internal constants
 namespace {
@@ -215,7 +216,7 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
                          const std::function<std::string(int index)>& rowSubtitle,
                          const std::function<UIIcon(int index)>& rowIcon,
                          const std::function<std::string(int index)>& rowValue, bool highlightValue,
-                         const std::function<bool(int index)>& rowDimmed) const {
+                         const std::function<bool(int index)>& rowDimmed, int titleFontId) const {
   int rowHeight =
       (rowSubtitle != nullptr) ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
   int pageItems = rect.height / rowHeight;
@@ -270,14 +271,15 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
       rowTextWidth -= valueWidth;
     }
 
+    const int titleFont = titleFontId != 0 ? titleFontId : UI_10_FONT_ID;
     auto itemName = rowTitle(i);
-    auto item = renderer.truncatedText(UI_10_FONT_ID, itemName.c_str(), rowTextWidth);
-    renderer.drawText(UI_10_FONT_ID, textX, itemY + 7, item.c_str(), true);
+    auto item = renderer.truncatedText(titleFont, itemName.c_str(), rowTextWidth);
+    renderer.drawText(titleFont, textX, itemY + 7, item.c_str(), true);
 
     // Apply checkerboard dither to create gray text effect for dimmed items
     if (rowDimmed && rowDimmed(i) && i != selectedIndex) {
-      const int titleWidth = renderer.getTextWidth(UI_10_FONT_ID, item.c_str());
-      const int lineH = renderer.getLineHeight(UI_10_FONT_ID);
+      const int titleWidth = renderer.getTextWidth(titleFont, item.c_str());
+      const int lineH = renderer.getLineHeight(titleFont);
       for (int py = itemY + 7; py < itemY + 7 + lineH; py++)
         for (int px = textX; px < textX + titleWidth; px++)
           if ((px + py) % 2 == 0) renderer.drawPixel(px, py, false);
@@ -479,22 +481,32 @@ void LyraTheme::drawRecentBookCover(GfxRenderer& renderer, Rect rect, const std:
                                hPaddingInSelection, cornerRadius, false, false, true, true, Color::LightGray);
     }
 
-    auto titleLines = renderer.wrappedText(UI_12_FONT_ID, book.title.c_str(), textWidth, 3, EpdFontFamily::BOLD);
+    std::string bookText = book.title;
+    bookText += '\n';
+    bookText += book.author;
+    bookText += "\n\xe2\x80\xa6";
+    const int bookTitleFontId = DynamicFont::fontForCjkText(renderer, book.title.c_str(), UI_12_FONT_ID);
+    const int bookAuthorFontId = DynamicFont::fontForCjkText(renderer, book.author.c_str(), UI_10_FONT_ID);
+    const auto bookTitleStyle = renderer.isSdCardFont(bookTitleFontId) ? EpdFontFamily::REGULAR : EpdFontFamily::BOLD;
+    DynamicFont::prewarmIfSdFont(renderer, bookTitleFontId, bookText);
+    DynamicFont::prewarmIfSdFont(renderer, bookAuthorFontId, bookText);
 
-    auto author = renderer.truncatedText(UI_10_FONT_ID, book.author.c_str(), textWidth);
-    const int titleLineHeight = renderer.getLineHeight(UI_12_FONT_ID);
+    auto titleLines = renderer.wrappedText(bookTitleFontId, book.title.c_str(), textWidth, 3, bookTitleStyle);
+
+    auto author = renderer.truncatedText(bookAuthorFontId, book.author.c_str(), textWidth);
+    const int titleLineHeight = renderer.getLineHeight(bookTitleFontId);
     const int titleBlockHeight = titleLineHeight * static_cast<int>(titleLines.size());
-    const int authorHeight = book.author.empty() ? 0 : (renderer.getLineHeight(UI_10_FONT_ID) * 3 / 2);
+    const int authorHeight = book.author.empty() ? 0 : (renderer.getLineHeight(bookAuthorFontId) * 3 / 2);
     const int totalBlockHeight = titleBlockHeight + authorHeight;
     int titleY = tileY + tileHeight / 2 - totalBlockHeight / 2;
     const int textX = tileX + hPaddingInSelection + coverWidth + LyraMetrics::values.verticalSpacing;
     for (const auto& line : titleLines) {
-      renderer.drawText(UI_12_FONT_ID, textX, titleY, line.c_str(), true, EpdFontFamily::BOLD);
+      renderer.drawText(bookTitleFontId, textX, titleY, line.c_str(), true, bookTitleStyle);
       titleY += titleLineHeight;
     }
     if (!book.author.empty()) {
-      titleY += renderer.getLineHeight(UI_10_FONT_ID) / 2;
-      renderer.drawText(UI_10_FONT_ID, textX, titleY, author.c_str(), true);
+      titleY += renderer.getLineHeight(bookAuthorFontId) / 2;
+      renderer.drawText(bookAuthorFontId, textX, titleY, author.c_str(), true);
     }
   } else {
     drawEmptyRecents(renderer, rect);

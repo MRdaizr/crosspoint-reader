@@ -28,6 +28,7 @@ class SdCardFontManager {
   // Look up the font ID for the loaded family. Returns 0 if nothing loaded
   // or familyName doesn't match.
   int getFontId(const std::string& familyName) const;
+  int getLoadedFontId() const;
 
   // Get name of currently loaded family (empty if none).
   const std::string& currentFamilyName() const { return loadedFamilyName_; };

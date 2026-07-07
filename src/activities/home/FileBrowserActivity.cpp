@@ -10,10 +10,12 @@
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/DynamicFont.h"
 
 namespace {
 constexpr unsigned long GO_HOME_MS = 1000;
@@ -73,6 +75,7 @@ void FileBrowserActivity::onEnter() {
   }
 
   selectorIndex = 0;
+  sdFontSystem.ensureLoaded(renderer);
 
   // If Confirm was held while this activity opened (typical when launched from a menu), ignore
   // its release — otherwise we'd immediately auto-open whatever is at index 0.
@@ -357,11 +360,24 @@ void FileBrowserActivity::render(RenderLock&&) {
           : ((basepath == "/") ? std::string(tr(STR_SD_CARD)) : basepath.substr(basepath.rfind('/') + 1));
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str());
 
-  const int pathLineHeight = renderer.getLineHeight(SMALL_FONT_ID);
+  const int pathFontId = DynamicFont::fontForCjkText(renderer, basepath.c_str(), SMALL_FONT_ID);
+  const int pathLineHeight = renderer.getLineHeight(pathFontId);
   const int pathReserved = pathLineHeight + metrics.verticalSpacing;
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight =
       pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
+  const int pageItems = std::max(1, UITheme::getNumberOfItemsPerPage(renderer, true, false, true, false, pathReserved));
+  const int pageStartIndex = files.empty() ? 0 : static_cast<int>(selectorIndex) / pageItems * pageItems;
+  std::string visibleText;
+  for (int i = pageStartIndex; i < static_cast<int>(files.size()) && i < pageStartIndex + pageItems; i++) {
+    visibleText += getFileName(files[i]);
+    visibleText += '\n';
+  }
+  visibleText += basepath;
+  visibleText += "\n\xe2\x80\xa6";  // ellipsis used by truncatedText() and path truncation
+  const int fileTitleFontId = DynamicFont::fontForCjkText(renderer, visibleText.c_str(), 0);
+  DynamicFont::prewarmIfSdFont(renderer, fileTitleFontId, visibleText);
+
   if (files.empty()) {
     const char* emptyMsg = (mode == Mode::PickFirmware) ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND);
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, emptyMsg);
@@ -370,7 +386,7 @@ void FileBrowserActivity::render(RenderLock&&) {
         renderer, Rect{0, contentTop, pageWidth, contentHeight}, files.size(), selectorIndex,
         [this](int index) { return getFileName(files[index]); }, nullptr,
         [this](int index) { return UITheme::getFileIcon(files[index]); },
-        [this](int index) { return getFileExtension(files[index]); }, false);
+        [this](int index) { return getFileExtension(files[index]); }, false, nullptr, fileTitleFontId);
   }
 
   // Full path display
@@ -383,21 +399,21 @@ void FileBrowserActivity::render(RenderLock&&) {
     const char* pathStr = basepath.c_str();
     const char* pathDisplay = pathStr;
     char leftTruncBuf[256];
-    if (renderer.getTextWidth(SMALL_FONT_ID, pathStr) > pathMaxWidth) {
+    if (renderer.getTextWidth(pathFontId, pathStr) > pathMaxWidth) {
       const char ellipsis[] = "\xe2\x80\xa6";  // UTF-8 ellipsis (…)
-      const int ellipsisWidth = renderer.getTextWidth(SMALL_FONT_ID, ellipsis);
+      const int ellipsisWidth = renderer.getTextWidth(pathFontId, ellipsis);
       const int available = pathMaxWidth - ellipsisWidth;
       // Walk forward from the start until the suffix fits, skipping UTF-8 continuation bytes
       const char* p = pathStr;
       while (*p) {
-        if (renderer.getTextWidth(SMALL_FONT_ID, p) <= available) break;
+        if (renderer.getTextWidth(pathFontId, p) <= available) break;
         ++p;
         while (*p && (static_cast<unsigned char>(*p) & 0xC0) == 0x80) ++p;
       }
       snprintf(leftTruncBuf, sizeof(leftTruncBuf), "%s%s", ellipsis, p);
       pathDisplay = leftTruncBuf;
     }
-    renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding, pathY, pathDisplay);
+    renderer.drawText(pathFontId, metrics.contentSidePadding, pathY, pathDisplay);
   }
 
   // Help text

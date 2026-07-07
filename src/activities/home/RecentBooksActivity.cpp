@@ -9,9 +9,11 @@
 
 #include "MappedInputManager.h"
 #include "RecentBooksStore.h"
+#include "SdCardFontSystem.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/DynamicFont.h"
 
 namespace {
 // Hold threshold for the long-press "remove from list" action (firmware convention).
@@ -33,6 +35,7 @@ void RecentBooksActivity::onEnter() {
   loadRecentBooks();
 
   selectorIndex = 0;
+  sdFontSystem.ensureLoaded(renderer);
   requestUpdate();
 }
 
@@ -137,10 +140,23 @@ void RecentBooksActivity::render(RenderLock&&) {
   if (recentBooks.empty()) {
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, tr(STR_NO_RECENT_BOOKS));
   } else {
+    const int pageItems =
+        std::max(1, UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, true));
+    const int pageStartIndex = static_cast<int>(selectorIndex) / pageItems * pageItems;
+    std::string visibleText;
+    for (int i = pageStartIndex; i < static_cast<int>(recentBooks.size()) && i < pageStartIndex + pageItems; i++) {
+      visibleText += recentBooks[i].title;
+      visibleText += '\n';
+    }
+    visibleText += "\xe2\x80\xa6";  // ellipsis used by truncatedText()
+    const int recentTitleFontId = DynamicFont::fontForCjkText(renderer, visibleText.c_str(), 0);
+    DynamicFont::prewarmIfSdFont(renderer, recentTitleFontId, visibleText);
+
     GUI.drawList(
         renderer, Rect{0, contentTop, pageWidth, contentHeight}, recentBooks.size(), selectorIndex,
         [this](int index) { return recentBooks[index].title; }, [this](int index) { return recentBooks[index].author; },
-        [this](int index) { return UITheme::getFileIcon(recentBooks[index].path); });
+        [this](int index) { return UITheme::getFileIcon(recentBooks[index].path); }, nullptr, false, nullptr,
+        recentTitleFontId);
   }
 
   // Help text

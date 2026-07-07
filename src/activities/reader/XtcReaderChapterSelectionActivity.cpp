@@ -6,8 +6,10 @@
 #include <algorithm>
 
 #include "MappedInputManager.h"
+#include "SdCardFontSystem.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/DynamicFont.h"
 
 int XtcReaderChapterSelectionActivity::getPageItems() const {
   constexpr int lineHeight = 30;
@@ -46,6 +48,8 @@ void XtcReaderChapterSelectionActivity::onEnter() {
   }
 
   selectorIndex = findChapterIndexForPage(currentPage);
+
+  sdFontSystem.ensureLoaded(renderer);
 
   requestUpdate();
 }
@@ -122,12 +126,23 @@ void XtcReaderChapterSelectionActivity::render(RenderLock&&) {
   }
 
   const auto pageStartIndex = selectorIndex / pageItems * pageItems;
+  std::string visibleText;
+  for (int i = pageStartIndex; i < static_cast<int>(chapters.size()) && i < pageStartIndex + pageItems; i++) {
+    const auto& chapter = chapters[i];
+    visibleText += chapter.name.empty() ? tr(STR_UNNAMED) : chapter.name;
+    visibleText += '\n';
+  }
+  visibleText += "\xe2\x80\xa6";
+  const int chapterTitleFontId = DynamicFont::fontForCjkText(renderer, visibleText.c_str(), UI_10_FONT_ID);
+  DynamicFont::prewarmIfSdFont(renderer, chapterTitleFontId, visibleText);
+
   // Highlight only the content area, not the hint gutters.
   renderer.fillRect(contentX, 60 + contentY + (selectorIndex % pageItems) * 30 - 2, contentWidth - 1, 30);
   for (int i = pageStartIndex; i < static_cast<int>(chapters.size()) && i < pageStartIndex + pageItems; i++) {
     const auto& chapter = chapters[i];
     const char* title = chapter.name.empty() ? tr(STR_UNNAMED) : chapter.name.c_str();
-    renderer.drawText(UI_10_FONT_ID, contentX + 20, 60 + contentY + (i % pageItems) * 30, title, i != selectorIndex);
+    renderer.drawText(chapterTitleFontId, contentX + 20, 60 + contentY + (i % pageItems) * 30, title,
+                      i != selectorIndex);
   }
 
   // Skip button hints in landscape CW mode (they overlap content)
