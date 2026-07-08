@@ -116,7 +116,17 @@ void LyraTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
                    Rect{batteryX, rect.y + 5, LyraMetrics::values.batteryWidth, LyraMetrics::values.batteryHeight},
                    showBatteryPercentage);
 
-  int maxTitleWidth = title != nullptr ? renderer.getTextWidth(UI_12_FONT_ID, title, EpdFontFamily::BOLD) : 0;
+  const int titleHeaderFontId = title != nullptr ? DynamicFont::fontForCjkText(renderer, title, UI_12_FONT_ID)
+                                                 : UI_12_FONT_ID;
+  const auto titleHeaderStyle =
+      renderer.isSdCardFont(titleHeaderFontId) ? EpdFontFamily::REGULAR : EpdFontFamily::BOLD;
+  if (title != nullptr) {
+    std::string prewarmText = title;
+    prewarmText += "\xe2\x80\xa6";
+    DynamicFont::prewarmIfSdFont(renderer, titleHeaderFontId, prewarmText);
+  }
+
+  int maxTitleWidth = title != nullptr ? renderer.getTextWidth(titleHeaderFontId, title, titleHeaderStyle) : 0;
   int maxSubtitleWidth =
       subtitle != nullptr ? renderer.getTextWidth(SMALL_FONT_ID, subtitle, EpdFontFamily::REGULAR) : 0;
 
@@ -139,10 +149,10 @@ void LyraTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
   }
 
   if (title) {
-    auto truncatedTitle = renderer.truncatedText(UI_12_FONT_ID, title, maxTitleWidth, EpdFontFamily::BOLD);
-    renderer.drawText(UI_12_FONT_ID, rect.x + LyraMetrics::values.contentSidePadding,
+    auto truncatedTitle = renderer.truncatedText(titleHeaderFontId, title, maxTitleWidth, titleHeaderStyle);
+    renderer.drawText(titleHeaderFontId, rect.x + LyraMetrics::values.contentSidePadding,
                       rect.y + LyraMetrics::values.batteryBarHeight + 3, truncatedTitle.c_str(), true,
-                      EpdFontFamily::BOLD);
+                      titleHeaderStyle);
     renderer.drawLine(rect.x, rect.y + rect.height - 3, rect.x + rect.width - 1, rect.y + rect.height - 3, 3, true);
   }
 

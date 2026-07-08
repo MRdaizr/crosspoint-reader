@@ -6,6 +6,7 @@
 
 #include "CrossPointSettings.h"
 #include "activities/Activity.h"
+#include "activities/reader/TxtReaderMenuActivity.h"
 
 class TxtReaderActivity final : public Activity {
   std::unique_ptr<Txt> txt;
@@ -20,6 +21,7 @@ class TxtReaderActivity final : public Activity {
   int linesPerPage = 0;
   int viewportWidth = 0;
   bool initialized = false;
+  bool pendingScreenshot = false;
 
   // Cached settings for cache validation (different fonts/margins require re-indexing)
   int cachedFontId = 0;
@@ -32,6 +34,9 @@ class TxtReaderActivity final : public Activity {
 
   void renderPage();
   void renderStatusBar() const;
+  void applyOrientation(uint8_t orientation);
+  void jumpToPercent(int percent);
+  void onReaderMenuConfirm(TxtReaderMenuActivity::MenuAction action);
 
   void initializeReader();
   bool loadPageAtOffset(size_t offset, std::vector<std::string>& outLines, size_t& nextOffset);

@@ -13,6 +13,7 @@
 #include "components/UITheme.h"
 #include "components/icons/cover.h"
 #include "fontIds.h"
+#include "util/DynamicFont.h"
 
 namespace {
 constexpr int kCoverRadius = 18;
@@ -79,8 +80,13 @@ void RoundedRaffTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const 
   }
 
   const int maxTitleWidth = std::max(0, batteryGroupLeftX - 20 - titleX);
-  auto headerTitle = renderer.truncatedText(titleFontId(), title, maxTitleWidth, EpdFontFamily::BOLD);
-  renderer.drawText(titleFontId(), titleX, titleY, headerTitle.c_str(), true, EpdFontFamily::BOLD);
+  const int headerFontId = DynamicFont::fontForCjkText(renderer, title, titleFontId());
+  const auto headerStyle = renderer.isSdCardFont(headerFontId) ? EpdFontFamily::REGULAR : EpdFontFamily::BOLD;
+  std::string prewarmText = title;
+  prewarmText += "\xe2\x80\xa6";
+  DynamicFont::prewarmIfSdFont(renderer, headerFontId, prewarmText);
+  auto headerTitle = renderer.truncatedText(headerFontId, title, maxTitleWidth, headerStyle);
+  renderer.drawText(headerFontId, titleX, titleY, headerTitle.c_str(), true, headerStyle);
   const Rect batteryRect{batteryIconX, rect.y + 14, RoundedRaffMetrics::values.batteryWidth,
                          RoundedRaffMetrics::values.batteryHeight};
   const uint16_t percentage = powerManager.getBatteryPercentage();

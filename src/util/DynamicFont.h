@@ -2,6 +2,7 @@
 
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#include <Logging.h>
 #include <Utf8.h>
 
 #include <string>
@@ -28,9 +29,18 @@ inline bool containsCjk(const char* text) {
 }
 
 inline int fontForCjkText(const GfxRenderer& renderer, const char* text, int fallbackFontId) {
+  if (!containsCjk(text)) return fallbackFontId;
+
+  sdFontSystem.ensureLoaded(const_cast<GfxRenderer&>(renderer));
   const int sdFontId = sdFontSystem.currentFontId();
-  if (containsCjk(text) && renderer.isSdCardFont(sdFontId)) {
+  if (renderer.isSdCardFont(sdFontId)) {
     return sdFontId;
+  }
+
+  static bool loggedMissingSdFont = false;
+  if (!loggedMissingSdFont) {
+    LOG_DBG("DFNT", "CJK text requested without a loaded SD font; falling back to built-in UI font");
+    loggedMissingSdFont = true;
   }
   return fallbackFontId;
 }

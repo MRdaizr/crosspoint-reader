@@ -1027,7 +1027,10 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const auto tPrewarm = millis();
 
   const bool pageHasImages = page->hasImages();
-  const bool needsTextGrayscale = SETTINGS.textAntiAliasing;
+  // EPUB text AA currently re-renders the full page for every grayscale strip
+  // and can turn an ordinary page flip into a minute-plus render on X4. Keep
+  // image grayscale, but do not route text-only pages through grayscale.
+  const bool needsTextGrayscale = false;
   const bool needsAnyGrayscale = needsTextGrayscale || pageHasImages;
   auto renderGrayscalePass = [&]() {
     if (needsTextGrayscale) {
@@ -1079,19 +1082,31 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   // cost stays close to one render. Both text (drawPixel) and images
   // (DirectPixelWriter) honor the active strip target.
   if (needsAnyGrayscale && renderer.supportsStripGrayscale()) {
-    constexpr int STRIP_ROWS = 80;
     const int gh = renderer.getDisplayHeight();
     const int gwBytes = renderer.getDisplayWidthBytes();
 
-    auto scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * STRIP_ROWS);
+    std::unique_ptr<uint8_t[]> scratch;
+    int stripRows = 0;
+    const int stripCandidates[] = {gh, gh / 2, gh / 4, 160, 80};
+    for (const int candidate : stripCandidates) {
+      if (candidate <= 0 || candidate > gh || candidate == stripRows) {
+        continue;
+      }
+      scratch = makeUniqueNoThrow<uint8_t[]>(static_cast<size_t>(gwBytes) * candidate);
+      if (scratch) {
+        stripRows = candidate;
+        break;
+      }
+    }
     if (!scratch) {
-      LOG_ERR("ERS", "OOM: grayscale strip scratch (%d bytes); skipping AA this page", gwBytes * STRIP_ROWS);
+      LOG_ERR("ERS", "OOM: grayscale strip scratch; skipping AA this page");
     } else {
+      LOG_DBG("ERS", "Using grayscale strip height: %d rows", stripRows);
       // Bands may be streamed in any order: X4 windows each via setRamArea, X3
       // via PTL.
       renderer.setRenderMode(GfxRenderer::GRAYSCALE_LSB);
-      for (int y = 0; y < gh; y += STRIP_ROWS) {
-        const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
+      for (int y = 0; y < gh; y += stripRows) {
+        const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
         renderer.beginStripTarget(scratch.get(), y, rows);
         renderer.clearScreen(0x00);
         renderGrayscalePass();
@@ -1102,8 +1117,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
 
       // MSB plane.
       renderer.setRenderMode(GfxRenderer::GRAYSCALE_MSB);
-      for (int y = 0; y < gh; y += STRIP_ROWS) {
-        const int rows = (gh - y < STRIP_ROWS) ? (gh - y) : STRIP_ROWS;
+      for (int y = 0; y < gh; y += stripRows) {
+        const int rows = (gh - y < stripRows) ? (gh - y) : stripRows;
         renderer.beginStripTarget(scratch.get(), y, rows);
         renderer.clearScreen(0x00);
         renderGrayscalePass();

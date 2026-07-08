@@ -8,10 +8,42 @@
 #include <Utf8.h>
 #include <ZipFile.h>
 
+#include <cctype>
+
 #include "Epub/parsers/ContainerParser.h"
 #include "Epub/parsers/ContentOpfParser.h"
 #include "Epub/parsers/TocNavParser.h"
 #include "Epub/parsers/TocNcxParser.h"
+
+namespace {
+
+bool looksLikeGeneratedId(const std::string& title) {
+  if (title.length() < 16) {
+    return false;
+  }
+
+  size_t hexCount = 0;
+  for (const unsigned char ch : title) {
+    if (std::isxdigit(ch)) {
+      hexCount++;
+    } else if (ch != '-' && ch != '_' && ch != '.') {
+      return false;
+    }
+  }
+  return hexCount >= 16;
+}
+
+std::string titleFromPath(const std::string& path) {
+  const size_t slash = path.find_last_of('/');
+  std::string title = (slash != std::string::npos) ? path.substr(slash + 1) : path;
+  const size_t dot = title.find_last_of('.');
+  if (dot != std::string::npos) {
+    title = title.substr(0, dot);
+  }
+  return title;
+}
+
+}  // namespace
 
 bool Epub::findContentOpfFile(std::string* contentOpfFile) const {
   const auto containerPath = "META-INF/container.xml";
@@ -533,11 +565,18 @@ const std::string& Epub::getPath() const { return filepath; }
 
 const std::string& Epub::getTitle() const {
   static std::string blank;
+  static std::string fallbackTitle;
   if (!bookMetadataCache || !bookMetadataCache->isLoaded()) {
     return blank;
   }
 
-  return bookMetadataCache->coreMetadata.title;
+  const std::string& title = bookMetadataCache->coreMetadata.title;
+  if (!title.empty() && !looksLikeGeneratedId(title)) {
+    return title;
+  }
+
+  fallbackTitle = titleFromPath(filepath);
+  return fallbackTitle.empty() ? title : fallbackTitle;
 }
 
 const std::string& Epub::getAuthor() const {

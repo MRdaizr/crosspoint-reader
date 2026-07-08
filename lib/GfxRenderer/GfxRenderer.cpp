@@ -163,13 +163,18 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
   // pixel offset from the (already-shifted) cursor position.
   const int baseX = cursorX + glyph->left / 2;
   const int baseY = cursorY - glyph->top / 2;
+  const int dstXStart = std::max(0, -baseX);
+  const int dstYStart = std::max(0, -baseY);
+  const int dstXEnd = std::min(dstW, renderer.getScreenWidth() - baseX);
+  const int dstYEnd = std::min(dstH, renderer.getScreenHeight() - baseY);
+  if (dstXStart >= dstXEnd || dstYStart >= dstYEnd) return;
 
   if (fontData->is2Bit) {
     // 2-bit packed format: 4 pixels per byte, MSB first, 2 bits per pixel.
     // raw value: 0=white, 1=light-gray, 2=dark-gray, 3=black.
-    for (int dstY = 0; dstY < dstH; dstY++) {
+    for (int dstY = dstYStart; dstY < dstYEnd; dstY++) {
       const int srcY = dstY * 2;
-      for (int dstX = 0; dstX < dstW; dstX++) {
+      for (int dstX = dstXStart; dstX < dstXEnd; dstX++) {
         const int srcX = dstX * 2;
         uint8_t coverage = 0;
         uint8_t maxRaw = 0;
@@ -189,9 +194,9 @@ static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMod
     }
   } else {
     // 1-bit packed format: 8 pixels per byte, MSB first.
-    for (int dstY = 0; dstY < dstH; dstY++) {
+    for (int dstY = dstYStart; dstY < dstYEnd; dstY++) {
       const int srcY = dstY * 2;
-      for (int dstX = 0; dstX < dstW; dstX++) {
+      for (int dstX = dstXStart; dstX < dstXEnd; dstX++) {
         const int srcX = dstX * 2;
         bool hasInk = false;
         for (int sampleY = 0; sampleY < 2 && srcY + sampleY < srcH; sampleY++) {
@@ -252,19 +257,38 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
     // For Normal:  outer loop advances screenY, inner loop advances screenX
     // For Rotated: outer loop advances screenX, inner loop advances screenY (in reverse)
     int outerBase, innerBase;
+    int outerLimit, innerLimit;
     if constexpr (rotation == TextRotation::Rotated90CW) {
       outerBase = cursorX + fontData->ascender - top;  // screenX = outerBase + glyphY
       innerBase = cursorY - left;                      // screenY = innerBase - glyphX
+      outerLimit = renderer.getScreenWidth();
+      innerLimit = renderer.getScreenHeight();
     } else {
       outerBase = cursorY - top;   // screenY = outerBase + glyphY
       innerBase = cursorX + left;  // screenX = innerBase + glyphX
+      outerLimit = renderer.getScreenHeight();
+      innerLimit = renderer.getScreenWidth();
+    }
+    const int glyphYStart = std::max(0, -outerBase);
+    const int glyphYEnd = std::min(static_cast<int>(height), outerLimit - outerBase);
+    int glyphXStart = 0;
+    int glyphXEnd = width;
+    if constexpr (rotation == TextRotation::Rotated90CW) {
+      glyphXStart = std::max(0, innerBase - innerLimit + 1);
+      glyphXEnd = std::min(static_cast<int>(width), innerBase + 1);
+    } else {
+      glyphXStart = std::max(0, -innerBase);
+      glyphXEnd = std::min(static_cast<int>(width), innerLimit - innerBase);
+    }
+    if (glyphYStart >= glyphYEnd || glyphXStart >= glyphXEnd) {
+      return;
     }
 
     if (is2Bit) {
-      int pixelPosition = 0;
-      for (int glyphY = 0; glyphY < height; glyphY++) {
+      for (int glyphY = glyphYStart; glyphY < glyphYEnd; glyphY++) {
         const int outerCoord = outerBase + glyphY;
-        for (int glyphX = 0; glyphX < width; glyphX++, pixelPosition++) {
+        for (int glyphX = glyphXStart; glyphX < glyphXEnd; glyphX++) {
+          const int pixelPosition = glyphY * width + glyphX;
           int screenX, screenY;
           if constexpr (rotation == TextRotation::Rotated90CW) {
             screenX = outerCoord;
@@ -296,10 +320,10 @@ static void renderCharImpl(const GfxRenderer& renderer, GfxRenderer::RenderMode 
         }
       }
     } else {
-      int pixelPosition = 0;
-      for (int glyphY = 0; glyphY < height; glyphY++) {
+      for (int glyphY = glyphYStart; glyphY < glyphYEnd; glyphY++) {
         const int outerCoord = outerBase + glyphY;
-        for (int glyphX = 0; glyphX < width; glyphX++, pixelPosition++) {
+        for (int glyphX = glyphXStart; glyphX < glyphXEnd; glyphX++) {
+          const int pixelPosition = glyphY * width + glyphX;
           int screenX, screenY;
           if constexpr (rotation == TextRotation::Rotated90CW) {
             screenX = outerCoord;
@@ -332,7 +356,20 @@ void GfxRenderer::drawPixel(const int x, const int y, const bool state) const {
 
   // Bounds checking against runtime panel dimensions
   if (phyX < 0 || phyX >= panelWidth || phyY < 0 || phyY >= panelHeight) {
-    LOG_ERR("GFX", "!! Outside range (%d, %d) -> (%d, %d)", x, y, phyX, phyY);
+    static uint32_t rangeLogWindowStart = 0;
+    static uint8_t rangeLogCount = 0;
+    const uint32_t now = millis();
+    if (now - rangeLogWindowStart > 5000) {
+      rangeLogWindowStart = now;
+      rangeLogCount = 0;
+    }
+    if (rangeLogCount < 8) {
+      LOG_ERR("GFX", "!! Outside range (%d, %d) -> (%d, %d)", x, y, phyX, phyY);
+      rangeLogCount++;
+      if (rangeLogCount == 8) {
+        LOG_ERR("GFX", "Suppressing further outside-range pixel logs for 5s");
+      }
+    }
     return;
   }
 

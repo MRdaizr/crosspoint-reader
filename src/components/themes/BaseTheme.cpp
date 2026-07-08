@@ -368,10 +368,15 @@ void BaseTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* t
 
   if (title) {
     int padding = rect.width - batteryX + BaseMetrics::values.batteryWidth;
-    auto truncatedTitle = renderer.truncatedText(UI_12_FONT_ID, title,
+    const int titleFontId = DynamicFont::fontForCjkText(renderer, title, UI_12_FONT_ID);
+    const auto titleStyle = renderer.isSdCardFont(titleFontId) ? EpdFontFamily::REGULAR : EpdFontFamily::BOLD;
+    std::string prewarmText = title;
+    prewarmText += "\xe2\x80\xa6";
+    DynamicFont::prewarmIfSdFont(renderer, titleFontId, prewarmText);
+    auto truncatedTitle = renderer.truncatedText(titleFontId, title,
                                                  rect.width - padding * 2 - BaseMetrics::values.contentSidePadding * 2,
-                                                 EpdFontFamily::BOLD);
-    renderer.drawCenteredText(UI_12_FONT_ID, rect.y + 5, truncatedTitle.c_str(), true, EpdFontFamily::BOLD);
+                                                 titleStyle);
+    renderer.drawCenteredText(titleFontId, rect.y + 5, truncatedTitle.c_str(), true, titleStyle);
   }
 
   if (subtitle) {
@@ -768,7 +773,10 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
 
   // Draw Progress Text
   const auto screenHeight = renderer.getScreenHeight();
-  auto textY = screenHeight - UITheme::getInstance().getStatusBarHeight() - orientedMarginBottom - paddingBottom - 4;
+  constexpr int statusBarTextLift = 6;
+  auto textY =
+      screenHeight - UITheme::getInstance().getStatusBarHeight() - orientedMarginBottom - paddingBottom - 4 -
+      statusBarTextLift;
 
   const int leftClusterX = metrics.statusBarHorizontalMargin + orientedMarginLeft + 1;
   const int rightClusterX = renderer.getScreenWidth() - metrics.statusBarHorizontalMargin - orientedMarginRight;

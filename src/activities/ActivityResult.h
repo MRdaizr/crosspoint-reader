@@ -23,6 +23,11 @@ struct MenuResult {
   uint8_t pageTurnOption = 0;
 };
 
+struct TxtMenuResult {
+  int action = -1;
+  uint8_t orientation = 0;
+};
+
 struct ChapterResult {
   int spineIndex = 0;
   std::string anchor;
@@ -61,7 +66,7 @@ struct FilePathResult {
 
 using ResultVariant =
     std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult, IntervalResult,
-                 PageResult, ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult>;
+                 PageResult, ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult, TxtMenuResult>;
 
 struct ActivityResult {
   bool isCancelled = false;
