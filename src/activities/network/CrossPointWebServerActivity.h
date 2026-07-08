@@ -53,6 +53,7 @@ class CrossPointWebServerActivity final : public Activity {
   int lastWifiBars = 0;
 
   void renderServerRunning() const;
+  void renderFirmwareUpdateStatus(const CrossPointWebServer::FirmwareUpdateStatus& status) const;
   void renderWifiIndicator(int subHeaderTop) const;
 
   void onNetworkModeSelected(NetworkMode mode);

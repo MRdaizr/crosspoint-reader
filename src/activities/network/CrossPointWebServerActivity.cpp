@@ -247,6 +247,7 @@ void CrossPointWebServerActivity::startWebServer() {
 
   // Create the web server instance
   webServer.reset(new CrossPointWebServer());
+  webServer->setFirmwareProgressCallback([this] { requestUpdate(true); });
   webServer->begin();
 
   if (webServer->isRunning()) {
@@ -346,7 +347,12 @@ void CrossPointWebServerActivity::loop() {
           // for back button checking
           mappedInput.update();
           // Check for exit button inside loop for responsiveness
-          if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+          const auto firmwareStatus = webServer->getFirmwareUpdateStatus();
+          const bool firmwareBusy = firmwareStatus.phase == CrossPointWebServer::FirmwareUpdatePhase::UPLOADING ||
+                                    firmwareStatus.phase == CrossPointWebServer::FirmwareUpdatePhase::VALIDATING ||
+                                    firmwareStatus.phase == CrossPointWebServer::FirmwareUpdatePhase::FLASHING ||
+                                    firmwareStatus.phase == CrossPointWebServer::FirmwareUpdatePhase::SUCCESS;
+          if (!firmwareBusy && mappedInput.wasPressed(MappedInputManager::Button::Back)) {
             onGoHome();
             return;
           }
@@ -356,7 +362,12 @@ void CrossPointWebServerActivity::loop() {
     }
 
     // Handle exit on Back button (also check outside loop)
-    if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+    const auto firmwareStatus = webServer ? webServer->getFirmwareUpdateStatus() : CrossPointWebServer::FirmwareUpdateStatus{};
+    const bool firmwareBusy = firmwareStatus.phase == CrossPointWebServer::FirmwareUpdatePhase::UPLOADING ||
+                              firmwareStatus.phase == CrossPointWebServer::FirmwareUpdatePhase::VALIDATING ||
+                              firmwareStatus.phase == CrossPointWebServer::FirmwareUpdatePhase::FLASHING ||
+                              firmwareStatus.phase == CrossPointWebServer::FirmwareUpdatePhase::SUCCESS;
+    if (!firmwareBusy && mappedInput.wasPressed(MappedInputManager::Button::Back)) {
       onGoHome();
       return;
     }
@@ -376,6 +387,15 @@ void CrossPointWebServerActivity::render(RenderLock&&) {
                    isApMode ? tr(STR_HOTSPOT_MODE) : tr(STR_FILE_TRANSFER), nullptr);
 
     if (state == WebServerActivityState::SERVER_RUNNING) {
+      if (webServer) {
+        const auto firmwareStatus = webServer->getFirmwareUpdateStatus();
+        if (firmwareStatus.phase != CrossPointWebServer::FirmwareUpdatePhase::IDLE) {
+          renderFirmwareUpdateStatus(firmwareStatus);
+          renderer.displayBuffer();
+          return;
+        }
+      }
+
       GUI.drawSubHeader(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight},
                         connectedSSID.c_str());
       renderServerRunning();
@@ -385,6 +405,52 @@ void CrossPointWebServerActivity::render(RenderLock&&) {
       renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_STARTING_HOTSPOT));
     }
     renderer.displayBuffer();
+  }
+}
+
+void CrossPointWebServerActivity::renderFirmwareUpdateStatus(
+    const CrossPointWebServer::FirmwareUpdateStatus& status) const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const auto pageWidth = renderer.getScreenWidth();
+  const auto pageHeight = renderer.getScreenHeight();
+  const auto lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+  const auto top = (pageHeight - lineHeight) / 2;
+
+  const char* title = tr(STR_UPDATE);
+  const char* line = status.message.empty() ? tr(STR_UPDATING) : status.message.c_str();
+  int percent = status.total > 0 ? static_cast<int>((static_cast<uint64_t>(status.processed) * 100) / status.total) : 0;
+  if (percent < 0) percent = 0;
+  if (percent > 100) percent = 100;
+
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, title, nullptr);
+
+  if (status.phase == CrossPointWebServer::FirmwareUpdatePhase::FAILED) {
+    renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_UPDATE_FAILED), true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_10_FONT_ID, top + lineHeight + metrics.verticalSpacing, line);
+    const auto labels = mappedInput.mapLabels(tr(STR_EXIT), "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    return;
+  }
+
+  if (status.phase == CrossPointWebServer::FirmwareUpdatePhase::SUCCESS) {
+    renderer.drawCenteredText(UI_10_FONT_ID, top, tr(STR_UPDATE_COMPLETE), true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_10_FONT_ID, top + lineHeight + metrics.verticalSpacing, tr(STR_RESTARTING_HINT));
+    return;
+  }
+
+  renderer.drawCenteredText(UI_10_FONT_ID, top, line, true, EpdFontFamily::BOLD);
+  int y = top + lineHeight + metrics.verticalSpacing;
+  GUI.drawProgressBar(
+      renderer, Rect{metrics.contentSidePadding, y, pageWidth - metrics.contentSidePadding * 2, metrics.progressBarHeight},
+      percent, 100);
+  y += metrics.progressBarHeight + metrics.verticalSpacing + lineHeight + metrics.verticalSpacing;
+
+  if (status.phase == CrossPointWebServer::FirmwareUpdatePhase::FLASHING) {
+    renderer.drawCenteredText(UI_10_FONT_ID, y, tr(STR_FIRMWARE_UPDATE_DO_NOT_POWER_OFF));
+  } else if (status.total > 0) {
+    renderer.drawCenteredText(
+        UI_10_FONT_ID, y,
+        (std::to_string(status.processed) + " / " + std::to_string(status.total)).c_str());
   }
 }
 

@@ -286,6 +286,7 @@
     <a href="/files">File Manager</a>
     <a href="/settings" class="active">Settings</a>
     <a href="/fonts">Fonts</a>
+    <a href="/firmware">Firmware</a>
   </div>
 
   <div id="message" class="message"></div>
@@ -302,6 +303,7 @@
 
   <div id="wifi-container"></div>
   <div id="opds-container"></div>
+  <div id="nutstore-container"></div>
 
   <div class="card">
     <p style="text-align: center; color: #95a5a6; margin: 0;">
@@ -597,6 +599,80 @@
   }
 
   loadSettings();
+
+  // --- Nutstore WebDAV Sync ---
+  async function loadNutstoreConfig() {
+    const container = document.getElementById('nutstore-container');
+    try {
+      const res = await fetch('/api/nutstore/config');
+      if (!res.ok) throw new Error('Failed to load Nutstore config');
+      const cfg = await res.json();
+      container.innerHTML = '<div class="card">' +
+        '<h2>Nutstore Sync</h2>' +
+        '<div class="setting-row"><span class="setting-name">Enabled</span>' +
+          '<span class="setting-control"><label class="toggle-switch">' +
+          '<input type="checkbox" id="nut-enabled" ' + (cfg.enabled ? 'checked' : '') + '>' +
+          '<span class="toggle-slider"></span></label></span></div>' +
+        '<div class="setting-row"><span class="setting-name">WebDAV URL</span>' +
+          '<span class="setting-control"><input type="text" id="nut-baseUrl" value="' + escapeHtml(cfg.baseUrl || 'https://dav.jianguoyun.com/dav/') + '"></span></div>' +
+        '<div class="setting-row"><span class="setting-name">Username</span>' +
+          '<span class="setting-control"><input type="text" id="nut-username" value="' + escapeHtml(cfg.username || '') + '"></span></div>' +
+        '<div class="setting-row"><span class="setting-name">App Password</span>' +
+          '<span class="setting-control"><input type="password" id="nut-password" placeholder="Leave blank to keep current"></span></div>' +
+        '<div class="setting-row"><span class="setting-name">Remote Path</span>' +
+          '<span class="setting-control"><input type="text" id="nut-remotePath" value="' + escapeHtml(cfg.remotePath || '/') + '"></span></div>' +
+        '<div class="setting-row"><span class="setting-name">Local Path</span>' +
+          '<span class="setting-control"><input type="text" value="/Nutstore" disabled></span></div>' +
+        '<div class="opds-actions">' +
+          '<button class="btn-small btn-save-server" onclick="saveNutstoreConfig()">Save Nutstore Config</button>' +
+          '<button class="btn-small btn-add" onclick="syncNutstore()">Sync Now</button>' +
+        '</div>' +
+        '<div id="nut-status" style="margin-top:10px;color:var(--label-color);"></div>' +
+      '</div>';
+    } catch (e) {
+      container.innerHTML = '<div class="card"><h2>Nutstore Sync</h2><p style="color:#e74c3c;">Failed to load Nutstore config</p></div>';
+    }
+  }
+
+  async function saveNutstoreConfig() {
+    const body = {
+      enabled: document.getElementById('nut-enabled').checked,
+      baseUrl: document.getElementById('nut-baseUrl').value,
+      username: document.getElementById('nut-username').value,
+      password: document.getElementById('nut-password').value,
+      remotePath: document.getElementById('nut-remotePath').value
+    };
+    const res = await fetch('/api/nutstore/config', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) {
+      showMessage('Failed to save Nutstore config', true);
+      return;
+    }
+    document.getElementById('nut-password').value = '';
+    showMessage('Nutstore config saved.', false);
+  }
+
+  async function syncNutstore() {
+    const status = document.getElementById('nut-status');
+    status.textContent = 'Syncing Nutstore...';
+    try {
+      const res = await fetch('/api/nutstore/sync', { method: 'POST' });
+      const data = await res.json();
+      status.textContent = (data.message || data.phase || 'Done') +
+        ' · downloaded ' + (data.downloaded || 0) +
+        ', skipped ' + (data.skipped || 0) +
+        ', deleted ' + (data.deleted || 0);
+      if (!res.ok) showMessage(status.textContent, true);
+    } catch (e) {
+      status.textContent = 'Nutstore sync failed: ' + e.message;
+      showMessage(status.textContent, true);
+    }
+  }
+
+  loadNutstoreConfig();
 
   // --- Wi-Fi Network Management ---
   // Renders an editable list of saved Wi-Fi networks using /api/wifi endpoints.

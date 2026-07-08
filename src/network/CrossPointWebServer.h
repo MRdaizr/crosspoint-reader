@@ -5,9 +5,13 @@
 #include <WebServer.h>
 #include <WebSocketsServer.h>
 
+#include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include "NutstoreSync.h"
 
 // Structure to hold file information
 struct FileInfo {
@@ -27,6 +31,22 @@ class CrossPointWebServer {
     std::string lastCompleteName;
     size_t lastCompleteSize = 0;
     unsigned long lastCompleteAt = 0;
+  };
+
+  enum class FirmwareUpdatePhase {
+    IDLE,
+    UPLOADING,
+    VALIDATING,
+    FLASHING,
+    SUCCESS,
+    FAILED,
+  };
+
+  struct FirmwareUpdateStatus {
+    FirmwareUpdatePhase phase = FirmwareUpdatePhase::IDLE;
+    size_t processed = 0;
+    size_t total = 0;
+    std::string message;
   };
 
   // Used by POST upload handler
@@ -64,6 +84,8 @@ class CrossPointWebServer {
   bool isRunning() const { return running; }
 
   WsUploadStatus getWsUploadStatus() const;
+  FirmwareUpdateStatus getFirmwareUpdateStatus() const { return firmwareStatus; }
+  void setFirmwareProgressCallback(std::function<void()> cb) { firmwareProgressCallback = std::move(cb); }
 
   // Get the port number
   uint16_t getPort() const { return port; }
@@ -108,12 +130,23 @@ class CrossPointWebServer {
   void handleGetSettings() const;
   void handlePostSettings();
 
+  // Nutstore sync handlers
+  void handleGetNutstoreConfig() const;
+  void handlePostNutstoreConfig();
+  void handlePostNutstoreSync();
+  void handleGetNutstoreStatus() const;
+
   // Font management handlers
   void handleFontsPage() const;
   void handleFontList() const;
   void handleFontUpload();
   void handleFontUploadData();
   void handleFontDelete();
+
+  // Firmware update handlers
+  void handleFirmwarePage() const;
+  void handleFirmwareUpload();
+  void handleFirmwareUploadData();
 
   // Font upload state
   struct FontUploadState {
@@ -129,6 +162,29 @@ class CrossPointWebServer {
 
     FontUploadState() { buffer.resize(BUFFER_SIZE); }
   } fontUpload;
+
+  struct FirmwareUploadState {
+    HalFile file;
+    std::string filePath;
+    bool valid = false;
+    bool magicChecked = false;
+    size_t bytesWritten = 0;
+    static constexpr size_t BUFFER_SIZE = 4096;
+    std::vector<uint8_t> buffer;
+    size_t bufferPos = 0;
+
+    FirmwareUploadState() { buffer.resize(BUFFER_SIZE); }
+  } firmwareUpload;
+
+  bool firmwareRestartPending = false;
+  unsigned long firmwareRestartAt = 0;
+  FirmwareUpdateStatus firmwareStatus;
+  std::function<void()> firmwareProgressCallback;
+  int lastFirmwareNotifyPercent = -1;
+
+  void setFirmwareStatus(FirmwareUpdatePhase phase, size_t processed, size_t total, const char* message = nullptr);
+
+  NutstoreSyncStatus nutstoreStatus;
 
   // OPDS server handlers
   void handleGetOpdsServers() const;

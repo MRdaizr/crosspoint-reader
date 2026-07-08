@@ -11,13 +11,17 @@
 #include <algorithm>
 
 #include "CrossPointSettings.h"
+#include "FirmwareFlasher.h"
 #include "FontInstaller.h"
+#include "NutstoreConfigStore.h"
+#include "network/NutstoreSync.h"
 #include "OpdsServerStore.h"
 #include "SdCardFontSystem.h"
 #include "SettingsList.h"
 #include "WebDAVHandler.h"
 #include "WifiCredentialStore.h"
 #include "html/FilesPageHtml.generated.h"
+#include "html/FirmwarePageHtml.generated.h"
 #include "html/FontsPageHtml.generated.h"
 #include "html/HomePageHtml.generated.h"
 #include "html/SettingsPageHtml.generated.h"
@@ -30,6 +34,8 @@ namespace {
 constexpr const char* HIDDEN_ITEMS[] = {"System Volume Information", "XTCache"};
 constexpr uint16_t UDP_PORTS[] = {54982, 48123, 39001, 44044, 59678};
 constexpr uint16_t LOCAL_UDP_PORT = 8134;
+constexpr const char* WEB_FIRMWARE_PATH = "/.crosspoint/web_firmware.bin";
+constexpr uint8_t ESP_IMAGE_MAGIC = 0xE9;
 
 // Static pointer for WebSocket callback (WebSocketsServer requires C-style callback)
 CrossPointWebServer* wsInstance = nullptr;
@@ -76,6 +82,42 @@ bool isProtectedItemName(const String& name) {
     }
   }
   return false;
+}
+
+const char* firmwareFlashResultMessage(firmware_flash::Result result) {
+  switch (result) {
+    case firmware_flash::Result::OK:
+      return "Firmware installed. Device is restarting.";
+    case firmware_flash::Result::OPEN_FAIL:
+      return "Could not open uploaded firmware.";
+    case firmware_flash::Result::TOO_SMALL:
+      return "Firmware file is too small.";
+    case firmware_flash::Result::TOO_LARGE:
+      return "Firmware file is too large for the OTA partition.";
+    case firmware_flash::Result::BAD_MAGIC:
+      return "Firmware is not a valid ESP32 image.";
+    case firmware_flash::Result::BAD_SEGMENTS:
+      return "Firmware segment table is invalid.";
+    case firmware_flash::Result::BAD_CHECKSUM:
+      return "Firmware checksum failed.";
+    case firmware_flash::Result::BAD_SHA:
+      return "Firmware SHA256 verification failed.";
+    case firmware_flash::Result::BAD_SIZE:
+      return "Firmware image size is invalid.";
+    case firmware_flash::Result::NO_PARTITION:
+      return "No OTA partition is available.";
+    case firmware_flash::Result::OOM:
+      return "Not enough memory to process firmware.";
+    case firmware_flash::Result::READ_FAIL:
+      return "Could not read uploaded firmware.";
+    case firmware_flash::Result::ERASE_FAIL:
+      return "Could not erase OTA partition.";
+    case firmware_flash::Result::WRITE_FAIL:
+      return "Could not write OTA partition.";
+    case firmware_flash::Result::OTADATA_FAIL:
+      return "Firmware was written, but boot switch failed.";
+  }
+  return "Firmware update failed.";
 }
 }  // namespace
 
@@ -158,12 +200,21 @@ void CrossPointWebServer::begin() {
   server->on("/settings", HTTP_GET, [this] { handleSettingsPage(); });
   server->on("/api/settings", HTTP_GET, [this] { handleGetSettings(); });
   server->on("/api/settings", HTTP_POST, [this] { handlePostSettings(); });
+  server->on("/api/nutstore/config", HTTP_GET, [this] { handleGetNutstoreConfig(); });
+  server->on("/api/nutstore/config", HTTP_POST, [this] { handlePostNutstoreConfig(); });
+  server->on("/api/nutstore/sync", HTTP_POST, [this] { handlePostNutstoreSync(); });
+  server->on("/api/nutstore/status", HTTP_GET, [this] { handleGetNutstoreStatus(); });
 
   // Font management endpoints
   server->on("/fonts", HTTP_GET, [this] { handleFontsPage(); });
   server->on("/api/fonts", HTTP_GET, [this] { handleFontList(); });
   server->on("/api/fonts/upload", HTTP_POST, [this] { handleFontUpload(); }, [this] { handleFontUploadData(); });
   server->on("/api/fonts/delete", HTTP_POST, [this] { handleFontDelete(); });
+
+  // Firmware update endpoints
+  server->on("/firmware", HTTP_GET, [this] { handleFirmwarePage(); });
+  server->on("/api/firmware/upload", HTTP_POST, [this] { handleFirmwareUpload(); },
+             [this] { handleFirmwareUploadData(); });
 
   // OPDS server endpoints
   server->on("/api/opds", HTTP_GET, [this] { handleGetOpdsServers(); });
@@ -298,6 +349,11 @@ void CrossPointWebServer::handleClient() {
     wsServer->loop();
   }
 
+  if (firmwareRestartPending && millis() >= firmwareRestartAt) {
+    LOG_INF("WEB", "Restarting after web firmware update");
+    ESP.restart();
+  }
+
   // Respond to discovery broadcasts
   if (udpActive) {
     int packetSize = udp.parsePacket();
@@ -318,6 +374,29 @@ void CrossPointWebServer::handleClient() {
         }
       }
     }
+  }
+}
+
+void CrossPointWebServer::setFirmwareStatus(FirmwareUpdatePhase phase, size_t processed, size_t total,
+                                            const char* message) {
+  const FirmwareUpdatePhase oldPhase = firmwareStatus.phase;
+  firmwareStatus.phase = phase;
+  firmwareStatus.processed = processed;
+  firmwareStatus.total = total;
+  if (message) {
+    firmwareStatus.message = message;
+  }
+
+  int pct = -1;
+  if (total > 0) {
+    pct = static_cast<int>((static_cast<uint64_t>(processed) * 100) / total);
+  }
+
+  const bool phaseChanged = pct < 0 || lastFirmwareNotifyPercent < 0 || phase != oldPhase;
+  const bool pctChangedEnough = pct >= 0 && (pct == 100 || pct >= lastFirmwareNotifyPercent + 2);
+  if (firmwareProgressCallback && (phaseChanged || pctChangedEnough)) {
+    lastFirmwareNotifyPercent = pct;
+    firmwareProgressCallback();
   }
 }
 
@@ -1271,6 +1350,93 @@ void CrossPointWebServer::handlePostSettings() {
   server->send(200, "text/plain", String("Applied ") + String(applied) + " setting(s)");
 }
 
+void CrossPointWebServer::handleGetNutstoreConfig() const {
+  NUTSTORE_CONFIG.loadFromFile();
+  const auto& cfg = NUTSTORE_CONFIG.get();
+  JsonDocument doc;
+  doc["enabled"] = cfg.enabled;
+  doc["baseUrl"] = cfg.baseUrl;
+  doc["username"] = cfg.username;
+  doc["password"] = "";
+  doc["remotePath"] = cfg.remotePath;
+  doc["localPath"] = "/Nutstore";
+  doc["recursive"] = true;
+  doc["mirrorDelete"] = true;
+
+  String json;
+  serializeJson(doc, json);
+  server->send(200, "application/json", json);
+}
+
+void CrossPointWebServer::handlePostNutstoreConfig() {
+  if (!server->hasArg("plain")) {
+    server->send(400, "application/json", "{\"error\":\"Missing JSON body\"}");
+    return;
+  }
+
+  JsonDocument doc;
+  const DeserializationError err = deserializeJson(doc, server->arg("plain"));
+  if (err) {
+    server->send(400, "application/json", "{\"error\":\"Invalid JSON\"}");
+    return;
+  }
+
+  NUTSTORE_CONFIG.loadFromFile();
+  auto& cfg = NUTSTORE_CONFIG.mutableConfig();
+  cfg.enabled = doc["enabled"] | cfg.enabled;
+  cfg.baseUrl = doc["baseUrl"] | cfg.baseUrl;
+  cfg.username = doc["username"] | cfg.username;
+  const std::string password = doc["password"] | std::string("");
+  if (!password.empty()) cfg.password = password;
+  cfg.remotePath = doc["remotePath"] | cfg.remotePath;
+  cfg.localPath = "/Nutstore";
+  cfg.recursive = true;
+  cfg.mirrorDelete = true;
+
+  if (!NUTSTORE_CONFIG.saveToFile()) {
+    server->send(500, "application/json", "{\"error\":\"Failed to save Nutstore config\"}");
+    return;
+  }
+  server->send(200, "application/json", "{\"ok\":true}");
+}
+
+void CrossPointWebServer::handlePostNutstoreSync() {
+  NUTSTORE_CONFIG.loadFromFile();
+  bool cancel = false;
+  const bool ok = NutstoreSync::run(
+      NUTSTORE_CONFIG.get(), nutstoreStatus,
+      [this](const NutstoreSyncStatus& s) {
+        nutstoreStatus = s;
+      },
+      &cancel);
+
+  JsonDocument doc;
+  doc["ok"] = ok;
+  doc["phase"] = NutstoreSync::phaseName(nutstoreStatus.phase);
+  doc["message"] = nutstoreStatus.message;
+  doc["downloaded"] = nutstoreStatus.downloaded;
+  doc["skipped"] = nutstoreStatus.skipped;
+  doc["deleted"] = nutstoreStatus.deleted;
+  String json;
+  serializeJson(doc, json);
+  server->send(ok ? 200 : 400, "application/json", json);
+}
+
+void CrossPointWebServer::handleGetNutstoreStatus() const {
+  JsonDocument doc;
+  doc["phase"] = NutstoreSync::phaseName(nutstoreStatus.phase);
+  doc["processed"] = static_cast<unsigned long>(nutstoreStatus.processed);
+  doc["total"] = static_cast<unsigned long>(nutstoreStatus.total);
+  doc["downloaded"] = static_cast<unsigned long>(nutstoreStatus.downloaded);
+  doc["skipped"] = static_cast<unsigned long>(nutstoreStatus.skipped);
+  doc["deleted"] = static_cast<unsigned long>(nutstoreStatus.deleted);
+  doc["currentFile"] = nutstoreStatus.currentFile;
+  doc["message"] = nutstoreStatus.message;
+  String json;
+  serializeJson(doc, json);
+  server->send(200, "application/json", json);
+}
+
 // ---- OPDS Server API ----
 
 void CrossPointWebServer::handleGetOpdsServers() const {
@@ -1885,6 +2051,164 @@ void CrossPointWebServer::handleFontUpload() {
     LOG_DBG("WEB", "Font upload complete: %s", fontUpload.filePath.c_str());
   } else {
     server->send(400, "application/json", "{\"error\":\"Invalid .cpfont file\"}");
+  }
+}
+
+void CrossPointWebServer::handleFirmwarePage() const {
+  sendHtmlContent(server.get(), FirmwarePageHtml, sizeof(FirmwarePageHtml));
+  LOG_DBG("WEB", "Served firmware page");
+}
+
+void CrossPointWebServer::handleFirmwareUploadData() {
+  HTTPUpload& upload = server->upload();
+
+  switch (upload.status) {
+    case UPLOAD_FILE_START: {
+      esp_task_wdt_reset();
+      firmwareUpload.file = HalFile();
+      firmwareUpload.filePath = WEB_FIRMWARE_PATH;
+      firmwareUpload.valid = false;
+      firmwareUpload.magicChecked = false;
+      firmwareUpload.bytesWritten = 0;
+      firmwareUpload.bufferPos = 0;
+      lastFirmwareNotifyPercent = -1;
+      setFirmwareStatus(FirmwareUpdatePhase::UPLOADING, 0, upload.totalSize, "Uploading firmware...");
+
+      String filename = upload.filename;
+      filename.toLowerCase();
+      if (!filename.endsWith(".bin")) {
+        LOG_ERR("WEB", "Invalid firmware filename: %s", upload.filename.c_str());
+        setFirmwareStatus(FirmwareUpdatePhase::FAILED, 0, upload.totalSize, "Invalid firmware filename.");
+        break;
+      }
+
+      Storage.mkdir("/.crosspoint");
+      if (Storage.exists(WEB_FIRMWARE_PATH)) {
+        Storage.remove(WEB_FIRMWARE_PATH);
+      }
+      if (!Storage.openFileForWrite("WEBFW", WEB_FIRMWARE_PATH, firmwareUpload.file)) {
+        LOG_ERR("WEB", "Failed to open firmware upload file: %s", WEB_FIRMWARE_PATH);
+        setFirmwareStatus(FirmwareUpdatePhase::FAILED, 0, upload.totalSize, "Could not create firmware upload file.");
+        break;
+      }
+
+      firmwareUpload.valid = true;
+      LOG_INF("WEB", "Firmware upload started: %s", upload.filename.c_str());
+      break;
+    }
+
+    case UPLOAD_FILE_WRITE: {
+      if (!firmwareUpload.valid) break;
+      esp_task_wdt_reset();
+
+      if (!firmwareUpload.magicChecked && upload.currentSize > 0) {
+        if (upload.buf[0] != ESP_IMAGE_MAGIC) {
+          LOG_ERR("WEB", "Invalid firmware magic: 0x%02X", upload.buf[0]);
+          firmwareUpload.valid = false;
+          setFirmwareStatus(FirmwareUpdatePhase::FAILED, firmwareUpload.bytesWritten, upload.totalSize,
+                            "Firmware is not a valid ESP32 image.");
+          break;
+        }
+        firmwareUpload.magicChecked = true;
+      }
+
+      size_t remaining = upload.currentSize;
+      const uint8_t* src = upload.buf;
+      while (remaining > 0) {
+        size_t space = FirmwareUploadState::BUFFER_SIZE - firmwareUpload.bufferPos;
+        size_t chunk = (remaining < space) ? remaining : space;
+        memcpy(firmwareUpload.buffer.data() + firmwareUpload.bufferPos, src, chunk);
+        firmwareUpload.bufferPos += chunk;
+        src += chunk;
+        remaining -= chunk;
+
+        if (firmwareUpload.bufferPos >= FirmwareUploadState::BUFFER_SIZE) {
+          firmwareUpload.file.write(firmwareUpload.buffer.data(), firmwareUpload.bufferPos);
+          firmwareUpload.bytesWritten += firmwareUpload.bufferPos;
+          firmwareUpload.bufferPos = 0;
+          setFirmwareStatus(FirmwareUpdatePhase::UPLOADING, firmwareUpload.bytesWritten, upload.totalSize,
+                            "Uploading firmware...");
+          esp_task_wdt_reset();
+        }
+      }
+      break;
+    }
+
+    case UPLOAD_FILE_END: {
+      if (firmwareUpload.valid && firmwareUpload.bufferPos > 0) {
+        firmwareUpload.file.write(firmwareUpload.buffer.data(), firmwareUpload.bufferPos);
+        firmwareUpload.bytesWritten += firmwareUpload.bufferPos;
+        firmwareUpload.bufferPos = 0;
+      }
+      if (firmwareUpload.valid) {
+        setFirmwareStatus(FirmwareUpdatePhase::VALIDATING, firmwareUpload.bytesWritten, firmwareUpload.bytesWritten,
+                          "Validating firmware...");
+      }
+      if (firmwareUpload.file.isOpen()) {
+        firmwareUpload.file.close();
+      }
+
+      if (!firmwareUpload.valid && !firmwareUpload.filePath.empty()) {
+        Storage.remove(firmwareUpload.filePath.c_str());
+      }
+
+      LOG_INF("WEB", "Firmware upload end: valid=%d, %u bytes", firmwareUpload.valid,
+              static_cast<unsigned>(firmwareUpload.bytesWritten));
+      break;
+    }
+
+    case UPLOAD_FILE_ABORTED: {
+      if (firmwareUpload.file) {
+        firmwareUpload.file.close();
+      }
+      if (!firmwareUpload.filePath.empty()) {
+        Storage.remove(firmwareUpload.filePath.c_str());
+      }
+      firmwareUpload.valid = false;
+      setFirmwareStatus(FirmwareUpdatePhase::FAILED, firmwareUpload.bytesWritten, firmwareUpload.bytesWritten,
+                        "Firmware upload was aborted.");
+      LOG_DBG("WEB", "Firmware upload aborted");
+      break;
+    }
+  }
+}
+
+void CrossPointWebServer::handleFirmwareUpload() {
+  if (!firmwareUpload.valid || firmwareUpload.bytesWritten == 0) {
+    Storage.remove(WEB_FIRMWARE_PATH);
+    setFirmwareStatus(FirmwareUpdatePhase::FAILED, firmwareUpload.bytesWritten, firmwareUpload.bytesWritten,
+                      "Invalid firmware upload.");
+    server->send(400, "application/json", "{\"ok\":false,\"error\":\"Invalid firmware upload\"}");
+    return;
+  }
+
+  LOG_INF("WEB", "Installing uploaded firmware: %u bytes", static_cast<unsigned>(firmwareUpload.bytesWritten));
+  setFirmwareStatus(FirmwareUpdatePhase::VALIDATING, 0, firmwareUpload.bytesWritten, "Validating firmware...");
+
+  auto progressCb = +[](size_t written, size_t total, void* ctx) {
+    auto* self = static_cast<CrossPointWebServer*>(ctx);
+    self->setFirmwareStatus(FirmwareUpdatePhase::FLASHING, written, total, "Installing firmware...");
+  };
+  const firmware_flash::Result result = firmware_flash::flashFromSdPath(WEB_FIRMWARE_PATH, progressCb, this);
+  Storage.remove(WEB_FIRMWARE_PATH);
+
+  JsonDocument doc;
+  doc["ok"] = result == firmware_flash::Result::OK;
+  doc["result"] = firmware_flash::resultName(result);
+  doc["message"] = firmwareFlashResultMessage(result);
+
+  String json;
+  serializeJson(doc, json);
+
+  if (result == firmware_flash::Result::OK) {
+    setFirmwareStatus(FirmwareUpdatePhase::SUCCESS, firmwareUpload.bytesWritten, firmwareUpload.bytesWritten,
+                      firmwareFlashResultMessage(result));
+    firmwareRestartPending = true;
+    firmwareRestartAt = millis() + 1500;
+    server->send(200, "application/json", json);
+  } else {
+    setFirmwareStatus(FirmwareUpdatePhase::FAILED, 0, firmwareUpload.bytesWritten, firmwareFlashResultMessage(result));
+    server->send(400, "application/json", json);
   }
 }
 
