@@ -147,8 +147,7 @@ void ChapterHtmlSlimParser::flushPendingAnchor() {
   // block is flushed so the chapter starts on a fresh page.
   if (std::find(tocAnchors.begin(), tocAnchors.end(), pendingAnchorId) != tocAnchors.end()) {
     if (currentPage && !currentPage->elements.empty()) {
-      completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex);
-      completedPageCount++;
+      completeCurrentPage(xpathParagraphIndex, xpathListItemIndex);
       currentPage.reset(new Page());
       currentPageNextY = 0;
     }
@@ -157,6 +156,18 @@ void ChapterHtmlSlimParser::flushPendingAnchor() {
   // Record deferred anchor after previous block is flushed (and any TOC page break)
   anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
   pendingAnchorId.clear();
+}
+
+void ChapterHtmlSlimParser::completeCurrentPage(const uint16_t paragraphIndex, const uint16_t listItemIndex) {
+  completePageFn(std::move(currentPage), paragraphIndex, listItemIndex);
+  completedPageCount++;
+
+  if (maxPagesToBuild > 0 && completedPageCount >= maxPagesToBuild) {
+    stoppedAfterPageLimit = true;
+    if (activeParser) {
+      XML_StopParser(activeParser, XML_FALSE);
+    }
+  }
 }
 
 // flush the contents of partWordBuffer to currentTextBlock
@@ -252,8 +263,7 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
   const int16_t totalHeight = static_cast<int16_t>(topSpacing + ruleThickness + bottomSpacing);
 
   if (!currentPage->elements.empty() && currentPageNextY + totalHeight > viewportHeight) {
-    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex);
-    completedPageCount++;
+    completeCurrentPage(xpathParagraphIndex, xpathListItemIndex);
     currentPage.reset(new (std::nothrow) Page());
     if (!currentPage) {
       LOG_ERR("EHP", "Failed to create page after horizontal-rule page break");
@@ -631,9 +641,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 if (self->currentPage && !self->currentPage->elements.empty() &&
                     (self->currentPageNextY + imageMarginTop + displayHeight + imageMarginBottom >
                      self->viewportHeight)) {
-                  self->completePageFn(std::move(self->currentPage), self->xpathParagraphIndex,
-                                       self->xpathListItemIndex);
-                  self->completedPageCount++;
+                  self->completeCurrentPage(self->xpathParagraphIndex, self->xpathListItemIndex);
                   self->currentPage.reset(new Page());
                   if (!self->currentPage) {
                     LOG_ERR("EHP", "Failed to create new page");
@@ -1303,6 +1311,7 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
   }
 
   XML_SetUserData(parser, this);
+  activeParser = parser;
   XML_SetElementHandler(parser, startElement, endElement);
   XML_SetCharacterDataHandler(parser, characterData);
 
@@ -1329,8 +1338,12 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
     done = file.available() == 0;
 
     if (XML_ParseBuffer(parser, static_cast<int>(len), done) == XML_STATUS_ERROR) {
+      if (stoppedAfterPageLimit && XML_GetErrorCode(parser) == XML_ERROR_ABORTED) {
+        break;
+      }
       LOG_ERR("EHP", "Parse error at line %lu:\n%s", XML_GetCurrentLineNumber(parser),
               XML_ErrorString(XML_GetErrorCode(parser)));
+      activeParser = nullptr;
       destroyXmlParser(parser);
       file.close();
       return false;
@@ -1338,8 +1351,15 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
   } while (!done);
   LOG_DBG("EHP", "Time to parse and build pages: %lu ms", millis() - chapterStartTime);
 
+  activeParser = nullptr;
   destroyXmlParser(parser);
   file.close();
+
+  if (stoppedAfterPageLimit) {
+    currentPage.reset();
+    currentTextBlock.reset();
+    return true;
+  }
 
   // Process last page if there is still text
   if (currentTextBlock) {
@@ -1348,8 +1368,7 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
       anchorData.push_back({std::move(pendingAnchorId), static_cast<uint16_t>(completedPageCount)});
       pendingAnchorId.clear();
     }
-    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex);
-    completedPageCount++;
+    completeCurrentPage(xpathParagraphIndex, xpathListItemIndex);
     currentPage.reset();
     currentTextBlock.reset();
   }
@@ -1366,8 +1385,7 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
   }
 
   if (currentPageNextY + lineHeight > viewportHeight) {
-    completePageFn(std::move(currentPage), xpathParagraphIndex, xpathListItemIndex);
-    completedPageCount++;
+    completeCurrentPage(xpathParagraphIndex, xpathListItemIndex);
     currentPage.reset(new Page());
     currentPageNextY = 0;
   }

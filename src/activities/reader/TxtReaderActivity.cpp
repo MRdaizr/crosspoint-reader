@@ -100,10 +100,14 @@ void TxtReaderActivity::loop() {
     currentPage--;
     requestUpdate();
   } else if (nextTriggered) {
-    if (currentPage < totalPages - 1) {
+    if (currentPage + 1 >= static_cast<int>(pageOffsets.size()) && !pageIndexComplete) {
+      indexNextPage();
+    }
+    updateTotalPages();
+    if (currentPage < static_cast<int>(pageOffsets.size()) - 1) {
       currentPage++;
       requestUpdate();
-    } else {
+    } else if (pageIndexComplete) {
       onGoHome();
     }
   }
@@ -124,6 +128,12 @@ void TxtReaderActivity::applyOrientation(const uint8_t orientation) {
 }
 
 void TxtReaderActivity::jumpToPercent(int percent) {
+  if (!pageIndexComplete) {
+    GUI.drawPopup(renderer, tr(STR_INDEXING));
+    buildPageIndex();
+    savePageIndexCache();
+  }
+
   if (totalPages <= 0) {
     return;
   }
@@ -197,14 +207,16 @@ void TxtReaderActivity::initializeReader() {
 
   // Try to load cached page index first
   if (!loadPageIndexCache()) {
-    // Cache not found, build page index
-    buildPageIndex();
-    // Save to cache for next time
-    savePageIndexCache();
+    pageOffsets.clear();
+    pageOffsets.push_back(0);
+    pageIndexComplete = (txt->getFileSize() == 0);
+    updateTotalPages();
   }
 
   // Load saved progress
   loadProgress();
+  ensurePageIndexed(currentPage);
+  updateTotalPages();
 
   initialized = true;
 }
@@ -245,7 +257,52 @@ void TxtReaderActivity::buildPageIndex() {
   }
 
   totalPages = pageOffsets.size();
+  pageIndexComplete = true;
   LOG_DBG("TRS", "Built page index: %d pages", totalPages);
+}
+
+bool TxtReaderActivity::ensurePageIndexed(int page) {
+  if (page < 0) {
+    page = 0;
+  }
+  while (static_cast<int>(pageOffsets.size()) <= page && !pageIndexComplete) {
+    if (!indexNextPage()) {
+      break;
+    }
+  }
+  updateTotalPages();
+  return static_cast<int>(pageOffsets.size()) > page;
+}
+
+bool TxtReaderActivity::indexNextPage() {
+  if (pageIndexComplete || pageOffsets.empty()) {
+    return false;
+  }
+
+  std::vector<std::string> tempLines;
+  size_t nextOffset = pageOffsets.back();
+  if (!loadPageAtOffset(pageOffsets.back(), tempLines, nextOffset) || nextOffset <= pageOffsets.back()) {
+    pageIndexComplete = true;
+    return false;
+  }
+
+  if (nextOffset >= txt->getFileSize()) {
+    pageIndexComplete = true;
+  } else {
+    pageOffsets.push_back(nextOffset);
+  }
+  updateTotalPages();
+  return true;
+}
+
+void TxtReaderActivity::updateTotalPages() {
+  totalPages = static_cast<int>(pageOffsets.size());
+  if (!pageIndexComplete) {
+    totalPages++;
+  }
+  if (totalPages < 1) {
+    totalPages = 1;
+  }
 }
 
 bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>& outLines, size_t& nextOffset) {
@@ -402,6 +459,8 @@ void TxtReaderActivity::render(RenderLock&&) {
     initializeReader();
   }
 
+  ensurePageIndexed(currentPage);
+
   if (pageOffsets.empty()) {
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_EMPTY_FILE), true, EpdFontFamily::BOLD);
@@ -418,6 +477,15 @@ void TxtReaderActivity::render(RenderLock&&) {
   size_t nextOffset;
   currentPageLines.clear();
   loadPageAtOffset(offset, currentPageLines, nextOffset);
+  if (!pageIndexComplete && currentPage + 1 == static_cast<int>(pageOffsets.size())) {
+    if (nextOffset > offset && nextOffset < txt->getFileSize()) {
+      pageOffsets.push_back(nextOffset);
+    } else if (nextOffset >= txt->getFileSize()) {
+      pageIndexComplete = true;
+      savePageIndexCache();
+    }
+    updateTotalPages();
+  }
 
   renderer.clearScreen();
   renderPage();
@@ -519,7 +587,7 @@ void TxtReaderActivity::loadProgress() {
     uint8_t data[4];
     if (f.read(data, 4) == 4) {
       currentPage = data[0] + (data[1] << 8);
-      if (currentPage >= totalPages) {
+      if (pageIndexComplete && currentPage >= totalPages) {
         currentPage = totalPages - 1;
       }
       if (currentPage < 0) {
@@ -621,6 +689,7 @@ bool TxtReaderActivity::loadPageIndexCache() {
   }
 
   totalPages = pageOffsets.size();
+  pageIndexComplete = true;
   LOG_DBG("TRS", "Loaded page index cache: %d pages", totalPages);
   return true;
 }

@@ -856,6 +856,60 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       GUI.drawPopup(renderer, tr(STR_INDEXING));
 
       const auto popupFn = [this]() { GUI.drawPopup(renderer, tr(STR_INDEXING)); };
+      const bool canPreviewBeforeFullBuild = pendingAnchor.empty() && !pendingPercentJump;
+      const int previewPageNumber = pendingPageJump.has_value() ? static_cast<int>(*pendingPageJump) : nextPageNumber;
+      if (canPreviewBeforeFullBuild && previewPageNumber >= 0) {
+        auto previewPage = section->buildPagePreview(
+            SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
+            SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
+            SETTINGS.embeddedStyle, SETTINGS.imageRendering, SETTINGS.focusReadingEnabled,
+            static_cast<uint16_t>(previewPageNumber));
+        if (previewPage) {
+          section->currentPage = previewPageNumber;
+          if (cachedChapterTotalPageCount > 0) {
+            section->pageCount = cachedChapterTotalPageCount;
+          }
+          pendingPageJump.reset();
+          currentPageFootnotes = std::move(previewPage->footnotes);
+
+          renderer.clearScreen();
+          const auto start = millis();
+          renderContents(std::move(previewPage), orientedMarginTop, orientedMarginRight, orientedMarginBottom,
+                         orientedMarginLeft);
+          LOG_DBG("ERS", "Rendered preview page in %dms", millis() - start);
+
+          if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
+                                          SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
+                                          viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
+                                          SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
+            LOG_ERR("ERS", "Failed to persist page data to SD after preview");
+            section.reset();
+            showPendingSyncSaveError();
+            return;
+          }
+
+          if (section->loadSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
+                                       SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
+                                       viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
+                                       SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
+            if (cachedChapterTotalPageCount > 0) {
+              if (currentSpineIndex == cachedSpineIndex && section->pageCount != cachedChapterTotalPageCount) {
+                float progress = static_cast<float>(section->currentPage) / static_cast<float>(cachedChapterTotalPageCount);
+                section->currentPage = static_cast<int>(progress * section->pageCount);
+              }
+              cachedChapterTotalPageCount = 0;
+            }
+            if (section->currentPage >= section->pageCount && section->pageCount > 0) {
+              section->currentPage = section->pageCount - 1;
+            }
+            updateBookmarkFlag();
+            saveProgress(currentSpineIndex, section->currentPage, section->pageCount);
+            requestUpdate();
+          }
+          showPendingSyncSaveError();
+          return;
+        }
+      }
 
       if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
                                       SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,

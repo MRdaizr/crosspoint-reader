@@ -4,6 +4,8 @@
 #include <Logging.h>
 #include <Serialization.h>
 
+#include <algorithm>
+
 #include "Epub/css/CssParser.h"
 #include "Page.h"
 #include "hyphenation/Hyphenator.h"
@@ -154,6 +156,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
                                 const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
                                 const uint8_t imageRendering, const bool focusReadingEnabled,
                                 const std::function<void()>& popupFn) {
+  pageCount = 0;
   const auto localPath = epub->getSpineItem(spineIndex).href;
   const auto tmpHtmlPath = epub->getCachePath() + "/.tmp_" + std::to_string(spineIndex) + ".html";
 
@@ -309,6 +312,74 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     cssParser->clear();
   }
   return true;
+}
+
+std::unique_ptr<Page> Section::buildPagePreview(const int fontId, const float lineCompression,
+                                                const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
+                                                const uint16_t viewportWidth, const uint16_t viewportHeight,
+                                                const bool hyphenationEnabled, const bool embeddedStyle,
+                                                const uint8_t imageRendering, const bool focusReadingEnabled,
+                                                const uint16_t targetPage) {
+  const auto localPath = epub->getSpineItem(spineIndex).href;
+  const auto tmpHtmlPath = epub->getCachePath() + "/.tmp_preview_" + std::to_string(spineIndex) + ".html";
+
+  bool success = false;
+  for (int attempt = 0; attempt < 3 && !success; attempt++) {
+    if (attempt > 0) {
+      delay(50);
+    }
+    if (Storage.exists(tmpHtmlPath.c_str())) {
+      Storage.remove(tmpHtmlPath.c_str());
+    }
+
+    HalFile tmpHtml;
+    if (!Storage.openFileForWrite("SCT", tmpHtmlPath, tmpHtml)) {
+      continue;
+    }
+    success = epub->readItemContentsToStream(localPath, tmpHtml, 1024);
+    tmpHtml.close();
+  }
+
+  if (!success) {
+    Storage.remove(tmpHtmlPath.c_str());
+    return nullptr;
+  }
+
+  size_t lastSlash = localPath.find_last_of('/');
+  std::string contentBase = (lastSlash != std::string::npos) ? localPath.substr(0, lastSlash + 1) : "";
+  std::string imageBasePath = epub->getCachePath() + "/img_" + std::to_string(spineIndex) + "_";
+
+  CssParser* cssParser = nullptr;
+  if (embeddedStyle) {
+    cssParser = epub->getCssParser();
+    if (cssParser && !cssParser->loadFromCache()) {
+      LOG_ERR("SCT", "Failed to load CSS from cache");
+    }
+  }
+
+  std::unique_ptr<Page> previewPage;
+  uint16_t builtPage = 0;
+  ChapterHtmlSlimParser visitor(
+      epub, tmpHtmlPath, renderer, fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
+      viewportHeight, hyphenationEnabled, focusReadingEnabled,
+      [&previewPage, &builtPage, targetPage](std::unique_ptr<Page> page, const uint16_t, const uint16_t) {
+        if (builtPage == targetPage) {
+          previewPage = std::move(page);
+        }
+        builtPage++;
+      },
+      embeddedStyle, contentBase, imageBasePath, imageRendering, {}, nullptr, cssParser,
+      static_cast<uint16_t>(targetPage + 1));
+  Hyphenator::setPreferredLanguage(epub->getLanguage());
+  success = visitor.parseAndBuildPages();
+
+  Storage.remove(tmpHtmlPath.c_str());
+  if (cssParser) {
+    cssParser->clear();
+  }
+
+  pageCount = std::max<uint16_t>(static_cast<uint16_t>(targetPage + 1), builtPage);
+  return success ? std::move(previewPage) : nullptr;
 }
 
 std::unique_ptr<Page> Section::loadPageFromSectionFile() {

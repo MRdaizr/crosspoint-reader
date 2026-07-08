@@ -27,6 +27,9 @@ class ChapterHtmlSlimParser {
   GfxRenderer& renderer;
   std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t)> completePageFn;
   std::function<void()> popupFn;  // Popup callback
+  XML_Parser activeParser = nullptr;
+  uint16_t maxPagesToBuild = 0;
+  bool stoppedAfterPageLimit = false;
   int depth = 0;
   int skipUntilDepth = INT_MAX;
   int boldUntilDepth = INT_MAX;
@@ -103,6 +106,7 @@ class ChapterHtmlSlimParser {
   void makePages();
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
   void emitHorizontalRule(const BlockStyle& blockStyle);
+  void completeCurrentPage(uint16_t paragraphIndex, uint16_t listItemIndex);
   // XML callbacks
   static void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char** atts);
   static void XMLCALL characterData(void* userData, const XML_Char* s, int len);
@@ -119,7 +123,8 @@ class ChapterHtmlSlimParser {
                                  const bool embeddedStyle, const std::string& contentBase,
                                  const std::string& imageBasePath, const uint8_t imageRendering = 0,
                                  std::vector<std::string> tocAnchors = {},
-                                 const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr)
+                                 const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr,
+                                 const uint16_t maxPagesToBuild = 0)
 
       : epub(epub),
         filepath(filepath),
@@ -139,7 +144,8 @@ class ChapterHtmlSlimParser {
         imageRendering(imageRendering),
         contentBase(contentBase),
         imageBasePath(imageBasePath),
-        tocAnchors(std::move(tocAnchors)) {}
+        tocAnchors(std::move(tocAnchors)),
+        maxPagesToBuild(maxPagesToBuild) {}
 
   ~ChapterHtmlSlimParser() = default;
   bool parseAndBuildPages();

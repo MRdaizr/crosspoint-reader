@@ -39,6 +39,10 @@ class Section {
                          uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
                          uint8_t imageRendering, bool focusReadingEnabled,
                          const std::function<void()>& popupFn = nullptr);
+  std::unique_ptr<Page> buildPagePreview(int fontId, float lineCompression, bool extraParagraphSpacing,
+                                         uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,
+                                         bool hyphenationEnabled, bool embeddedStyle, uint8_t imageRendering,
+                                         bool focusReadingEnabled, uint16_t targetPage);
   std::unique_ptr<Page> loadPageFromSectionFile();
   std::string getTextFromSectionFile();
 

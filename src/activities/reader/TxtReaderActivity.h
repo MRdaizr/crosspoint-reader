@@ -22,6 +22,7 @@ class TxtReaderActivity final : public Activity {
   int viewportWidth = 0;
   bool initialized = false;
   bool pendingScreenshot = false;
+  bool pageIndexComplete = false;
 
   // Cached settings for cache validation (different fonts/margins require re-indexing)
   int cachedFontId = 0;
@@ -41,6 +42,9 @@ class TxtReaderActivity final : public Activity {
   void initializeReader();
   bool loadPageAtOffset(size_t offset, std::vector<std::string>& outLines, size_t& nextOffset);
   void buildPageIndex();
+  bool ensurePageIndexed(int page);
+  bool indexNextPage();
+  void updateTotalPages();
   bool loadPageIndexCache();
   void savePageIndexCache() const;
   void saveProgress() const;
