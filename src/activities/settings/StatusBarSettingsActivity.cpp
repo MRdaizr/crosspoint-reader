@@ -64,8 +64,9 @@ std::string formatUtcOffset(uint8_t biasedQ) {
   snprintf(buf, sizeof(buf), "UTC%c%d:%02d", neg ? '-' : '+', hours, mins);
   return buf;
 }
-constexpr int PROGRESS_BAR_ITEMS = 3;
-const StrId progressBarNames[PROGRESS_BAR_ITEMS] = {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE};
+constexpr int PROGRESS_BAR_ITEMS = 4;
+const StrId progressBarNames[PROGRESS_BAR_ITEMS] = {StrId::STR_BOOK, StrId::STR_CHAPTER, StrId::STR_HIDE,
+                                                    StrId::STR_PRELOAD_PROGRESS};
 
 constexpr int PROGRESS_BAR_THICKNESS_ITEMS = 3;
 const StrId progressBarThicknessNames[PROGRESS_BAR_THICKNESS_ITEMS] = {

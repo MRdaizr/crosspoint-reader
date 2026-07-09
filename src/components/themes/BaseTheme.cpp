@@ -764,7 +764,7 @@ void BaseTheme::fillPopupProgress(const GfxRenderer& renderer, const Rect& layou
 
 void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage,
                               const int pageCount, std::string title, const int paddingBottom, const int textYOffset,
-                              const bool fillMargin, const bool isPageBookmarked) const {
+                              const bool fillMargin, const bool isPageBookmarked, const int preloadProgress) const {
   auto metrics = UITheme::getInstance().getMetrics();
   int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
   renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
@@ -773,10 +773,14 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
 
   // Draw Progress Text
   const auto screenHeight = renderer.getScreenHeight();
-  constexpr int statusBarTextLift = 6;
-  auto textY =
-      screenHeight - UITheme::getInstance().getStatusBarHeight() - orientedMarginBottom - paddingBottom - 4 -
-      statusBarTextLift;
+  const int statusTextHeight = renderer.getTextHeight(SMALL_FONT_ID);
+  const int statusTextBottomPadding = 1;
+  const bool showProgressBar =
+      SETTINGS.statusBarProgressBar != CrossPointSettings::STATUS_BAR_PROGRESS_BAR::HIDE_PROGRESS;
+  const int progressBarReserve =
+      showProgressBar ? (((SETTINGS.statusBarProgressBarThickness + 1) * 2) + metrics.progressBarMarginTop) : 0;
+  auto textY = screenHeight - orientedMarginBottom - paddingBottom - progressBarReserve - statusTextHeight -
+               statusTextBottomPadding;
 
   const int leftClusterX = metrics.statusBarHorizontalMargin + orientedMarginLeft + 1;
   const int rightClusterX = renderer.getScreenWidth() - metrics.statusBarHorizontalMargin - orientedMarginRight;
@@ -811,9 +815,15 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     size_t progress;
     if (SETTINGS.statusBarProgressBar == CrossPointSettings::STATUS_BAR_PROGRESS_BAR::BOOK_PROGRESS) {
       progress = static_cast<size_t>(bookProgress);
-    } else {
+    } else if (SETTINGS.statusBarProgressBar == CrossPointSettings::STATUS_BAR_PROGRESS_BAR::CHAPTER_PROGRESS) {
       // Chapter progress
       progress = (pageCount > 0) ? (static_cast<float>(currentPage) / pageCount) * 100 : 0;
+    } else {
+      progress = preloadProgress >= 0 ? static_cast<size_t>(std::clamp(preloadProgress, 0, 100))
+                                      : static_cast<size_t>(bookProgress);
+      if (preloadProgress >= 0 && preloadProgress < 100 && progress == 0) {
+        progress = 1;
+      }
     }
     const int barWidth = progressBarMaxWidth * progress / 100;
     const int barHeight =

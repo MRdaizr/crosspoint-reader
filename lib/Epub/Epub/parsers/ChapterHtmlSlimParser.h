@@ -3,6 +3,7 @@
 #include <expat.h>
 
 #include <climits>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -27,6 +28,7 @@ class ChapterHtmlSlimParser {
   GfxRenderer& renderer;
   std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t)> completePageFn;
   std::function<void()> popupFn;  // Popup callback
+  std::function<void(uint8_t)> progressFn;
   XML_Parser activeParser = nullptr;
   uint16_t maxPagesToBuild = 0;
   bool stoppedAfterPageLimit = false;
@@ -124,7 +126,8 @@ class ChapterHtmlSlimParser {
                                  const std::string& imageBasePath, const uint8_t imageRendering = 0,
                                  std::vector<std::string> tocAnchors = {},
                                  const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr,
-                                 const uint16_t maxPagesToBuild = 0)
+                                 const uint16_t maxPagesToBuild = 0,
+                                 const std::function<void(uint8_t)>& progressFn = nullptr)
 
       : epub(epub),
         filepath(filepath),
@@ -145,7 +148,8 @@ class ChapterHtmlSlimParser {
         contentBase(contentBase),
         imageBasePath(imageBasePath),
         tocAnchors(std::move(tocAnchors)),
-        maxPagesToBuild(maxPagesToBuild) {}
+        maxPagesToBuild(maxPagesToBuild),
+        progressFn(progressFn) {}
 
   ~ChapterHtmlSlimParser() = default;
   bool parseAndBuildPages();

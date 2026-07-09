@@ -14,6 +14,7 @@
 #include "SilentRestart.h"
 #include "WifiSelectionActivity.h"
 #include "activities/network/CalibreConnectActivity.h"
+#include "activities/settings/NutstoreSyncActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/QrUtils.h"
@@ -115,6 +116,8 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
     modeName = "Connect to Calibre";
   } else if (mode == NetworkMode::CREATE_HOTSPOT) {
     modeName = "Create Hotspot";
+  } else if (mode == NetworkMode::NUTSTORE_SYNC) {
+    modeName = "Nutstore Sync";
   }
   LOG_DBG("WEBACT", "Network mode selected: %s", modeName);
 
@@ -124,6 +127,23 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
   if (mode == NetworkMode::CONNECT_CALIBRE) {
     startActivityForResult(
         std::make_unique<CalibreConnectActivity>(renderer, mappedInput), [this](const ActivityResult& result) {
+          state = WebServerActivityState::MODE_SELECTION;
+
+          startActivityForResult(std::make_unique<NetworkModeSelectionActivity>(renderer, mappedInput),
+                                 [this](const ActivityResult& result) {
+                                   if (result.isCancelled) {
+                                     onGoHome();
+                                   } else {
+                                     onNetworkModeSelected(std::get<NetworkModeResult>(result.data).mode);
+                                   }
+                                 });
+        });
+    return;
+  }
+
+  if (mode == NetworkMode::NUTSTORE_SYNC) {
+    startActivityForResult(
+        std::make_unique<NutstoreSyncActivity>(renderer, mappedInput), [this](const ActivityResult&) {
           state = WebServerActivityState::MODE_SELECTION;
 
           startActivityForResult(std::make_unique<NetworkModeSelectionActivity>(renderer, mappedInput),

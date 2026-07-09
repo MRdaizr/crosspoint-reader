@@ -863,6 +863,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       GUI.drawPopup(renderer, tr(STR_INDEXING));
 
       const auto popupFn = [this]() { GUI.drawPopup(renderer, tr(STR_INDEXING)); };
+      const auto preloadProgressFn = [this](const uint8_t progress) { updatePreloadProgress(progress, true); };
       const bool canPreviewBeforeFullBuild = pendingAnchor.empty() && !pendingPercentJump;
       const int previewPageNumber = pendingPageJump.has_value() ? static_cast<int>(*pendingPageJump) : nextPageNumber;
       if (canPreviewBeforeFullBuild && previewPageNumber >= 0) {
@@ -888,12 +889,15 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
                                           SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                           viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                          SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
+                                          SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, nullptr,
+                                          preloadProgressFn)) {
             LOG_ERR("ERS", "Failed to persist page data to SD after preview");
+            updatePreloadProgress(100);
             section.reset();
             showPendingSyncSaveError();
             return;
           }
+          updatePreloadProgress(100);
 
           if (section->loadSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
                                        SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
@@ -921,14 +925,18 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
                                       SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                       viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                      SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, popupFn)) {
+                                      SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, popupFn,
+                                      preloadProgressFn)) {
         LOG_ERR("ERS", "Failed to persist page data to SD");
+        updatePreloadProgress(100);
         section.reset();
         showPendingSyncSaveError();
         return;
       }
+      updatePreloadProgress(100);
     } else {
       LOG_DBG("ERS", "Cache found, skipping build...");
+      updatePreloadProgress(100);
     }
 
     if (pendingPageJump.has_value()) {
@@ -1063,17 +1071,42 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
   }
 
   LOG_DBG("ERS", "Silently indexing next chapter: %d", nextSpineIndex);
+  const auto preloadProgressFn = [this](const uint8_t progress) { updatePreloadProgress(progress, true); };
+  updatePreloadProgress(0);
+  lastDisplayedPreloadProgressPercent = 255;
   if (!nextSection.createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
                                      SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                      viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                     SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
+                                     SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, nullptr,
+                                     preloadProgressFn)) {
     LOG_ERR("ERS", "Failed silent indexing for chapter: %d", nextSpineIndex);
   }
+  updatePreloadProgress(100);
 }
 
 bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount) {
   return EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount);
 }
+
+void EpubReaderActivity::updatePreloadProgress(const uint8_t progress, const bool refreshStatusBar) {
+  preloadProgressPercent = std::min<uint8_t>(progress, 100);
+  if (!refreshStatusBar ||
+      SETTINGS.statusBarProgressBar != CrossPointSettings::STATUS_BAR_PROGRESS_BAR::PRELOAD_PROGRESS) {
+    return;
+  }
+
+  const bool shouldRefresh = lastDisplayedPreloadProgressPercent == 255 ||
+                             preloadProgressPercent >= 100 ||
+                             preloadProgressPercent >= lastDisplayedPreloadProgressPercent + 5;
+  if (!shouldRefresh) {
+    return;
+  }
+
+  lastDisplayedPreloadProgressPercent = preloadProgressPercent;
+  renderStatusBar();
+  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
 void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int orientedMarginTop,
                                         const int orientedMarginRight, const int orientedMarginBottom,
                                         const int orientedMarginLeft) {
@@ -1289,7 +1322,8 @@ void EpubReaderActivity::renderStatusBar() const {
     title = epub->getTitle();
   }
 
-  GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset, true, currentPageBookmarked);
+  GUI.drawStatusBar(renderer, bookProgress, currentPage, pageCount, title, 0, textYOffset, true, currentPageBookmarked,
+                    preloadProgressPercent);
 }
 
 void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool savePosition) {

@@ -1305,9 +1305,13 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
     return false;
   }
 
+  const uint32_t totalBytes = file.size();
   // Get file size to decide whether to show indexing popup.
-  if (popupFn && file.size() >= MIN_SIZE_FOR_POPUP) {
+  if (popupFn && totalBytes >= MIN_SIZE_FOR_POPUP) {
     popupFn();
+  }
+  if (progressFn) {
+    progressFn(0);
   }
 
   XML_SetUserData(parser, this);
@@ -1348,6 +1352,11 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
       file.close();
       return false;
     }
+    if (progressFn && totalBytes > 0) {
+      const uint32_t readBytes = totalBytes - file.available();
+      const uint8_t progress = static_cast<uint8_t>(std::min<uint32_t>(99, (readBytes * 100UL) / totalBytes));
+      progressFn(progress);
+    }
   } while (!done);
   LOG_DBG("EHP", "Time to parse and build pages: %lu ms", millis() - chapterStartTime);
 
@@ -1373,6 +1382,9 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
     currentTextBlock.reset();
   }
 
+  if (progressFn) {
+    progressFn(100);
+  }
   return true;
 }
 

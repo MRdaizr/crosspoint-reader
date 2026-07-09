@@ -38,6 +38,8 @@ class EpubReaderActivity final : public Activity {
   bool ignoreNextConfirmRelease = false;
   bool currentPageBookmarked = false;
   bool bookmarkRemoved = false;  // true when last toggle removed (controls popup text)
+  uint8_t preloadProgressPercent = 100;
+  uint8_t lastDisplayedPreloadProgressPercent = 255;
   std::vector<BookmarkEntry> cachedBookmarks;
   // Tracks whether this book is currently removed from Recent Books by the
   // removeReadBooksFromRecents feature (set at End-of-Book, cleared if paged back in).
@@ -60,6 +62,7 @@ class EpubReaderActivity final : public Activity {
   void renderContents(std::unique_ptr<Page> page, int orientedMarginTop, int orientedMarginRight,
                       int orientedMarginBottom, int orientedMarginLeft);
   void renderStatusBar() const;
+  void updatePreloadProgress(uint8_t progress, bool refreshStatusBar = false);
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
