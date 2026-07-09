@@ -23,6 +23,7 @@ class TxtReaderActivity final : public Activity {
   bool initialized = false;
   bool pendingScreenshot = false;
   bool pageIndexComplete = false;
+  unsigned long readingSessionStartMs = 0UL;
 
   // Cached settings for cache validation (different fonts/margins require re-indexing)
   int cachedFontId = 0;

@@ -18,6 +18,7 @@ class XtcReaderActivity final : public Activity {
   std::shared_ptr<Xtc> xtc;
 
   uint32_t currentPage = 0;
+  unsigned long readingSessionStartMs = 0UL;
   int pagesUntilFullRefresh = 0;
 
   enum class StatusBarOverlayPosition { Bottom, Top };

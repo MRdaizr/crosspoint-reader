@@ -15,6 +15,7 @@
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
+#include "ReadingStatsStore.h"
 #include "TxtReaderMenuActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -44,6 +45,7 @@ void TxtReaderActivity::onEnter() {
   APP_STATE.openEpubPath = filePath;
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(filePath, fileName, "", "");
+  readingSessionStartMs = millis();
 
   // Trigger first update
   requestUpdate();
@@ -57,6 +59,10 @@ void TxtReaderActivity::onExit() {
 
   pageOffsets.clear();
   currentPageLines.clear();
+  if (txt && readingSessionStartMs != 0UL) {
+    READING_STATS.addSession(txt->getPath(), txt->getTitle(), (millis() - readingSessionStartMs) / 1000UL);
+    readingSessionStartMs = 0UL;
+  }
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
   txt.reset();

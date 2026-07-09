@@ -20,6 +20,7 @@
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
+#include "ReadingStatsStore.h"
 #include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -40,6 +41,7 @@ void XtcReaderActivity::onEnter() {
   APP_STATE.openEpubPath = xtc->getPath();
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(xtc->getPath(), xtc->getTitle(), xtc->getAuthor(), xtc->getThumbBmpPath());
+  readingSessionStartMs = millis();
 
   // Trigger first update
   requestUpdate();
@@ -48,6 +50,10 @@ void XtcReaderActivity::onEnter() {
 void XtcReaderActivity::onExit() {
   Activity::onExit();
 
+  if (xtc && readingSessionStartMs != 0UL) {
+    READING_STATS.addSession(xtc->getPath(), xtc->getTitle(), (millis() - readingSessionStartMs) / 1000UL);
+    readingSessionStartMs = 0UL;
+  }
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
   xtc.reset();

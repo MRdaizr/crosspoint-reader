@@ -1,0 +1,473 @@
+Processing default (platform: https://github.com/pioarduino/platform-espressif32/releases/download/55.03.37/platform-espressif32.zip; board: esp32-c3-devkitm-1; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+Generated: src\network\html\FilesPageHtml.generated.h
+  Original: 204574 bytes
+  Minified: 200775 bytes (98.1%)
+  Compressed: 46418 bytes (22.7%)
+Generated: src\network\html\FirmwarePageHtml.generated.h
+  Original: 6117 bytes
+  Minified: 5936 bytes (97.0%)
+  Compressed: 2091 bytes (34.2%)
+Generated: src\network\html\FontsPageHtml.generated.h
+  Original: 10979 bytes
+  Minified: 10804 bytes (98.4%)
+  Compressed: 3287 bytes (29.9%)
+Generated: src\network\html\HomePageHtml.generated.h
+  Original: 4350 bytes
+  Minified: 4087 bytes (94.0%)
+  Compressed: 1432 bytes (32.9%)
+Generated: src\network\html\SettingsPageHtml.generated.h
+  Original: 29294 bytes
+  Minified: 29170 bytes (99.6%)
+  Compressed: 6296 bytes (21.5%)
+Generated: src\network\html\js\jszip_minJs.generated.h
+  Original: 97630 bytes
+  Minified: 97630 bytes (100.0%)
+  Compressed: 28379 bytes (29.1%)
+Language            Code   Own  Fallback  Unused  Data (B)
+------------------  -----  ---  --------  ------  --------
+English             EN     404  0         2       6639    
+Беларуская          BE     297  107       0       9113    
+Català              CA     381  23        0       8502    
+Valencià            CAV    381  23        0       8414    
+Čeština             CS     273  131       0       5509    
+Dansk               DA     301  103       0       5010    
+Deutsch             DE     378  26        0       6977    
+Español             ES     381  23        0       7878    
+Suomi               FI     271  133       0       5083    
+Français            FR     302  102       0       5167    
+עברית               HE     381  23        0       9882    
+Magyar              HU     297  107       0       5865    
+Italiano            IT     381  23        0       7336    
+Қазақша             KK     295  109       0       9170    
+Lietuvių            LT     297  107       0       4390    
+Nederlands          NL     301  103       0       5010    
+Polski              PL     356  48        0       7188    
+Português (Brasil)  PT     273  131       0       4957    
+Română              RO     301  103       0       5701    
+Русский             RU     381  23        0       12768   
+Slovenščina         SI     297  107       0       5387    
+Slovenčina          SK     377  27        0       8298    
+Svenska             SV     377  27        0       7376    
+Türkçe              TR     301  103       0       5402    
+Українська          UK     378  26        0       13151   
+Tiếng Việt          VI     377  27        0       8500    
+简体中文                ZH_CN  403  1         2       6308    
+
+  Total: 404  |  Used in code: 402  |  Never used: 2
+  Flash: 194,981 B strings (deduped)  +  21,816 B offset tables  =  216,797 B
+
+  Stripping 2 unused string(s) from output.
+
+Code generation complete!
+  Languages: 27
+  String keys: 402
+CrossPoint build version: 1.4.1-dev-master-dac0c6b
+CONFIGURATION: https://docs.platformio.org/page/boards/espressif32/esp32-c3-devkitm-1.html
+PLATFORM: Espressif 32 (55.3.37) > Espressif ESP32-C3-DevKitM-1
+HARDWARE: ESP32C3 160MHz, 320KB RAM, 16MB Flash
+DEBUG: Current (cmsis-dap) External (cmsis-dap, esp-bridge, esp-builtin, esp-prog, iot-bus-jtag, jlink, minimodule, olimex-arm-usb-ocd, olimex-arm-usb-ocd-h, olimex-arm-usb-tiny-h, olimex-jtag-tiny, tumpa)
+PACKAGES: 
+ - contrib-piohome @ 3.4.4 
+ - framework-arduinoespressif32 @ 3.3.7 
+ - framework-arduinoespressif32-libs @ 5.5.0+sha.87912cd291 
+ - tool-cppcheck @ 2.11.0+230717 
+ - tool-esptoolpy @ 5.1.2 
+ - toolchain-riscv32-esp @ 14.2.0+20251107
+*** Applied include path shortening for 310 framework paths ***
+*** Path length reduced from 37353 to ~12958 characters ***
+*** Estimated savings: 23870 characters ***
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 76 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- BatteryMonitor @ 1.0.0
+|-- InputManager @ 1.1.0
+|-- EInkDisplay @ 1.0.0
+|-- SDCardManager @ 2.0.0
+|-- ArduinoJson @ 7.4.2
+|-- QRCode @ 0.0.1
+|-- PNGdec @ 1.1.6
+|-- JPEGDEC @ 1.2.7+sha.8628297
+|-- WebSockets @ 2.7.3
+|-- I18n
+|-- hal
+|-- Logging
+|-- Serialization
+|-- GfxRenderer
+|-- Epub
+|-- FsHelpers
+|-- Xtc
+|-- Txt
+|-- OpdsParser
+|-- WiFi @ 3.3.7
+|-- Memory
+|-- Utf8
+|-- ESPmDNS @ 3.3.7
+|-- DNSServer @ 3.3.7
+|-- KOReaderSync
+|-- MiniBidi
+|-- EpdFont
+|-- SPI @ 3.3.7
+|-- expat @ 2.7.3
+|-- JsonParser
+|-- Networking @ 3.3.7
+|-- WebServer @ 3.3.7
+Building in release mode
+Retrieved `.pio\build\default\libed7\BatteryMonitor\BatteryMonitor.cpp.o' from cache
+Retrieved `.pio\build\default\libfbd\InputManager\InputManager.cpp.o' from cache
+Retrieved `.pio\build\default\lib3ab\SPI\SPI.cpp.o' from cache
+Retrieved `.pio\build\default\lib235\EInkDisplay\EInkDisplay.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\ExFatLib\ExFatDbg.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\ExFatLib\ExFatFile.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\ExFatLib\ExFatFilePrint.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\ExFatLib\ExFatFileWrite.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\ExFatLib\ExFatFormatter.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\ExFatLib\ExFatName.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\ExFatLib\ExFatPartition.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\ExFatLib\ExFatVolume.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\FatLib\FatDbg.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\FatLib\FatFile.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\FatLib\FatFileLFN.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\FatLib\FatFilePrint.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\FatLib\FatFileSFN.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\FatLib\FatFormatter.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\FatLib\FatName.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\FatLib\FatPartition.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\FatLib\FatVolume.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\FreeStack.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\FsLib\FsFile.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\FsLib\FsNew.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\FsLib\FsVolume.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\MinimumSerial.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\SdCard\PioSdio\PioSdioCard.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\SdCard\SdCardInfo.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\SdCard\SdSpiCard\SdSpiCard.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\SdCard\SdSpiCard\SpiDriver\SdSpiChipSelect.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\SdCard\SdSpiCard\SpiDriver\SdSpiDue.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\SdCard\SdSpiCard\SpiDriver\SdSpiSTM32Core.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\SdCard\SdSpiCard\SpiDriver\SdSpiTeensy3.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\SdCard\TeensySdio\TeensySdio.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\common\FmtNumber.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\common\FsCache.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\common\FsDateTime.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\common\FsName.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\common\FsStructs.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\common\FsUtf.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\common\PrintBasic.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\common\upcase.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\iostream\StdioStream.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\iostream\StreamBaseClass.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\iostream\istream.cpp.o' from cache
+Retrieved `.pio\build\default\libe14\SdFat\iostream\ostream.cpp.o' from cache
+Retrieved `.pio\build\default\lib955\SDCardManager\SDCardManager.cpp.o' from cache
+Retrieved `.pio\build\default\lib76b\QRCode\qrcode.c.o' from cache
+Retrieved `.pio\build\default\libe46\PNGdec\PNGdec.cpp.o' from cache
+Retrieved `.pio\build\default\libe46\PNGdec\adler32.c.o' from cache
+Retrieved `.pio\build\default\libe46\PNGdec\crc32.c.o' from cache
+Retrieved `.pio\build\default\libe46\PNGdec\infback.c.o' from cache
+Retrieved `.pio\build\default\libe46\PNGdec\inffast.c.o' from cache
+Retrieved `.pio\build\default\libe46\PNGdec\inflate.c.o' from cache
+Retrieved `.pio\build\default\libe46\PNGdec\inftrees.c.o' from cache
+Retrieved `.pio\build\default\libe46\PNGdec\s3_simd_rgb565.S.o' from cache
+Retrieved `.pio\build\default\libe46\PNGdec\zutil.c.o' from cache
+Retrieved `.pio\build\default\lib336\FS\FS.cpp.o' from cache
+Retrieved `.pio\build\default\lib336\FS\vfs_api.cpp.o' from cache
+Retrieved `.pio\build\default\libbf8\JPEGDEC\JPEGDEC.cpp.o' from cache
+Retrieved `.pio\build\default\libbf8\JPEGDEC\s3_simd_420.S.o' from cache
+Retrieved `.pio\build\default\libbf8\JPEGDEC\s3_simd_444.S.o' from cache
+Retrieved `.pio\build\default\libbf8\JPEGDEC\s3_simd_dequant.S.o' from cache
+Retrieved `.pio\build\default\lib0d2\Network\NetworkClient.cpp.o' from cache
+Retrieved `.pio\build\default\lib0d2\Network\NetworkEvents.cpp.o' from cache
+Retrieved `.pio\build\default\lib0d2\Network\NetworkInterface.cpp.o' from cache
+Retrieved `.pio\build\default\lib0d2\Network\NetworkManager.cpp.o' from cache
+Retrieved `.pio\build\default\lib0d2\Network\NetworkServer.cpp.o' from cache
+Retrieved `.pio\build\default\lib0d2\Network\NetworkUdp.cpp.o' from cache
+Retrieved `.pio\build\default\lib24a\Ethernet\ETH.cpp.o' from cache
+Retrieved `.pio\build\default\lib40d\WiFi\AP.cpp.o' from cache
+Retrieved `.pio\build\default\lib40d\WiFi\STA.cpp.o' from cache
+Retrieved `.pio\build\default\lib40d\WiFi\WiFi.cpp.o' from cache
+Retrieved `.pio\build\default\lib40d\WiFi\WiFiAP.cpp.o' from cache
+Retrieved `.pio\build\default\lib40d\WiFi\WiFiGeneric.cpp.o' from cache
+Retrieved `.pio\build\default\lib40d\WiFi\WiFiMulti.cpp.o' from cache
+Retrieved `.pio\build\default\lib40d\WiFi\WiFiSTA.cpp.o' from cache
+Retrieved `.pio\build\default\lib40d\WiFi\WiFiScan.cpp.o' from cache
+Retrieved `.pio\build\default\lib090\NetworkClientSecure\NetworkClientSecure.cpp.o' from cache
+Retrieved `.pio\build\default\lib090\NetworkClientSecure\ssl_client.cpp.o' from cache
+Retrieved `.pio\build\default\libc3b\WebSockets\SocketIOclient.cpp.o' from cache
+Retrieved `.pio\build\default\libc3b\WebSockets\WebSockets.cpp.o' from cache
+Retrieved `.pio\build\default\libc3b\WebSockets\WebSocketsClient.cpp.o' from cache
+Retrieved `.pio\build\default\libc3b\WebSockets\WebSocketsServer.cpp.o' from cache
+Retrieved `.pio\build\default\libc3b\WebSockets\libb64\cdecode.c.o' from cache
+Retrieved `.pio\build\default\libc3b\WebSockets\libb64\cencode.c.o' from cache
+Retrieved `.pio\build\default\libc3b\WebSockets\libsha1\libsha1.c.o' from cache
+Compiling .pio\build\default\lib5fe\I18n\I18n.cpp.o
+Compiling .pio\build\default\lib5fe\I18n\I18nStrings.cpp.o
+Retrieved `.pio\build\default\liba0a\Logging\Logging.cpp.o' from cache
+Retrieved `.pio\build\default\lib47c\Wire\Wire.cpp.o' from cache
+Retrieved `.pio\build\default\libaf8\Preferences\Preferences.cpp.o' from cache
+Retrieved `.pio\build\default\lib269\hal\HalClock.cpp.o' from cache
+Retrieved `.pio\build\default\lib269\hal\HalDisplay.cpp.o' from cache
+Retrieved `.pio\build\default\lib269\hal\HalGPIO.cpp.o' from cache
+Retrieved `.pio\build\default\lib269\hal\HalPowerManager.cpp.o' from cache
+Retrieved `.pio\build\default\lib269\hal\HalStorage.cpp.o' from cache
+Retrieved `.pio\build\default\lib269\hal\HalSystem.cpp.o' from cache
+Retrieved `.pio\build\default\lib269\hal\HalTiltSensor.cpp.o' from cache
+Retrieved `.pio\build\default\libe0d\Serialization\ObfuscationUtils.cpp.o' from cache
+Retrieved `.pio\build\default\libe9c\Utf8\Utf8.cpp.o' from cache
+Retrieved `.pio\build\default\lib01d\uzlib\tinflate.c.o' from cache
+Retrieved `.pio\build\default\lib294\InflateReader\InflateReader.cpp.o' from cache
+Retrieved `.pio\build\default\lib1c3\EpdFont\EpdFont.cpp.o' from cache
+Retrieved `.pio\build\default\lib1c3\EpdFont\EpdFontFamily.cpp.o' from cache
+Retrieved `.pio\build\default\lib1c3\EpdFont\FontDecompressor.cpp.o' from cache
+Retrieved `.pio\build\default\lib1c3\EpdFont\SdCardFont.cpp.o' from cache
+Retrieved `.pio\build\default\lib1c3\EpdFont\SdCardFontManager.cpp.o' from cache
+Retrieved `.pio\build\default\lib1c3\EpdFont\SdCardFontRegistry.cpp.o' from cache
+Retrieved `.pio\build\default\lib374\MiniBidi\BidiUtils.cpp.o' from cache
+Retrieved `.pio\build\default\lib374\MiniBidi\minibidi.c.o' from cache
+Retrieved `.pio\build\default\lib96c\GfxRenderer\Bitmap.cpp.o' from cache
+Retrieved `.pio\build\default\lib96c\GfxRenderer\BitmapHelpers.cpp.o' from cache
+Retrieved `.pio\build\default\lib96c\GfxRenderer\FontCacheManager.cpp.o' from cache
+Retrieved `.pio\build\default\lib96c\GfxRenderer\GfxRenderer.cpp.o' from cache
+Retrieved `.pio\build\default\libd2a\FsHelpers\FsHelpers.cpp.o' from cache
+Retrieved `.pio\build\default\lib7fe\ZipFile\ZipFile.cpp.o' from cache
+Retrieved `.pio\build\default\libf47\expat\xmlparse.c.o' from cache
+Retrieved `.pio\build\default\libf47\expat\xmlrole.c.o' from cache
+Retrieved `.pio\build\default\libf47\expat\xmltok.c.o' from cache
+Retrieved `.pio\build\default\lib152\JpegToBmpConverter\JpegToBmpConverter.cpp.o' from cache
+Retrieved `.pio\build\default\libc0c\PngToBmpConverter\PngToBmpConverter.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\BookMetadataCache.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\Page.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\ParsedText.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\Section.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\blocks\ImageBlock.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\blocks\TextBlock.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\converters\ImageDecoderFactory.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\converters\ImageToFramebufferDecoder.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\converters\JpegToFramebufferConverter.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\converters\PngToFramebufferConverter.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\css\CssParser.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\htmlEntities.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\hyphenation\HyphenationCommon.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\hyphenation\Hyphenator.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\hyphenation\LanguageRegistry.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\hyphenation\LiangHyphenation.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\parsers\ChapterHtmlSlimParser.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\parsers\ContainerParser.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\parsers\ContentOpfParser.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\parsers\TocNavParser.cpp.o' from cache
+Retrieved `.pio\build\default\lib7b3\Epub\Epub\parsers\TocNcxParser.cpp.o' from cache
+Retrieved `.pio\build\default\lib500\Xtc\Xtc.cpp.o' from cache
+Retrieved `.pio\build\default\lib500\Xtc\Xtc\XtcParser.cpp.o' from cache
+Retrieved `.pio\build\default\libf71\Txt\Txt.cpp.o' from cache
+Retrieved `.pio\build\default\libeb8\OpdsParser\OpdsParser.cpp.o' from cache
+Retrieved `.pio\build\default\libeb8\OpdsParser\OpdsStream.cpp.o' from cache
+Retrieved `.pio\build\default\libf17\ESPmDNS\ESPmDNS.cpp.o' from cache
+Retrieved `.pio\build\default\libcf2\AsyncUDP\AsyncUDP.cpp.o' from cache
+Retrieved `.pio\build\default\libf6f\DNSServer\DNSServer.cpp.o' from cache
+Retrieved `.pio\build\default\lib604\KOReaderSync\ChapterXPathResolver.cpp.o' from cache
+Retrieved `.pio\build\default\lib604\KOReaderSync\KOReaderCredentialStore.cpp.o' from cache
+Retrieved `.pio\build\default\lib604\KOReaderSync\KOReaderDocumentId.cpp.o' from cache
+Retrieved `.pio\build\default\lib604\KOReaderSync\KOReaderJsonIO.cpp.o' from cache
+Retrieved `.pio\build\default\lib604\KOReaderSync\KOReaderSyncClient.cpp.o' from cache
+Retrieved `.pio\build\default\lib604\KOReaderSync\ProgressMapper.cpp.o' from cache
+Retrieved `.pio\build\default\liba6c\JsonParser\ReleaseJsonParser.cpp.o' from cache
+Retrieved `.pio\build\default\liba6c\JsonParser\StreamingJsonParser.cpp.o' from cache
+Retrieved `.pio\build\default\lib0c8\Hash\PBKDF2_HMACBuilder.cpp.o' from cache
+Retrieved `.pio\build\default\lib0c8\Hash\SHA1Builder.cpp.o' from cache
+Retrieved `.pio\build\default\lib0c8\Hash\SHA2Builder.cpp.o' from cache
+Retrieved `.pio\build\default\lib0c8\Hash\SHA3Builder.cpp.o' from cache
+Retrieved `.pio\build\default\libb36\WebServer\Parsing.cpp.o' from cache
+Retrieved `.pio\build\default\libb36\WebServer\WebServer.cpp.o' from cache
+Retrieved `.pio\build\default\libb36\WebServer\detail\mimetable.cpp.o' from cache
+Retrieved `.pio\build\default\libb36\WebServer\middleware\AuthenticationMiddleware.cpp.o' from cache
+Retrieved `.pio\build\default\libb36\WebServer\middleware\CorsMiddleware.cpp.o' from cache
+Retrieved `.pio\build\default\libb36\WebServer\middleware\LoggingMiddleware.cpp.o' from cache
+Retrieved `.pio\build\default\libb36\WebServer\middleware\MiddlewareChain.cpp.o' from cache
+Compiling .pio\build\default\src\CrossPointSettings.cpp.o
+Retrieved `.pio\build\default\src\CrossPointState.cpp.o' from cache
+Retrieved `.pio\build\default\src\FontInstaller.cpp.o' from cache
+Compiling .pio\build\default\src\JsonSettingsIO.cpp.o
+Retrieved `.pio\build\default\src\MappedInputManager.cpp.o' from cache
+Retrieved `.pio\build\default\src\NutstoreConfigStore.cpp.o' from cache
+Retrieved `.pio\build\default\src\OpdsServerStore.cpp.o' from cache
+Compiling .pio\build\default\src\ReadingStatsStore.cpp.o
+Retrieved `.pio\build\default\src\RecentBooksStore.cpp.o' from cache
+Retrieved `.pio\build\default\src\SdCardFontSystem.cpp.o' from cache
+Retrieved `.pio\build\default\src\WifiCredentialStore.cpp.o' from cache
+Retrieved `.pio\build\default\src\activities\Activity.cpp.o' from cache
+Compiling .pio\build\default\src\activities\ActivityManager.cpp.o
+Compiling .pio\build\default\src\activities\boot_sleep\BootActivity.cpp.o
+Compiling .pio\build\default\src\activities\boot_sleep\SleepActivity.cpp.o
+Compiling .pio\build\default\src\activities\browser\OpdsBookBrowserActivity.cpp.o
+Compiling .pio\build\default\src\activities\extensions\ExtensionsMenuActivity.cpp.o
+Compiling .pio\build\default\src\activities\extensions\FlashcardDeckListActivity.cpp.o
+Compiling .pio\build\default\src\activities\extensions\FlashcardReviewActivity.cpp.o
+Compiling .pio\build\default\src\activities\extensions\PomodoroActivity.cpp.o
+Compiling .pio\build\default\src\activities\extensions\ReadingStatsActivity.cpp.o
+Compiling .pio\build\default\src\activities\extensions\TimeInfoActivity.cpp.o
+Compiling .pio\build\default\src\activities\extensions\WeatherActivity.cpp.o
+Compiling .pio\build\default\src\activities\home\CrashActivity.cpp.o
+Compiling .pio\build\default\src\activities\home\FileBrowserActivity.cpp.o
+Compiling .pio\build\default\src\activities\home\HomeActivity.cpp.o
+Compiling .pio\build\default\src\activities\home\RecentBooksActivity.cpp.o
+Compiling .pio\build\default\src\activities\network\CalibreConnectActivity.cpp.o
+Compiling .pio\build\default\src\activities\network\CrossPointWebServerActivity.cpp.o
+Compiling .pio\build\default\src\activities\network\NetworkModeSelectionActivity.cpp.o
+Compiling .pio\build\default\src\activities\network\WifiSelectionActivity.cpp.o
+Compiling .pio\build\default\src\activities\reader\EpubReaderActivity.cpp.o
+Compiling .pio\build\default\src\activities\reader\EpubReaderBookmarksActivity.cpp.o
+Compiling .pio\build\default\src\activities\reader\EpubReaderChapterSelectionActivity.cpp.o
+Compiling .pio\build\default\src\activities\reader\EpubReaderFootnotesActivity.cpp.o
+Compiling .pio\build\default\src\activities\reader\EpubReaderMenuActivity.cpp.o
+Compiling .pio\build\default\src\activities\reader\EpubReaderPercentSelectionActivity.cpp.o
+Compiling .pio\build\default\src\activities\reader\KOReaderSyncActivity.cpp.o
+Compiling .pio\build\default\src\activities\reader\QrDisplayActivity.cpp.o
+Compiling .pio\build\default\src\activities\reader\ReaderActivity.cpp.o
+Compiling .pio\build\default\src\activities\reader\TxtReaderActivity.cpp.o
+Compiling .pio\build\default\src\activities\reader\TxtReaderMenuActivity.cpp.o
+Compiling .pio\build\default\src\activities\reader\XtcReaderActivity.cpp.o
+Compiling .pio\build\default\src\activities\reader\XtcReaderChapterSelectionActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\ButtonRemapActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\ClearCacheActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\ClockOffsetActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\ClockSyncActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\FontDownloadActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\FontSelectionActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\KOReaderAuthActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\KOReaderSettingsActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\LanguageSelectActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\NutstoreSyncActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\OpdsServerListActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\OpdsSettingsActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\OtaUpdateActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\SdFirmwareUpdateActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\SettingsActivity.cpp.o
+Compiling .pio\build\default\src\activities\settings\StatusBarSettingsActivity.cpp.o
+Compiling .pio\build\default\src\activities\util\BmpViewerActivity.cpp.o
+Compiling .pio\build\default\src\activities\util\ConfirmationActivity.cpp.o
+Retrieved `.pio\build\default\src\activities\util\FullScreenMessageActivity.cpp.o' from cache
+Compiling .pio\build\default\src\activities\util\IntervalSelectionActivity.cpp.o
+Compiling .pio\build\default\src\activities\util\KeyboardEntryActivity.cpp.o
+Retrieved `.pio\build\default\src\components\UITheme.cpp.o' from cache
+Compiling .pio\build\default\src\components\themes\BaseTheme.cpp.o
+Retrieved `.pio\build\default\src\components\themes\lyra\Lyra3CoversTheme.cpp.o' from cache
+Compiling .pio\build\default\src\components\themes\lyra\LyraTheme.cpp.o
+Compiling .pio\build\default\src\components\themes\roundedraff\RoundedRaffTheme.cpp.o
+Compiling .pio\build\default\src\main.cpp.o
+Compiling .pio\build\default\src\network\CrossPointWebServer.cpp.o
+Retrieved `.pio\build\default\src\network\FirmwareFlasher.cpp.o' from cache
+Retrieved `.pio\build\default\src\network\HttpDownloader.cpp.o' from cache
+Retrieved `.pio\build\default\src\network\NutstoreSync.cpp.o' from cache
+Retrieved `.pio\build\default\src\network\NutstoreWebDavClient.cpp.o' from cache
+Retrieved `.pio\build\default\src\network\OtaBootSwitch.cpp.o' from cache
+Retrieved `.pio\build\default\src\network\OtaUpdater.cpp.o' from cache
+Retrieved `.pio\build\default\src\network\WebDAVHandler.cpp.o' from cache
+Retrieved `.pio\build\default\src\platform\skip_efuse_blk_check.c.o' from cache
+Retrieved `.pio\build\default\src\util\BookCacheUtils.cpp.o' from cache
+Retrieved `.pio\build\default\src\util\BookmarkUtil.cpp.o' from cache
+Retrieved `.pio\build\default\src\util\ButtonNavigator.cpp.o' from cache
+Retrieved `.pio\build\default\src\util\QrUtils.cpp.o' from cache
+Retrieved `.pio\build\default\src\util\ScreenshotUtil.cpp.o' from cache
+Retrieved `.pio\build\default\src\util\StringUtils.cpp.o' from cache
+Retrieved `.pio\build\default\src\util\UrlUtils.cpp.o' from cache
+Retrieved `.pio\build\default\bootloader.bin' from cache
+Retrieved `.pio\build\default\partitions.bin' from cache
+Retrieved `.pio\build\default\FrameworkArduino\ColorFormat.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\Esp.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\FirmwareMSC.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\FunctionalInterrupt.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\HEXBuilder.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\HWCDC.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\HardwareSerial.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\HashBuilder.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\IPAddress.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\MD5Builder.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\MacAddress.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\Print.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\Stream.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\StreamString.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\Tone.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\USB.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\USBCDC.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\USBMSC.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\WMath.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\WString.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\base64.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\cbuf.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\chip-debug-report.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-adc.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-bt.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-cpu.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-dac.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-gpio.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-hosted.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-i2c-ng.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-i2c-slave.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-i2c.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-ledc.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-log-wrapper.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-matrix.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-misc.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-periman.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-psram.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-rgb-led.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-rmt.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-sigmadelta.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-spi.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-time.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-timer.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-tinyusb.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-touch-ng.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-touch.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\esp32-hal-uart.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\firmware_msc_fat.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\freertos_stats.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\idf_openthread_mpool_wrapper.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\libb64\cdecode.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\libb64\cencode.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\main.cpp.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\stdlib_noniso.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\wiring_pulse.c.o' from cache
+Retrieved `.pio\build\default\FrameworkArduino\wiring_shift.c.o' from cache
+Retrieved `.pio\build\default\libFrameworkArduino.a' from cache
+Linking .pio\build\default\firmware.elf
+                            Memory Type Usage Summary                             
+┌─────────────────────┬──────────────┬──────────┬────────────────┬───────────────┐
+│ Memory Type/Section │ Used [bytes] │ Used [%] │ Remain [bytes] │ Total [bytes] │
+├─────────────────────┼──────────────┼──────────┼────────────────┼───────────────┤
+│ Flash Data          │      3646412 │          │                │               │
+│    .rodata          │      3633304 │          │                │               │
+│    .eh_frame        │        12852 │          │                │               │
+│    .appdesc         │          256 │          │                │               │
+│ Flash Code          │      1758066 │          │                │               │
+│    .text            │      1758066 │          │                │               │
+│ DRAM                │       168109 │    52.32 │         153187 │        321296 │
+│    .bss             │        84328 │    26.25 │                │               │
+│    .text            │        66724 │    20.77 │                │               │
+│    .data            │        17057 │     5.31 │                │               │
+│ RTC SLOW            │         5540 │    67.63 │           2652 │          8192 │
+│    .rtc_noinit      │         5520 │    67.38 │                │               │
+│    .text            │           20 │     0.24 │                │               │
+└─────────────────────┴──────────────┴──────────┴────────────────┴───────────────┘
+Total image size: 5488279 bytes (.bin may be padded larger)
+Note: The reported total sizes may be smaller than those in the technical reference manual due to reserved memory and application configuration. The total flash size available for the application is not included by default, as it cannot be reliably determined due to the presence of other data like the bootloader, partition table, and application partition size.
+Retrieving maximum program size .pio\build\default\firmware.elf
+Checking size .pio\build\default\firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [===       ]  30.9% (used 101388 bytes from 327680 bytes)
+Flash: [========  ]  83.5% (used 5475151 bytes from 6553600 bytes)
+Building .pio\build\default\firmware.bin
+esptool v5.1.2
+Creating ESP32C3 image...
+Merged 2 ELF sections.
+Successfully created ESP32C3 image.
+======================== [SUCCESS] Took 212.30 seconds ========================
+
+Environment    Status    Duration
+-------------  --------  ------------
+default        SUCCESS   00:03:32.303
+========================= 1 succeeded in 00:03:32.303 =========================

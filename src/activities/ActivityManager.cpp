@@ -13,6 +13,7 @@
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
+#include "extensions/ExtensionsMenuActivity.h"
 #include "network/CrossPointWebServerActivity.h"
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
@@ -193,6 +194,10 @@ void ActivityManager::goToBrowser() {
   }
 }
 
+void ActivityManager::goToExtensions() {
+  replaceActivity(std::make_unique<ExtensionsMenuActivity>(renderer, mappedInput));
+}
+
 void ActivityManager::goToReader(std::string path) {
   replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path)));
 }
@@ -219,6 +224,8 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
       initialMenuItem = HomeMenuItem::OPDS_BROWSER;
     } else if (activityName == "CrossPointWebServer") {
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;
+    } else if (activityName == "Extensions") {
+      initialMenuItem = HomeMenuItem::EXTENSIONS;
     } else if (activityName == "Settings") {
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
     }

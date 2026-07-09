@@ -32,6 +32,7 @@
 #include "QrDisplayActivity.h"
 #include "ReaderUtils.h"
 #include "RecentBooksStore.h"
+#include "ReadingStatsStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookmarkUtil.h"
@@ -196,6 +197,7 @@ void EpubReaderActivity::onEnter() {
   APP_STATE.openEpubPath = epub->getPath();
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
+  readingSessionStartMs = millis();
 
   loadCachedBookmarks();
 
@@ -217,6 +219,11 @@ void EpubReaderActivity::onExit() {
   if (footnoteDepth > 0 && epub) {
     const SavedPosition& origin = savedPositions[0];
     saveProgress(origin.spineIndex, origin.pageNumber, 0);
+  }
+
+  if (epub && readingSessionStartMs != 0UL) {
+    READING_STATS.addSession(epub->getPath(), epub->getTitle(), (millis() - readingSessionStartMs) / 1000UL);
+    readingSessionStartMs = 0UL;
   }
 
   section.reset();
