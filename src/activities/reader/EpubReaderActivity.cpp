@@ -861,9 +861,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       LOG_DBG("ERS", "Cache not found, building...");
 
       GUI.drawPopup(renderer, tr(STR_INDEXING));
-
       const auto popupFn = [this]() { GUI.drawPopup(renderer, tr(STR_INDEXING)); };
       const auto preloadProgressFn = [this](const uint8_t progress) { updatePreloadProgress(progress, true); };
+
       const bool canPreviewBeforeFullBuild = pendingAnchor.empty() && !pendingPercentJump;
       const int previewPageNumber = pendingPageJump.has_value() ? static_cast<int>(*pendingPageJump) : nextPageNumber;
       if (canPreviewBeforeFullBuild && previewPageNumber >= 0) {
@@ -886,6 +886,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                          orientedMarginLeft);
           LOG_DBG("ERS", "Rendered preview page in %dms", millis() - start);
 
+          beginPreloadProgress();
           if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
                                           SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                           viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
@@ -922,6 +923,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         }
       }
 
+      beginPreloadProgress();
       if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
                                       SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                       viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
@@ -1072,8 +1074,7 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
 
   LOG_DBG("ERS", "Silently indexing next chapter: %d", nextSpineIndex);
   const auto preloadProgressFn = [this](const uint8_t progress) { updatePreloadProgress(progress, true); };
-  updatePreloadProgress(0);
-  lastDisplayedPreloadProgressPercent = 255;
+  beginPreloadProgress();
   if (!nextSection.createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
                                      SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
                                      viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
@@ -1088,23 +1089,59 @@ bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageC
   return EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount);
 }
 
+void EpubReaderActivity::beginPreloadProgress() {
+  preloadProgressPercent = 0;
+  lastDisplayedPreloadProgressPercent = 0;
+
+  if (SETTINGS.statusBarProgressBar == CrossPointSettings::STATUS_BAR_PROGRESS_BAR::PRELOAD_PROGRESS) {
+    renderStatusBar();
+    renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  }
+}
+
 void EpubReaderActivity::updatePreloadProgress(const uint8_t progress, const bool refreshStatusBar) {
-  preloadProgressPercent = std::min<uint8_t>(progress, 100);
+  const uint8_t clampedProgress = std::min<uint8_t>(progress, 100);
+  const uint8_t targetProgress =
+      clampedProgress >= 100 ? 100 : static_cast<uint8_t>((clampedProgress / 5) * 5);
   if (!refreshStatusBar ||
       SETTINGS.statusBarProgressBar != CrossPointSettings::STATUS_BAR_PROGRESS_BAR::PRELOAD_PROGRESS) {
+    preloadProgressPercent = targetProgress;
     return;
   }
 
-  const bool shouldRefresh = lastDisplayedPreloadProgressPercent == 255 ||
-                             preloadProgressPercent >= 100 ||
-                             preloadProgressPercent >= lastDisplayedPreloadProgressPercent + 5;
-  if (!shouldRefresh) {
+  if (lastDisplayedPreloadProgressPercent == 255) {
+    lastDisplayedPreloadProgressPercent = 0;
+  }
+  if (targetProgress <= lastDisplayedPreloadProgressPercent) {
     return;
   }
 
-  lastDisplayedPreloadProgressPercent = preloadProgressPercent;
-  renderStatusBar();
-  renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+  int orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft;
+  renderer.getOrientedViewableTRBL(&orientedMarginTop, &orientedMarginRight, &orientedMarginBottom,
+                                   &orientedMarginLeft);
+  const int progressBarY = renderer.getScreenHeight() - orientedMarginBottom -
+                           ((SETTINGS.statusBarProgressBarThickness + 1) * 2) + 1;
+  const int progressBarHeight =
+      ((SETTINGS.statusBarProgressBarThickness + 1) * 2) + orientedMarginBottom - 1;
+
+  // Do not skip crossed thresholds when the parser reports a large jump. A
+  // single callback from 4% to 17%, for example, must visibly commit 5%, 10%
+  // and 15% in order.
+  for (uint8_t step = static_cast<uint8_t>(lastDisplayedPreloadProgressPercent + 5);
+       step <= targetProgress; step = static_cast<uint8_t>(step + 5)) {
+    preloadProgressPercent = step;
+    lastDisplayedPreloadProgressPercent = step;
+    renderStatusBar();
+
+    // displayWindow() uses physical panel coordinates. Reader portrait
+    // coordinates are rotated, so use a fast full-buffer update in that mode.
+    if (renderer.getScreenWidth() == HalDisplay::DISPLAY_WIDTH &&
+        renderer.getScreenHeight() == HalDisplay::DISPLAY_HEIGHT) {
+      renderer.displayWindow(0, progressBarY, renderer.getScreenWidth(), progressBarHeight);
+    } else {
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    }
+  }
 }
 
 void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int orientedMarginTop,

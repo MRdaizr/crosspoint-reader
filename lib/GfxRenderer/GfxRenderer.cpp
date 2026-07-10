@@ -1390,6 +1390,16 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
   display.displayBuffer(refreshMode, fadingFix);
 }
 
+void GfxRenderer::displayWindow(const int x, const int y, const int width, const int height) const {
+  if (x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > getScreenWidth() ||
+      y + height > getScreenHeight() || (x % 8) != 0 || (width % 8) != 0) {
+    LOG_ERR("GFX", "Invalid display window: x=%d y=%d w=%d h=%d", x, y, width, height);
+    return;
+  }
+  display.displayWindow(static_cast<uint16_t>(x), static_cast<uint16_t>(y), static_cast<uint16_t>(width),
+                        static_cast<uint16_t>(height), fadingFix);
+}
+
 std::string GfxRenderer::truncatedText(const int fontId, const char* text, const int maxWidth,
                                        const EpdFontFamily::Style style) const {
   if (!text || maxWidth <= 0) return "";

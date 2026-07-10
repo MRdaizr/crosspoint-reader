@@ -828,7 +828,12 @@ void BaseTheme::drawStatusBar(GfxRenderer& renderer, const float bookProgress, c
     const int barWidth = progressBarMaxWidth * progress / 100;
     const int barHeight =
         ((SETTINGS.statusBarProgressBarThickness + 1) * 2) + (fillMargin ? orientedMarginBottom - 1 : 0);
-    renderer.fillRect(barMarginLeft, progressBarY, barWidth, barHeight, true);
+    // Clear the previous bar before drawing the new width. Without this, a
+    // completed 100% bar remains visible when the next preload starts.
+    renderer.fillRect(barMarginLeft, progressBarY, progressBarMaxWidth, barHeight, false);
+    if (barWidth > 0) {
+      renderer.fillRect(barMarginLeft, progressBarY, barWidth, barHeight, true);
+    }
   }
 
   // Draw Battery
