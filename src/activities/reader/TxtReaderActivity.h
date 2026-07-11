@@ -23,6 +23,20 @@ class TxtReaderActivity final : public Activity {
   bool initialized = false;
   bool pendingScreenshot = false;
   bool pageIndexComplete = false;
+  bool pendingForwardPageTurn = false;
+  bool indexBuildOnlyRequested = false;
+  bool indexProgressRefreshPending = false;
+  bool nextPagePrepareRequested = false;
+  int preparedPage = -1;
+  size_t preparedPageNextOffset = 0;
+  std::vector<std::string> preparedPageLines;
+  int pendingResumePageTarget = -1;
+  int pendingPercentTarget = -1;
+  uint8_t indexProgressPercent = 100;
+  uint8_t lastDisplayedIndexProgressPercent = 255;
+  size_t lastCheckpointPageCount = 0;
+  unsigned long lastIndexBuildTick = 0UL;
+  unsigned long lastIndexProgressRefreshMs = 0UL;
   unsigned long readingSessionStartMs = 0UL;
 
   // Cached settings for cache validation (different fonts/margins require re-indexing)
@@ -34,7 +48,7 @@ class TxtReaderActivity final : public Activity {
   int cachedOrientedMarginBottom = 0;
   int cachedOrientedMarginLeft = 0;
 
-  void renderPage();
+  void renderPage(bool fontPrewarmed = false);
   void renderStatusBar() const;
   void applyOrientation(uint8_t orientation);
   void jumpToPercent(int percent);
@@ -47,8 +61,14 @@ class TxtReaderActivity final : public Activity {
   bool indexNextPage();
   void updateTotalPages();
   bool loadPageIndexCache();
+  bool loadPartialPageIndexCache();
   void savePageIndexCache() const;
-  void saveProgress() const;
+  bool savePartialPageIndexCache();
+  void removePartialPageIndexCache() const;
+  void buildPageIndexSlice();
+  void prepareNextPage();
+  void updateIndexProgress(bool requestRefresh);
+  void saveProgress();
   void loadProgress();
 
  public:

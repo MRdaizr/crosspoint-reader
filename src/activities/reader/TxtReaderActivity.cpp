@@ -8,6 +8,10 @@
 #include <Serialization.h>
 #include <Utf8.h>
 
+#include <algorithm>
+#include <cstring>
+#include <iterator>
+
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "EpubReaderPercentSelectionActivity.h"
@@ -22,10 +26,57 @@
 #include "util/ScreenshotUtil.h"
 
 namespace {
-constexpr size_t CHUNK_SIZE = 8 * 1024;  // 8KB chunk for reading
+constexpr size_t CHUNK_SIZE = 4 * 1024;  // Enough for one page without priming unrelated glyphs
 // Cache file magic and version
 constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
-constexpr uint8_t CACHE_VERSION = 3;          // Increment when cache format changes
+constexpr uint8_t CACHE_VERSION = 5;          // Increment when page offset calculation changes
+constexpr uint32_t PARTIAL_CACHE_MAGIC = 0x54584249;  // "TXBI"
+constexpr uint32_t PROGRESS_MAGIC = 0x54585052;       // "TXPR"
+constexpr unsigned long INDEX_BUILD_TICK_MS = 80UL;
+constexpr unsigned long INDEX_PROGRESS_REFRESH_MS = 2000UL;
+constexpr uint8_t INDEX_PROGRESS_STEP = 5;
+constexpr size_t INDEX_CHECKPOINT_PAGE_STEP = 8;
+
+size_t fittingPrefix(const GfxRenderer& renderer, const int fontId, const std::string& text, const int maxWidth) {
+  size_t position = 0;
+  size_t lastSpace = 0;
+
+  const auto nextCodepoint = [&text](const size_t begin) {
+    const auto* cursor = reinterpret_cast<const unsigned char*>(text.data() + begin);
+    utf8NextCodepoint(&cursor);
+    const size_t end = static_cast<size_t>(cursor - reinterpret_cast<const unsigned char*>(text.data()));
+    return end > begin && end <= text.size() ? end : begin + 1;
+  };
+  const auto rememberSpaces = [&text, &lastSpace](const size_t begin, const size_t end) {
+    const size_t space = text.rfind(' ', end - 1);
+    if (space != std::string::npos && space >= begin) lastSpace = space;
+  };
+
+  while (position < text.size()) {
+    size_t probeEnd = position;
+    for (int count = 0; count < 16 && probeEnd < text.size(); ++count) {
+      probeEnd = nextCodepoint(probeEnd);
+    }
+    if (renderer.getTextAdvanceX(fontId, text.substr(0, probeEnd).c_str(), EpdFontFamily::REGULAR) <= maxWidth) {
+      rememberSpaces(position, probeEnd);
+      position = probeEnd;
+      continue;
+    }
+
+    // The 16-character probe crossed the boundary. Refine only this small
+    // range, retaining exact kerning and ligature measurements.
+    while (position < probeEnd) {
+      const size_t nextPosition = nextCodepoint(position);
+      if (renderer.getTextAdvanceX(fontId, text.substr(0, nextPosition).c_str(), EpdFontFamily::REGULAR) > maxWidth) {
+        if (lastSpace > 0) return lastSpace;
+        return position > 0 ? position : nextPosition;
+      }
+      rememberSpaces(position, nextPosition);
+      position = nextPosition;
+    }
+  }
+  return text.size();
+}
 }  // namespace
 
 void TxtReaderActivity::onEnter() {
@@ -53,6 +104,11 @@ void TxtReaderActivity::onEnter() {
 
 void TxtReaderActivity::onExit() {
   Activity::onExit();
+
+  if (txt && initialized) {
+    if (!pageIndexComplete) savePartialPageIndexCache();
+    saveProgress();
+  }
 
   // Reset orientation back to portrait for the rest of the UI
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -99,15 +155,35 @@ void TxtReaderActivity::loop() {
 
   const auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   if (!prevTriggered && !nextTriggered) {
+    const int nextPage = currentPage + 1;
+    const bool canPrepareNext = initialized && preparedPage != nextPage &&
+                                (nextPage < static_cast<int>(pageOffsets.size()) || !pageIndexComplete);
+    if (canPrepareNext && !nextPagePrepareRequested && !RenderLock::peek() && !mappedInput.wasAnyPressed() &&
+        !mappedInput.wasAnyReleased()) {
+      nextPagePrepareRequested = true;
+      requestUpdate();
+    } else if (initialized && !pageIndexComplete && !RenderLock::peek() && !mappedInput.wasAnyPressed() &&
+               !mappedInput.wasAnyReleased() && millis() - lastIndexBuildTick >= INDEX_BUILD_TICK_MS) {
+      lastIndexBuildTick = millis() - INDEX_BUILD_TICK_MS;
+      indexBuildOnlyRequested = true;
+      requestUpdate();
+    }
     return;
   }
+
+  // A user page turn always needs a full page render, never a background-only slice.
+  indexBuildOnlyRequested = false;
+  nextPagePrepareRequested = false;
 
   if (prevTriggered && currentPage > 0) {
     currentPage--;
     requestUpdate();
   } else if (nextTriggered) {
     if (currentPage + 1 >= static_cast<int>(pageOffsets.size()) && !pageIndexComplete) {
-      indexNextPage();
+      pendingForwardPageTurn = true;
+      lastIndexBuildTick = millis() - INDEX_BUILD_TICK_MS;
+      requestUpdate();
+      return;
     }
     updateTotalPages();
     if (currentPage < static_cast<int>(pageOffsets.size()) - 1) {
@@ -128,26 +204,27 @@ void TxtReaderActivity::applyOrientation(const uint8_t orientation) {
   SETTINGS.saveToFile();
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
   initialized = false;
+  pageIndexComplete = false;
+  pendingResumePageTarget = -1;
+  pendingPercentTarget = -1;
+  preparedPage = -1;
+  preparedPageLines.clear();
+  removePartialPageIndexCache();
   pageOffsets.clear();
   currentPageLines.clear();
   requestUpdate();
 }
 
 void TxtReaderActivity::jumpToPercent(int percent) {
+  percent = std::clamp(percent, 0, 100);
   if (!pageIndexComplete) {
+    pendingPercentTarget = percent;
     GUI.drawPopup(renderer, tr(STR_INDEXING));
-    buildPageIndex();
-    savePageIndexCache();
+    return;
   }
 
   if (totalPages <= 0) {
     return;
-  }
-
-  if (percent < 0) {
-    percent = 0;
-  } else if (percent > 100) {
-    percent = 100;
   }
 
   int targetPage = percent >= 100 ? totalPages - 1 : (totalPages * percent) / 100;
@@ -212,17 +289,19 @@ void TxtReaderActivity::initializeReader() {
   LOG_DBG("TRS", "Viewport: %dx%d, lines per page: %d", viewportWidth, viewportHeight, linesPerPage);
 
   // Try to load cached page index first
-  if (!loadPageIndexCache()) {
-    pageOffsets.clear();
-    pageOffsets.push_back(0);
+  if (!loadPageIndexCache() && !loadPartialPageIndexCache()) {
+    pageOffsets = {0};
     pageIndexComplete = (txt->getFileSize() == 0);
-    updateTotalPages();
   }
 
   // Load saved progress
   loadProgress();
-  ensurePageIndexed(currentPage);
+  if (!pageIndexComplete && currentPage >= static_cast<int>(pageOffsets.size())) {
+    pendingResumePageTarget = currentPage;
+    currentPage = std::max(0, static_cast<int>(pageOffsets.size()) - 1);
+  }
   updateTotalPages();
+  updateIndexProgress(false);
 
   initialized = true;
 }
@@ -289,16 +368,88 @@ bool TxtReaderActivity::indexNextPage() {
   size_t nextOffset = pageOffsets.back();
   if (!loadPageAtOffset(pageOffsets.back(), tempLines, nextOffset) || nextOffset <= pageOffsets.back()) {
     pageIndexComplete = true;
+    savePageIndexCache();
+    removePartialPageIndexCache();
     return false;
   }
 
   if (nextOffset >= txt->getFileSize()) {
     pageIndexComplete = true;
+    savePageIndexCache();
+    removePartialPageIndexCache();
   } else {
     pageOffsets.push_back(nextOffset);
   }
   updateTotalPages();
+  if (pageIndexComplete && pendingPercentTarget >= 0) {
+    const int target = pendingPercentTarget;
+    pendingPercentTarget = -1;
+    jumpToPercent(target);
+  }
   return true;
+}
+
+void TxtReaderActivity::buildPageIndexSlice() {
+  if (pageIndexComplete) return;
+  indexNextPage();
+  updateIndexProgress(true);
+
+  if (!pageIndexComplete && pageOffsets.size() >= lastCheckpointPageCount + INDEX_CHECKPOINT_PAGE_STEP) {
+    savePartialPageIndexCache();
+  }
+  if (pendingResumePageTarget >= 0 && static_cast<int>(pageOffsets.size()) > pendingResumePageTarget) {
+    currentPage = pendingResumePageTarget;
+    pendingResumePageTarget = -1;
+    requestUpdate();
+  }
+}
+
+void TxtReaderActivity::prepareNextPage() {
+  const int targetPage = currentPage + 1;
+  if (targetPage < 0) return;
+  if (targetPage >= static_cast<int>(pageOffsets.size()) && !pageIndexComplete) {
+    indexNextPage();
+    updateIndexProgress(true);
+  }
+  if (targetPage >= static_cast<int>(pageOffsets.size())) return;
+
+  std::vector<std::string> lines;
+  size_t nextOffset = pageOffsets[targetPage];
+  if (!loadPageAtOffset(pageOffsets[targetPage], lines, nextOffset)) return;
+
+  std::string pageText;
+  for (const auto& line : lines) {
+    pageText += line;
+    pageText.push_back('\n');
+  }
+  if (auto* cache = renderer.getFontCacheManager()) {
+    cache->clearCache();
+    cache->resetStats();
+    cache->prewarmCache(cachedFontId, pageText.c_str(), 0x01);
+  }
+  preparedPageLines = std::move(lines);
+  preparedPageNextOffset = nextOffset;
+  preparedPage = targetPage;
+}
+
+void TxtReaderActivity::updateIndexProgress(const bool requestRefresh) {
+  const size_t fileSize = txt ? txt->getFileSize() : 0;
+  const size_t indexedOffset = pageIndexComplete ? fileSize : (pageOffsets.empty() ? 0 : pageOffsets.back());
+  const uint8_t rawProgress = fileSize == 0 ? 100 : static_cast<uint8_t>(std::min<size_t>(100, indexedOffset * 100 / fileSize));
+  const uint8_t progress = rawProgress >= 100 ? 100 : static_cast<uint8_t>((rawProgress / INDEX_PROGRESS_STEP) * INDEX_PROGRESS_STEP);
+  indexProgressPercent = progress;
+
+  if (!requestRefresh ||
+      SETTINGS.statusBarProgressBar != CrossPointSettings::STATUS_BAR_PROGRESS_BAR::PRELOAD_PROGRESS) {
+    return;
+  }
+  const bool advanced = lastDisplayedIndexProgressPercent == 255 || progress > lastDisplayedIndexProgressPercent;
+  const bool due = millis() - lastIndexProgressRefreshMs >= INDEX_PROGRESS_REFRESH_MS;
+  if (advanced && (progress == 100 || due)) {
+    lastDisplayedIndexProgressPercent = progress;
+    lastIndexProgressRefreshMs = millis();
+    indexProgressRefreshPending = true;
+  }
 }
 
 void TxtReaderActivity::updateTotalPages() {
@@ -383,35 +534,14 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
         break;
       }
 
-      int lineWidth = renderer.getTextAdvanceX(cachedFontId, line.c_str(), EpdFontFamily::REGULAR);
-
-      if (lineWidth <= viewportWidth) {
+      // This scans only until the first visual-line boundary. Avoid measuring
+      // the whole remaining paragraph before every wrapped line.
+      const size_t breakPos = fittingPrefix(renderer, cachedFontId, line, viewportWidth);
+      if (breakPos >= line.size()) {
         outLines.push_back(line);
         lineBytePos = displayLen;  // Consumed entire display content
         line.clear();
         break;
-      }
-
-      // Find break point
-      size_t breakPos = line.length();
-      while (breakPos > 0 && renderer.getTextAdvanceX(cachedFontId, line.substr(0, breakPos).c_str(),
-                                                      EpdFontFamily::REGULAR) > viewportWidth) {
-        // Try to break at space
-        size_t spacePos = line.rfind(' ', breakPos - 1);
-        if (spacePos != std::string::npos && spacePos > 0) {
-          breakPos = spacePos;
-        } else {
-          // Break at character boundary for UTF-8
-          breakPos--;
-          // Make sure we don't break in the middle of a UTF-8 sequence
-          while (breakPos > 0 && (line[breakPos] & 0xC0) == 0x80) {
-            breakPos--;
-          }
-        }
-      }
-
-      if (breakPos == 0) {
-        breakPos = 1;
       }
 
       outLines.push_back(line.substr(0, breakPos));
@@ -428,7 +558,7 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
     // Determine how much of the source buffer we consumed
     if (line.empty()) {
       // Fully consumed this source line, move past the newline
-      pos = lineEnd + 1;
+      pos = lineEnd + ((lineEnd < chunkSize && buffer[lineEnd] == '\n') ? 1 : 0);
     } else {
       // Partially consumed - page is full mid-line
       // Move pos to where we stopped in the line (NOT past the line)
@@ -465,6 +595,33 @@ void TxtReaderActivity::render(RenderLock&&) {
     initializeReader();
   }
 
+  if (nextPagePrepareRequested) {
+    nextPagePrepareRequested = false;
+    prepareNextPage();
+    return;
+  }
+
+  const bool buildOnly = indexBuildOnlyRequested;
+  indexBuildOnlyRequested = false;
+
+  // Page offsets are shared with input handling. Build one slice only while
+  // rendering owns the lock, so page turns never race a vector reallocation.
+  if (!pageIndexComplete && (buildOnly || pendingForwardPageTurn) &&
+      millis() - lastIndexBuildTick >= INDEX_BUILD_TICK_MS) {
+    lastIndexBuildTick = millis();
+    buildPageIndexSlice();
+  }
+
+  // Normal background slices should not redraw the whole e-paper page. A
+  // redraw is reserved for the 5% progress checkpoints or a user action.
+  if (buildOnly && !indexProgressRefreshPending) return;
+  indexProgressRefreshPending = false;
+
+  if (pendingForwardPageTurn && currentPage < static_cast<int>(pageOffsets.size()) - 1) {
+    ++currentPage;
+    pendingForwardPageTurn = false;
+  }
+
   ensurePageIndexed(currentPage);
 
   if (pageOffsets.empty()) {
@@ -480,23 +637,34 @@ void TxtReaderActivity::render(RenderLock&&) {
 
   // Load current page content
   size_t offset = pageOffsets[currentPage];
-  size_t nextOffset;
-  currentPageLines.clear();
-  loadPageAtOffset(offset, currentPageLines, nextOffset);
+  size_t nextOffset = offset;
+  const bool usePreparedPage = preparedPage == currentPage;
+  if (usePreparedPage) {
+    currentPageLines = std::move(preparedPageLines);
+    nextOffset = preparedPageNextOffset;
+  } else {
+    currentPageLines.clear();
+    loadPageAtOffset(offset, currentPageLines, nextOffset);
+  }
   if (!pageIndexComplete && currentPage + 1 == static_cast<int>(pageOffsets.size())) {
     if (nextOffset > offset && nextOffset < txt->getFileSize()) {
       pageOffsets.push_back(nextOffset);
+      updateIndexProgress(false);
     } else if (nextOffset >= txt->getFileSize()) {
       pageIndexComplete = true;
       savePageIndexCache();
+      removePartialPageIndexCache();
+      updateIndexProgress(false);
     }
     updateTotalPages();
   }
 
   renderer.clearScreen();
-  renderPage();
+  renderPage(usePreparedPage);
+  preparedPage = -1;
+  preparedPageLines.clear();
 
-  // Save progress
+  if (!pageIndexComplete) savePartialPageIndexCache();
   saveProgress();
 
   if (pendingScreenshot) {
@@ -505,7 +673,7 @@ void TxtReaderActivity::render(RenderLock&&) {
   }
 }
 
-void TxtReaderActivity::renderPage() {
+void TxtReaderActivity::renderPage(const bool fontPrewarmed) {
   const int lineHeight = renderer.getLineHeight(cachedFontId);
   const int contentWidth = viewportWidth;
 
@@ -549,22 +717,27 @@ void TxtReaderActivity::renderPage() {
     }
   };
 
-  // Font prewarm: scan pass accumulates text, then prewarm, then real render
+  const auto drawAndDisplay = [&]() {
+    renderLines();
+    renderStatusBar();
+    ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+    if (SETTINGS.textAntiAliasing) {
+      ReaderUtils::renderAntiAliased(renderer, [&renderLines]() { renderLines(); });
+    }
+  };
+
+  if (fontPrewarmed) {
+    drawAndDisplay();
+    return;
+  }
+
+  // Font prewarm: scan pass accumulates text, then prewarm, then real render.
   auto* fcm = renderer.getFontCacheManager();
   auto scope = fcm->createPrewarmScope();
-  renderLines();  // scan pass — text accumulated, no drawing
-  scope.endScanAndPrewarm();
-
-  // BW rendering
   renderLines();
-  renderStatusBar();
-
-  ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
-
-  if (SETTINGS.textAntiAliasing) {
-    ReaderUtils::renderAntiAliased(renderer, [&renderLines]() { renderLines(); });
-  }
-  // scope destructor clears font cache via FontCacheManager
+  scope.endScanAndPrewarm();
+  drawAndDisplay();
+  // scope destructor clears font cache via FontCacheManager.
 }
 
 void TxtReaderActivity::renderStatusBar() const {
@@ -573,15 +746,19 @@ void TxtReaderActivity::renderStatusBar() const {
   if (SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE) {
     title = txt->getTitle();
   }
-  GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title);
+  const int indexProgress = pageIndexComplete ? 100 : indexProgressPercent;
+  GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title, 0, 0, true, false, indexProgress);
 }
 
-void TxtReaderActivity::saveProgress() const {
-  uint8_t data[4];
-  data[0] = currentPage & 0xFF;
-  data[1] = (currentPage >> 8) & 0xFF;
-  data[2] = 0;
-  data[3] = 0;
+void TxtReaderActivity::saveProgress() {
+  uint8_t data[12] = {};
+  const uint32_t page = static_cast<uint32_t>(std::max(0, currentPage));
+  const uint32_t offset = currentPage >= 0 && currentPage < static_cast<int>(pageOffsets.size())
+                              ? static_cast<uint32_t>(pageOffsets[currentPage])
+                              : 0;
+  memcpy(data, &PROGRESS_MAGIC, sizeof(PROGRESS_MAGIC));
+  memcpy(data + 4, &page, sizeof(page));
+  memcpy(data + 8, &offset, sizeof(offset));
   if (!ProgressFile::writeAtomic(txt->getCachePath(), data, sizeof(data))) {
     LOG_ERR("TRS", "Failed to save progress: page %d", currentPage);
   }
@@ -590,17 +767,30 @@ void TxtReaderActivity::saveProgress() const {
 void TxtReaderActivity::loadProgress() {
   HalFile f;
   if (Storage.openFileForRead("TRS", txt->getCachePath() + "/progress.bin", f)) {
-    uint8_t data[4];
-    if (f.read(data, 4) == 4) {
+    uint8_t data[12] = {};
+    const size_t bytesRead = f.read(data, sizeof(data));
+    uint32_t magic = 0;
+    memcpy(&magic, data, sizeof(magic));
+    if (bytesRead == sizeof(data) && magic == PROGRESS_MAGIC) {
+      uint32_t savedPage = 0;
+      uint32_t savedOffset = 0;
+      memcpy(&savedPage, data + 4, sizeof(savedPage));
+      memcpy(&savedOffset, data + 8, sizeof(savedOffset));
+      currentPage = static_cast<int>(savedPage);
+      const auto offsetIt = std::lower_bound(pageOffsets.begin(), pageOffsets.end(), savedOffset);
+      if (offsetIt != pageOffsets.end() && *offsetIt == savedOffset) {
+        currentPage = static_cast<int>(std::distance(pageOffsets.begin(), offsetIt));
+      }
+    } else if (bytesRead >= 4) {
       currentPage = data[0] + (data[1] << 8);
-      if (pageIndexComplete && currentPage >= totalPages) {
-        currentPage = totalPages - 1;
-      }
-      if (currentPage < 0) {
-        currentPage = 0;
-      }
-      LOG_DBG("TRS", "Loaded progress: page %d/%d", currentPage, totalPages);
+    } else {
+      return;
     }
+    if (pageIndexComplete && currentPage >= totalPages) {
+      currentPage = totalPages - 1;
+    }
+    if (currentPage < 0) currentPage = 0;
+    LOG_DBG("TRS", "Loaded progress: page %d/%d", currentPage, totalPages);
   }
 }
 
@@ -698,6 +888,79 @@ bool TxtReaderActivity::loadPageIndexCache() {
   pageIndexComplete = true;
   LOG_DBG("TRS", "Loaded page index cache: %d pages", totalPages);
   return true;
+}
+
+bool TxtReaderActivity::loadPartialPageIndexCache() {
+  HalFile f;
+  const std::string path = txt->getCachePath() + "/index.building";
+  if (!Storage.openFileForRead("TRS", path, f)) return false;
+
+  uint32_t magic = 0;
+  uint8_t version = 0;
+  uint32_t fileSize = 0;
+  int32_t width = 0, lines = 0, fontId = 0, margin = 0;
+  uint8_t alignment = 0;
+  uint32_t numPages = 0;
+  serialization::readPod(f, magic);
+  serialization::readPod(f, version);
+  serialization::readPod(f, fileSize);
+  serialization::readPod(f, width);
+  serialization::readPod(f, lines);
+  serialization::readPod(f, fontId);
+  serialization::readPod(f, margin);
+  serialization::readPod(f, alignment);
+  serialization::readPod(f, numPages);
+  const uint64_t expectedSize = 4 + 1 + 4 + 4 + 4 + 4 + 4 + 1 + 4 + static_cast<uint64_t>(numPages) * 4;
+  if (magic != PARTIAL_CACHE_MAGIC || version != CACHE_VERSION || fileSize != txt->getFileSize() ||
+      width != viewportWidth || lines != linesPerPage || fontId != cachedFontId || margin != cachedScreenMargin ||
+      alignment != cachedParagraphAlignment || numPages == 0 || f.fileSize64() != expectedSize) {
+    return false;
+  }
+
+  pageOffsets.clear();
+  pageOffsets.reserve(numPages);
+  for (uint32_t i = 0; i < numPages; ++i) {
+    uint32_t offset = 0;
+    serialization::readPod(f, offset);
+    if (offset >= txt->getFileSize() || (!pageOffsets.empty() && offset <= pageOffsets.back())) {
+      pageOffsets.clear();
+      return false;
+    }
+    pageOffsets.push_back(offset);
+  }
+  pageIndexComplete = false;
+  lastCheckpointPageCount = pageOffsets.size();
+  LOG_DBG("TRS", "Resumed partial page index: %u pages", static_cast<unsigned>(pageOffsets.size()));
+  return true;
+}
+
+bool TxtReaderActivity::savePartialPageIndexCache() {
+  if (pageIndexComplete || pageOffsets.empty()) return true;
+  const std::string finalPath = txt->getCachePath() + "/index.building";
+  const std::string tmpPath = finalPath + ".tmp";
+  {
+    HalFile f;
+    if (!Storage.openFileForWrite("TRS", tmpPath, f)) return false;
+    serialization::writePod(f, PARTIAL_CACHE_MAGIC);
+    serialization::writePod(f, CACHE_VERSION);
+    serialization::writePod(f, static_cast<uint32_t>(txt->getFileSize()));
+    serialization::writePod(f, static_cast<int32_t>(viewportWidth));
+    serialization::writePod(f, static_cast<int32_t>(linesPerPage));
+    serialization::writePod(f, static_cast<int32_t>(cachedFontId));
+    serialization::writePod(f, static_cast<int32_t>(cachedScreenMargin));
+    serialization::writePod(f, cachedParagraphAlignment);
+    serialization::writePod(f, static_cast<uint32_t>(pageOffsets.size()));
+    for (const size_t offset : pageOffsets) serialization::writePod(f, static_cast<uint32_t>(offset));
+    f.flush();
+  }
+  Storage.remove(finalPath.c_str());
+  if (!Storage.rename(tmpPath.c_str(), finalPath.c_str())) return false;
+  lastCheckpointPageCount = pageOffsets.size();
+  return true;
+}
+
+void TxtReaderActivity::removePartialPageIndexCache() const {
+  if (txt) Storage.remove((txt->getCachePath() + "/index.building").c_str());
 }
 
 void TxtReaderActivity::savePageIndexCache() const {
