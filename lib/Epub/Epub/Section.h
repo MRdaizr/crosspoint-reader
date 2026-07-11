@@ -26,12 +26,14 @@ class Section {
   };
   std::string buildFilePath;
   std::string buildHtmlPath;
+  std::string buildIndexPath;
   HalFile buildFile;
   std::vector<BuildPageEntry> buildLut;
   std::unique_ptr<ChapterHtmlSlimParser> buildParser;
   CssParser* buildCssParser = nullptr;
   bool buildActive = false;
   bool lowMemoryPauseLogged = false;
+  uint16_t resumePageCount = 0;
 
   void writeSectionFileHeader(HalFile& target, int fontId, float lineCompression, bool extraParagraphSpacing,
                               uint8_t paragraphAlignment,
@@ -41,6 +43,11 @@ class Section {
   uint32_t onIncrementalPageComplete(std::unique_ptr<Page> page, uint16_t paragraphIndex, uint16_t listItemIndex);
   bool finishIncrementalBuild();
   void discardIncrementalBuild();
+  void preserveIncrementalBuild();
+  bool resumeIncrementalBuild(int fontId, float lineCompression, bool extraParagraphSpacing,
+                              uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,
+                              bool hyphenationEnabled, bool embeddedStyle, uint8_t imageRendering,
+                              bool focusReadingEnabled, const std::function<void(uint8_t)>& progressFn);
 
  public:
   uint16_t pageCount = 0;
@@ -64,6 +71,10 @@ class Section {
   enum class BuildResult { InProgress, Complete, PausedLowMemory, Failed };
   BuildResult buildNextChunk(uint8_t maxChunks = 1);
   bool isBuilding() const { return buildActive; }
+  bool hasIncrementalBuildCheckpoint() const {
+    return Storage.exists(buildFilePath.c_str()) && Storage.exists(buildHtmlPath.c_str()) &&
+           Storage.exists(buildIndexPath.c_str());
+  }
   bool hasBuiltPage(int page) const { return page >= 0 && page < pageCount; }
   std::unique_ptr<Page> buildPagePreview(int fontId, float lineCompression, bool extraParagraphSpacing,
                                          uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,

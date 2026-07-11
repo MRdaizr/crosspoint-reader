@@ -1,5 +1,6 @@
 #include "ZipFile.h"
 
+#include <Arduino.h>
 #include <HalStorage.h>
 #include <InflateReader.h>
 #include <Logging.h>
@@ -475,6 +476,7 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
         return false;
       }
       remaining -= dataRead;
+      yield();
     }
 
     free(buffer);
@@ -528,6 +530,7 @@ bool ZipFile::readFileToStream(const char* filename, Print& out, const size_t ch
           LOG_ERR("ZIP", "Failed to write all output bytes to stream");
           break;
         }
+        yield();
       }
 
       if (status == InflateStatus::Done) {

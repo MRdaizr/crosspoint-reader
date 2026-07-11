@@ -4,6 +4,7 @@
 #include <Epub/Section.h>
 
 #include <optional>
+#include <atomic>
 
 #include "BookmarkEntry.h"
 #include "EpubReaderMenuActivity.h"
@@ -13,9 +14,14 @@
 class EpubReaderActivity final : public Activity {
   std::shared_ptr<Epub> epub;
   std::unique_ptr<Section> section = nullptr;
+  std::unique_ptr<Section> nextChapterPreload = nullptr;
+  int nextChapterPreloadSpineIndex = -1;
   int currentSpineIndex = 0;
   int nextPageNumber = 0;
   std::optional<uint16_t> pendingPageJump;
+  // A saved page can be ahead of the partial on-disk cache after an interrupted
+  // build. Keep the last available page visible until the builder reaches it.
+  std::optional<uint16_t> pendingResumePageTarget;
   // Set when navigating to a footnote href with a fragment (e.g. #note1).
   // Cleared on the next render after the new section loads and resolves it to a page.
   std::string pendingAnchor;
@@ -34,6 +40,10 @@ class EpubReaderActivity final : public Activity {
   bool pendingSyncSaveError = false;
   bool pageRenderRequested = true;
   bool pendingForwardPageTurn = false;
+  // Input runs on the main task while cache construction runs on the render
+  // task. Keep a few requests when the render lock is busy instead of making
+  // the input task wait for a parser slice to finish.
+  std::atomic<int8_t> queuedPageTurns{0};
   unsigned long lastIncrementalBuildTick = 0UL;
   bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
   bool automaticPageTurnActive = false;
@@ -68,6 +78,8 @@ class EpubReaderActivity final : public Activity {
   void beginPreloadProgress();
   void updatePreloadProgress(uint8_t progress, bool refreshStatusBar = false);
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
+  void advanceNextChapterPreload();
+  void clearNextChapterPreload();
   bool saveProgress(int spineIndex, int currentPage, int pageCount);
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   void jumpToPercent(int percent);
@@ -78,6 +90,7 @@ class EpubReaderActivity final : public Activity {
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void pageTurn(bool isForwardTurn);
+  void applyPageTurnLocked(bool isForwardTurn);
   void loadCachedBookmarks();
   void addBookmark();
   void updateBookmarkFlag();

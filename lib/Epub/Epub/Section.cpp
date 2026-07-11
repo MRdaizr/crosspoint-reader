@@ -3,10 +3,13 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Serialization.h>
+#include <FontCacheManager.h>
+#include <GfxRenderer.h>
 #include <esp_heap_caps.h>
 #include <esp_system.h>
 
 #include <algorithm>
+#include <cstring>
 
 #include "Epub/css/CssParser.h"
 #include "Page.h"
@@ -16,9 +19,11 @@
 namespace {
 // v27: words NFC-composed at layout time; bump invalidates NFD section caches.
 constexpr uint8_t SECTION_FILE_VERSION = 27;
-constexpr size_t MIN_INCREMENTAL_FREE_HEAP = 40 * 1024;
-constexpr size_t MIN_INCREMENTAL_MAX_ALLOC = 24 * 1024;
+constexpr size_t MIN_INCREMENTAL_FREE_HEAP = 48 * 1024;
+constexpr size_t MIN_INCREMENTAL_MAX_ALLOC = 32 * 1024;
 constexpr uint16_t INCREMENTAL_PARSE_BUFFER_SIZE = 256;
+constexpr uint32_t BUILD_CHECKPOINT_MAGIC = 0x43504231;  // CPB1
+constexpr uint16_t BUILD_CHECKPOINT_VERSION = 1;
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
@@ -29,6 +34,34 @@ struct PageLutEntry {
   uint16_t paragraphIndex;
   uint16_t listItemIndex;
 };
+
+struct BuildCheckpointHeader {
+  uint32_t magic;
+  uint16_t version;
+  uint32_t layoutHash;
+};
+
+uint32_t buildLayoutHash(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
+                         const uint8_t paragraphAlignment, const uint16_t viewportWidth, const uint16_t viewportHeight,
+                         const bool hyphenationEnabled, const bool embeddedStyle, const uint8_t imageRendering,
+                         const bool focusReadingEnabled) {
+  uint32_t hash = 2166136261UL;
+  const auto mix = [&hash](const uint32_t value) { hash = (hash ^ value) * 16777619UL; };
+  uint32_t compressionBits = 0;
+  static_assert(sizeof(compressionBits) == sizeof(lineCompression));
+  std::memcpy(&compressionBits, &lineCompression, sizeof(compressionBits));
+  mix(static_cast<uint32_t>(fontId));
+  mix(compressionBits);
+  mix(extraParagraphSpacing);
+  mix(paragraphAlignment);
+  mix(viewportWidth);
+  mix(viewportHeight);
+  mix(hyphenationEnabled);
+  mix(embeddedStyle);
+  mix(imageRendering);
+  mix(focusReadingEnabled);
+  return hash;
+}
 }  // namespace
 
 Section::Section(const std::shared_ptr<Epub>& epub, const int spineIndex, GfxRenderer& renderer)
@@ -37,7 +70,8 @@ Section::Section(const std::shared_ptr<Epub>& epub, const int spineIndex, GfxRen
       renderer(renderer),
       filePath(epub->getCachePath() + "/sections/" + std::to_string(spineIndex) + ".bin"),
       buildFilePath(filePath + ".building"),
-      buildHtmlPath(epub->getCachePath() + "/.tmp_build_" + std::to_string(spineIndex) + ".html") {}
+      buildHtmlPath(epub->getCachePath() + "/.tmp_build_" + std::to_string(spineIndex) + ".html"),
+      buildIndexPath(buildFilePath + ".idx") {}
 
 uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
   if (!file) {
@@ -56,7 +90,7 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
   return position;
 }
 
-Section::~Section() { discardIncrementalBuild(); }
+Section::~Section() { preserveIncrementalBuild(); }
 
 uint32_t Section::onIncrementalPageComplete(std::unique_ptr<Page> page, const uint16_t paragraphIndex,
                                              const uint16_t listItemIndex) {
@@ -72,11 +106,21 @@ uint32_t Section::onIncrementalPageComplete(std::unique_ptr<Page> page, const ui
   }
   buildFile.flush();
   buildLut.push_back({position, paragraphIndex, listItemIndex});
+  HalFile checkpoint;
+  checkpoint = Storage.open(buildIndexPath.c_str(), O_RDWR | O_AT_END);
+  if (!checkpoint) {
+    LOG_ERR("SCT", "Failed to append incremental build checkpoint");
+  } else {
+    const BuildPageEntry& entry = buildLut.back();
+    checkpoint.write(&entry, sizeof(entry));
+    checkpoint.flush();
+    checkpoint.close();
+  }
   pageCount++;
   return position;
 }
 
-void Section::discardIncrementalBuild() {
+void Section::preserveIncrementalBuild() {
   buildParser.reset();
   if (buildFile) {
     buildFile.close();
@@ -85,14 +129,22 @@ void Section::discardIncrementalBuild() {
     buildCssParser->clear();
     buildCssParser = nullptr;
   }
+  buildLut.clear();
+  buildActive = false;
+}
+
+void Section::discardIncrementalBuild() {
+  preserveIncrementalBuild();
   if (!buildHtmlPath.empty() && Storage.exists(buildHtmlPath.c_str())) {
     Storage.remove(buildHtmlPath.c_str());
   }
-  if (buildActive && Storage.exists(buildFilePath.c_str())) {
+  if (Storage.exists(buildFilePath.c_str())) {
     Storage.remove(buildFilePath.c_str());
   }
-  buildLut.clear();
-  buildActive = false;
+  if (Storage.exists(buildIndexPath.c_str())) {
+    Storage.remove(buildIndexPath.c_str());
+  }
+  resumePageCount = 0;
 }
 
 bool Section::finishIncrementalBuild() {
@@ -142,6 +194,7 @@ bool Section::finishIncrementalBuild() {
     buildCssParser = nullptr;
   }
   Storage.remove(buildHtmlPath.c_str());
+  Storage.remove(buildIndexPath.c_str());
   Storage.remove(filePath.c_str());
   if (!Storage.rename(buildFilePath.c_str(), filePath.c_str())) {
     LOG_ERR("SCT", "Failed to commit incremental section cache");
@@ -425,11 +478,118 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   return true;
 }
 
+bool Section::resumeIncrementalBuild(
+    const int fontId, const float lineCompression, const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
+    const uint16_t viewportWidth, const uint16_t viewportHeight, const bool hyphenationEnabled,
+    const bool embeddedStyle, const uint8_t imageRendering, const bool focusReadingEnabled,
+    const std::function<void(uint8_t)>& progressFn) {
+  if (!Storage.exists(buildFilePath.c_str()) || !Storage.exists(buildHtmlPath.c_str()) ||
+      !Storage.exists(buildIndexPath.c_str())) {
+    return false;
+  }
+
+  HalFile checkpoint;
+  if (!Storage.openFileForRead("SCT", buildIndexPath, checkpoint)) {
+    return false;
+  }
+  BuildCheckpointHeader header{};
+  const uint32_t layoutHash =
+      buildLayoutHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
+                      viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled);
+  if (checkpoint.read(&header, sizeof(header)) != sizeof(header) || header.magic != BUILD_CHECKPOINT_MAGIC ||
+      header.version != BUILD_CHECKPOINT_VERSION || header.layoutHash != layoutHash ||
+      (checkpoint.size() - sizeof(header)) % sizeof(BuildPageEntry) != 0) {
+    checkpoint.close();
+    return false;
+  }
+
+  HalFile partialBuild;
+  if (!Storage.openFileForRead("SCT", buildFilePath, partialBuild)) {
+    checkpoint.close();
+    return false;
+  }
+  const size_t partialBuildSize = partialBuild.fileSize();
+  partialBuild.close();
+
+  buildLut.clear();
+  BuildPageEntry entry{};
+  while (checkpoint.read(&entry, sizeof(entry)) == sizeof(entry)) {
+    // A page entry is written only after its serialized page is flushed.  Still
+    // validate it here: power loss can leave the checkpoint one record ahead
+    // of the data file on some SD cards.
+    if (entry.fileOffset < HEADER_SIZE || entry.fileOffset >= partialBuildSize) {
+      LOG_INF("SCT", "Discarding incomplete incremental checkpoint");
+      checkpoint.close();
+      buildLut.clear();
+      return false;
+    }
+    buildLut.push_back(entry);
+  }
+  checkpoint.close();
+  if (buildLut.empty()) {
+    return false;
+  }
+
+  buildFile = Storage.open(buildFilePath.c_str(), O_RDWR | O_AT_END);
+  if (!buildFile) {
+    return false;
+  }
+
+  const auto localPath = epub->getSpineItem(spineIndex).href;
+  const size_t lastSlash = localPath.find_last_of('/');
+  const std::string contentBase = lastSlash != std::string::npos ? localPath.substr(0, lastSlash + 1) : "";
+  const std::string imageBasePath = epub->getCachePath() + "/img_" + std::to_string(spineIndex) + "_";
+  if (embeddedStyle) {
+    buildCssParser = epub->getCssParser();
+    if (buildCssParser && !buildCssParser->loadFromCache()) {
+      LOG_ERR("SCT", "Failed to load CSS from cache for resumed build");
+    }
+  }
+
+  std::vector<std::string> tocAnchors;
+  const int startTocIndex = epub->getTocIndexForSpineIndex(spineIndex);
+  if (startTocIndex >= 0) {
+    for (int i = startTocIndex; i < epub->getTocItemsCount(); i++) {
+      auto tocEntry = epub->getTocItem(i);
+      if (tocEntry.spineIndex != spineIndex) break;
+      if (!tocEntry.anchor.empty()) tocAnchors.push_back(std::move(tocEntry.anchor));
+    }
+  }
+
+  pageCount = static_cast<uint16_t>(buildLut.size());
+  resumePageCount = pageCount;
+  buildActive = true;
+  buildParser = std::make_unique<ChapterHtmlSlimParser>(
+      epub, buildHtmlPath, renderer, fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
+      viewportHeight, hyphenationEnabled, focusReadingEnabled,
+      [this](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex) {
+        if (resumePageCount > 0) {
+          resumePageCount--;
+          return;
+        }
+        onIncrementalPageComplete(std::move(page), paragraphIndex, listItemIndex);
+      },
+      embeddedStyle, contentBase, imageBasePath, imageRendering, std::move(tocAnchors), nullptr, buildCssParser, 0,
+      progressFn, INCREMENTAL_PARSE_BUFFER_SIZE);
+  Hyphenator::setPreferredLanguage(epub->getLanguage());
+  if (!buildParser->beginParsing()) {
+    preserveIncrementalBuild();
+    return false;
+  }
+  LOG_INF("SCT", "Resuming incremental build at page %d", pageCount);
+  return true;
+}
+
 bool Section::beginIncrementalBuild(
     const int fontId, const float lineCompression, const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
     const uint16_t viewportWidth, const uint16_t viewportHeight, const bool hyphenationEnabled,
     const bool embeddedStyle, const uint8_t imageRendering, const bool focusReadingEnabled,
     const std::function<void(uint8_t)>& progressFn) {
+  if (resumeIncrementalBuild(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
+                             viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled,
+                             progressFn)) {
+    return true;
+  }
   discardIncrementalBuild();
   pageCount = 0;
 
@@ -459,6 +619,17 @@ bool Section::beginIncrementalBuild(
 
   writeSectionFileHeader(buildFile, fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
                          viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled);
+  HalFile checkpoint;
+  if (!Storage.openFileForWrite("SCT", buildIndexPath, checkpoint)) {
+    discardIncrementalBuild();
+    return false;
+  }
+  const BuildCheckpointHeader checkpointHeader{
+      BUILD_CHECKPOINT_MAGIC, BUILD_CHECKPOINT_VERSION,
+      buildLayoutHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
+                      viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled)};
+  checkpoint.write(&checkpointHeader, sizeof(checkpointHeader));
+  checkpoint.close();
 
   size_t lastSlash = localPath.find_last_of('/');
   const std::string contentBase = lastSlash != std::string::npos ? localPath.substr(0, lastSlash + 1) : "";
@@ -482,6 +653,7 @@ bool Section::beginIncrementalBuild(
   }
 
   buildActive = true;
+  resumePageCount = 0;
   buildParser = std::make_unique<ChapterHtmlSlimParser>(
       epub, buildHtmlPath, renderer, fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
       viewportHeight, hyphenationEnabled, focusReadingEnabled,
@@ -503,8 +675,18 @@ Section::BuildResult Section::buildNextChunk(const uint8_t maxChunks) {
     return BuildResult::Failed;
   }
 
-  const size_t freeHeap = esp_get_free_heap_size();
-  const size_t maxAlloc = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  size_t freeHeap = esp_get_free_heap_size();
+  size_t maxAlloc = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  if (freeHeap < MIN_INCREMENTAL_FREE_HEAP || maxAlloc < MIN_INCREMENTAL_MAX_ALLOC) {
+    // The text prewarm cache is disposable. Releasing it here is substantially
+    // cheaper than abandoning the chapter build, and it avoids holding a large
+    // fragmented glyph cache while the parser needs contiguous working memory.
+    if (auto* fontCache = renderer.getFontCacheManager()) {
+      fontCache->clearCache();
+      freeHeap = esp_get_free_heap_size();
+      maxAlloc = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    }
+  }
   if (freeHeap < MIN_INCREMENTAL_FREE_HEAP || maxAlloc < MIN_INCREMENTAL_MAX_ALLOC) {
     if (!lowMemoryPauseLogged) {
       LOG_INF("SCT", "Pausing incremental build for low memory: free=%u maxAlloc=%u", freeHeap, maxAlloc);

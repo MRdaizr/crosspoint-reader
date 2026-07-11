@@ -22,8 +22,17 @@
 
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
 constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
-constexpr size_t MIN_FREE_HEAP_FOR_IMAGE = 40 * 1024;
-constexpr size_t MIN_MAX_ALLOC_FOR_IMAGE = 24 * 1024;
+// Image extraction/decoding briefly allocates much more than the final page
+// object, so retain a larger reserve than ordinary incremental text parsing.
+constexpr size_t MIN_FREE_HEAP_FOR_IMAGE = 80 * 1024;
+constexpr size_t MIN_MAX_ALLOC_FOR_IMAGE = 64 * 1024;
+// Keep each ZIP inflate/write slice small. Image extraction happens while the
+// incremental parser owns the render lock, so a 4KB slice plus SD latency made
+// key presses appear lost even though GPIO polling continued on the other task.
+constexpr size_t IMAGE_EXTRACTION_CHUNK_SIZE = 512;
+// Each CJK character can become an individual token. Keep a paragraph well
+// below the point where vector growth needs a large contiguous allocation.
+constexpr size_t MAX_BUFFERED_TEXT_WORDS = 256;
 
 // Hard cap on the number of anchor IDs recorded per chapter. Legitimate navigation
 // anchors (TOC entries, footnotes, cross-references) rarely exceed a few hundred per
@@ -508,10 +517,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
             HalFile cachedImageFile;
             bool extractSuccess = false;
             if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
-              extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile, 4096);
+              extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile,
+                                                                     IMAGE_EXTRACTION_CHUNK_SIZE);
               cachedImageFile.flush();
               cachedImageFile.close();
-              delay(50);  // Give SD card time to sync
+              // flush() has committed the data. Yield instead of adding a fixed
+              // 50ms stall for every image in the chapter.
+              yield();
             }
 
             if (extractSuccess) {
@@ -1126,11 +1138,11 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     self->partWordBuffer[self->partWordBufferIndex++] = s[i];
   }
 
-  // If we have > 750 words buffered up, perform the layout and consume out all but the last line
+  // If we have too many words buffered up, perform the layout and consume out all but the last line.
   // There should be enough here to build out 1-2 full pages and doing this will free up a lot of
   // memory.
   // Spotted when reading Intermezzo, there are some really long text blocks in there.
-  if (self->currentTextBlock->size() > 750) {
+  if (self->currentTextBlock->size() > MAX_BUFFERED_TEXT_WORDS) {
     LOG_DBG("EHP", "Text block too long, splitting into multiple pages");
     const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
     const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)

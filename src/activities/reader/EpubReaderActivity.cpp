@@ -229,6 +229,7 @@ void EpubReaderActivity::onExit() {
   }
 
   section.reset();
+  clearNextChapterPreload();
   if (pendingReadFolderMove && epub) {
     const std::string srcPath = epub->getPath();
     const std::string oldCachePath = epub->getCachePath();
@@ -309,7 +310,8 @@ void EpubReaderActivity::loop() {
 
   // Schedule one parser slice from the main loop. The render task must not
   // chain slices directly, otherwise it starves input polling.
-  if (section && section->isBuilding() && !RenderLock::peek() && !mappedInput.wasAnyPressed() &&
+  if (((section && section->isBuilding()) || (nextChapterPreload && nextChapterPreload->isBuilding())) &&
+      !RenderLock::peek() && !mappedInput.wasAnyPressed() &&
       !mappedInput.wasAnyReleased() && millis() - lastIncrementalBuildTick >= INCREMENTAL_BUILD_TICK_MS) {
     lastIncrementalBuildTick = millis();
     requestUpdate();
@@ -774,46 +776,57 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
 }
 
 void EpubReaderActivity::pageTurn(bool isForwardTurn) {
-  {
-    // Wait for the current short parser slice to finish, then make the page
-    // decision from a consistent partial-cache state. This preserves a press
-    // made during indexing instead of dropping its one-frame release event.
-    RenderLock lock(*this);
-    if (!section) {
-      return;
-    }
-
-    if (isForwardTurn) {
-      if (section->currentPage < section->pageCount - 1) {
-        section->currentPage++;
-        pageRenderRequested = true;
-      } else if (section->isBuilding()) {
-        // Keep the user's forward turn pending until the incremental index has
-        // produced the next page. Do not treat a partial cache as chapter end.
-        pendingForwardPageTurn = true;
-        lastIncrementalBuildTick = millis() - INCREMENTAL_BUILD_TICK_MS;
-      } else {
-        nextPageNumber = 0;
-        currentSpineIndex++;
-        section.reset();
-        pageRenderRequested = true;
-      }
-    } else {
-      if (section->currentPage > 0) {
-        section->currentPage--;
-        pageRenderRequested = true;
-      } else if (currentSpineIndex > 0) {
-        nextPageNumber = 0;
-        pendingPageJump = std::numeric_limits<uint16_t>::max();
-        currentSpineIndex--;
-        section.reset();
-        pageRenderRequested = true;
-      }
-    }
+  RenderLock lock(false);
+  if (!lock.ownsLock()) {
+    constexpr int8_t MAX_QUEUED_PAGE_TURNS = 3;
+    int8_t queued = queuedPageTurns.load();
+    int8_t updated;
+    do {
+      updated = isForwardTurn ? std::min<int8_t>(MAX_QUEUED_PAGE_TURNS, static_cast<int8_t>(queued + 1))
+                              : std::max<int8_t>(-MAX_QUEUED_PAGE_TURNS, static_cast<int8_t>(queued - 1));
+    } while (!queuedPageTurns.compare_exchange_weak(queued, updated));
+    requestUpdate();
+    return;
   }
+
+  applyPageTurnLocked(isForwardTurn);
 
   lastPageTurnTime = millis();
   requestUpdate();
+}
+
+void EpubReaderActivity::applyPageTurnLocked(const bool isForwardTurn) {
+  if (!section) {
+    return;
+  }
+
+  if (isForwardTurn) {
+    if (section->currentPage < section->pageCount - 1) {
+      section->currentPage++;
+      pageRenderRequested = true;
+    } else if (section->isBuilding()) {
+      // Keep the user's forward turn pending until the incremental index has
+      // produced the next page. Do not treat a partial cache as chapter end.
+      pendingForwardPageTurn = true;
+      lastIncrementalBuildTick = millis() - INCREMENTAL_BUILD_TICK_MS;
+    } else {
+      nextPageNumber = 0;
+      clearNextChapterPreload();
+      currentSpineIndex++;
+      section.reset();
+      pageRenderRequested = true;
+    }
+  } else if (section->currentPage > 0) {
+    section->currentPage--;
+    pageRenderRequested = true;
+  } else if (currentSpineIndex > 0) {
+    nextPageNumber = 0;
+    pendingPageJump = std::numeric_limits<uint16_t>::max();
+    clearNextChapterPreload();
+    currentSpineIndex--;
+    section.reset();
+    pageRenderRequested = true;
+  }
 }
 
 // TODO: Failure handling
@@ -870,6 +883,18 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   const uint16_t viewportWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
   const uint16_t viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
 
+  int8_t queuedTurns = queuedPageTurns.load();
+  if (queuedTurns != 0 && section) {
+    const bool isForwardTurn = queuedTurns > 0;
+    const int8_t remaining = static_cast<int8_t>(queuedTurns + (isForwardTurn ? -1 : 1));
+    if (!queuedPageTurns.compare_exchange_strong(queuedTurns, remaining)) {
+      // A newer key event won the race. Leave it for the next render tick.
+      return;
+    }
+    applyPageTurnLocked(isForwardTurn);
+    lastPageTurnTime = millis();
+  }
+
   if (section && section->isBuilding()) {
     const auto buildResult = section->buildNextChunk(1);
     if (buildResult == Section::BuildResult::Failed) {
@@ -884,6 +909,34 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       return;
     }
 
+    if (buildResult == Section::BuildResult::Complete) {
+      // Anchor and percentage navigation need the completed page table for an
+      // exact result. Build it incrementally, then reposition without ever
+      // falling back to a blocking createSectionFile() call.
+      if (!pendingAnchor.empty()) {
+        if (const auto page = section->getPageForAnchor(pendingAnchor)) {
+          section->currentPage = *page;
+          LOG_DBG("ERS", "Resolved deferred anchor '%s' to page %d", pendingAnchor.c_str(), *page);
+        } else {
+          LOG_DBG("ERS", "Deferred anchor '%s' not found", pendingAnchor.c_str());
+        }
+        pendingAnchor.clear();
+        pageRenderRequested = true;
+      }
+      if (pendingPercentJump && section->pageCount > 0) {
+        int targetPage = static_cast<int>(pendingSpineProgress * static_cast<float>(section->pageCount));
+        section->currentPage = std::min(targetPage, static_cast<int>(section->pageCount) - 1);
+        pendingPercentJump = false;
+        pageRenderRequested = true;
+      }
+    }
+
+    if (pendingResumePageTarget && section->hasBuiltPage(*pendingResumePageTarget)) {
+      section->currentPage = *pendingResumePageTarget;
+      pendingResumePageTarget.reset();
+      pageRenderRequested = true;
+    }
+
     if (pendingForwardPageTurn && section->currentPage < section->pageCount - 1) {
       section->currentPage++;
       pendingForwardPageTurn = false;
@@ -895,6 +948,13 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (!section->hasBuiltPage(section->currentPage) || !pageRenderRequested) {
       return;
     }
+  }
+
+  // Keep next-chapter work off the critical rendering path. A scheduled idle
+  // tick builds one parser chunk and returns without redrawing the current page.
+  if (!pageRenderRequested && nextChapterPreload && nextChapterPreload->isBuilding()) {
+    advanceNextChapterPreload();
+    return;
   }
 
   if (!section) {
@@ -914,6 +974,34 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
       const bool canPreviewBeforeFullBuild = pendingAnchor.empty() && !pendingPercentJump;
       const int previewPageNumber = pendingPageJump.has_value() ? static_cast<int>(*pendingPageJump) : nextPageNumber;
+
+      // A prior exit may have left a valid page cache prefix. Do not parse the
+      // chapter synchronously again just to preview the saved page: that path
+      // recreates the largest temporary ParsedText allocation and can abort on
+      // a large CJK paragraph. Resume the prefix and let normal slices reach
+      // the requested page instead.
+      if (canPreviewBeforeFullBuild && previewPageNumber >= 0 && section->hasIncrementalBuildCheckpoint() &&
+          section->beginIncrementalBuild(
+              SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
+              SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
+              SETTINGS.embeddedStyle, SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, preloadProgressFn)) {
+        const uint16_t requestedPage = static_cast<uint16_t>(previewPageNumber);
+        pendingPageJump.reset();
+        beginPreloadProgress();
+        lastIncrementalBuildTick = millis() - INCREMENTAL_BUILD_TICK_MS;
+
+        if (section->hasBuiltPage(requestedPage)) {
+          section->currentPage = requestedPage;
+          pageRenderRequested = true;
+        } else {
+          pendingResumePageTarget = requestedPage;
+          // Render the last confirmed page while the parser catches up.
+          section->currentPage = std::max(0, static_cast<int>(section->pageCount) - 1);
+          pageRenderRequested = true;
+        }
+        return;
+      }
+
       if (canPreviewBeforeFullBuild && previewPageNumber >= 0) {
         auto previewPage = section->buildPagePreview(
             SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
@@ -983,6 +1071,21 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           showPendingSyncSaveError();
           return;
         }
+      }
+
+      // Percentage and anchor navigation cannot know their final page before
+      // the section table exists. Start from page zero and let the incremental
+      // builder finish in slices; exact positioning is applied on completion.
+      if (!pendingPageJump.has_value() && (pendingPercentJump || !pendingAnchor.empty()) &&
+          section->beginIncrementalBuild(
+              SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
+              SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
+              SETTINGS.embeddedStyle, SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, preloadProgressFn)) {
+        section->currentPage = 0;
+        pageRenderRequested = true;
+        beginPreloadProgress();
+        lastIncrementalBuildTick = millis() - INCREMENTAL_BUILD_TICK_MS;
+        return;
       }
 
       beginPreloadProgress();
@@ -1127,25 +1230,52 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
     return;
   }
 
-  Section nextSection(epub, nextSpineIndex, renderer);
-  if (nextSection.loadSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
-                                  SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
-                                  viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                  SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
+  if (nextChapterPreload && nextChapterPreloadSpineIndex == nextSpineIndex) {
+    return;
+  }
+  clearNextChapterPreload();
+
+  Section cachedNextSection(epub, nextSpineIndex, renderer);
+  if (cachedNextSection.loadSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
+                                        SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
+                                        viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
+                                        SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
     return;
   }
 
-  LOG_DBG("ERS", "Silently indexing next chapter: %d", nextSpineIndex);
-  const auto preloadProgressFn = [this](const uint8_t progress) { updatePreloadProgress(progress, true); };
-  beginPreloadProgress();
-  if (!nextSection.createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
-                                     SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
-                                     viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                     SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, nullptr,
-                                     preloadProgressFn)) {
-    LOG_ERR("ERS", "Failed silent indexing for chapter: %d", nextSpineIndex);
+  nextChapterPreload = std::make_unique<Section>(epub, nextSpineIndex, renderer);
+  const auto preloadProgressFn = [this](const uint8_t progress) { updatePreloadProgress(progress); };
+  if (!nextChapterPreload->beginIncrementalBuild(
+          SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
+          SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
+          SETTINGS.embeddedStyle, SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, preloadProgressFn)) {
+    LOG_ERR("ERS", "Failed to start next-chapter preload: %d", nextSpineIndex);
+    clearNextChapterPreload();
+    return;
   }
-  updatePreloadProgress(100);
+  nextChapterPreloadSpineIndex = nextSpineIndex;
+  LOG_DBG("ERS", "Started incremental next-chapter preload: %d", nextSpineIndex);
+}
+
+void EpubReaderActivity::advanceNextChapterPreload() {
+  if (!nextChapterPreload || nextChapterPreloadSpineIndex != currentSpineIndex + 1) {
+    clearNextChapterPreload();
+    return;
+  }
+
+  const auto result = nextChapterPreload->buildNextChunk(1);
+  if (result == Section::BuildResult::Failed) {
+    LOG_ERR("ERS", "Next-chapter preload failed: %d", nextChapterPreloadSpineIndex);
+    clearNextChapterPreload();
+  } else if (result == Section::BuildResult::Complete) {
+    LOG_DBG("ERS", "Next-chapter preload completed: %d", nextChapterPreloadSpineIndex);
+    clearNextChapterPreload();
+  }
+}
+
+void EpubReaderActivity::clearNextChapterPreload() {
+  nextChapterPreload.reset();
+  nextChapterPreloadSpineIndex = -1;
 }
 
 bool EpubReaderActivity::saveProgress(int spineIndex, int currentPage, int pageCount) {

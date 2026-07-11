@@ -1,5 +1,6 @@
 #include "BookMetadataCache.h"
 
+#include <Arduino.h>
 #include <Logging.h>
 #include <Serialization.h>
 #include <Utf8.h>
@@ -10,6 +11,15 @@
 #include "FsHelpers.h"
 
 namespace {
+constexpr int INDEX_YIELD_INTERVAL = 16;
+
+void yieldDuringIndexing(const int index) {
+  if ((index % INDEX_YIELD_INTERVAL) == 0) {
+    // Storage/ZIP work can run for seconds on unusually large books. Let the
+    // Wi-Fi, serial and display tasks run between bounded batches.
+    yield();
+  }
+}
 constexpr uint8_t BOOK_CACHE_VERSION = 8;  // v8: TOC/book titles stored NFC-composed
 constexpr char bookBinFile[] = "/book.bin";
 constexpr char tmpSpineBinFile[] = "/spine.bin.tmp";
@@ -142,6 +152,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   // Loop through spine entries, writing LUT positions
   spineFile.seek(0);
   for (int i = 0; i < spineCount; i++) {
+    yieldDuringIndexing(i);
     uint32_t pos = spineFile.position();
     auto spineEntry = readSpineEntry(spineFile);
     serialization::writePod(bookFile, pos + lutOffset + lutSize);
@@ -150,6 +161,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   // Loop through toc entries, writing LUT positions
   tocFile.seek(0);
   for (int i = 0; i < tocCount; i++) {
+    yieldDuringIndexing(i);
     uint32_t pos = tocFile.position();
     auto tocEntry = readTocEntry(tocFile);
     serialization::writePod(bookFile, pos + lutOffset + lutSize + static_cast<uint32_t>(spineFile.position()));
@@ -162,6 +174,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   std::deque<int16_t> spineToTocIndex(spineCount, -1);
   tocFile.seek(0);
   for (int j = 0; j < tocCount; j++) {
+    yieldDuringIndexing(j);
     auto tocEntry = readTocEntry(tocFile);
     if (tocEntry.spineIndex >= 0 && tocEntry.spineIndex < spineCount) {
       if (spineToTocIndex[tocEntry.spineIndex] == -1) {
@@ -199,6 +212,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
 
     spineFile.seek(0);
     for (int i = 0; i < spineCount; i++) {
+      yieldDuringIndexing(i);
       auto entry = readSpineEntry(spineFile);
       std::string path = FsHelpers::normalisePath(entry.href);
 
@@ -227,6 +241,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   spineFile.seek(0);
   int lastSpineTocIndex = -1;
   for (int i = 0; i < spineCount; i++) {
+    yieldDuringIndexing(i);
     auto spineEntry = readSpineEntry(spineFile);
 
     spineEntry.tocIndex = spineToTocIndex[i];
@@ -268,6 +283,7 @@ bool BookMetadataCache::buildBookBin(const std::string& epubPath, const BookMeta
   // Loop through toc entries from toc file writing to book.bin
   tocFile.seek(0);
   for (int i = 0; i < tocCount; i++) {
+    yieldDuringIndexing(i);
     auto tocEntry = readTocEntry(tocFile);
     writeTocEntry(bookFile, tocEntry);
   }
