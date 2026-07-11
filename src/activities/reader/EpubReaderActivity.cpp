@@ -44,6 +44,8 @@ namespace {
 constexpr int PAGE_TURN_RATES[] = {1, 1, 3, 6, 12};
 constexpr size_t initialBookmarkCacheCapacity = 16;
 constexpr float bookmarkProgressEpsilon = 0.0001f;
+constexpr unsigned long INCREMENTAL_BUILD_TICK_MS = 80UL;
+constexpr uint8_t PRELOAD_PROGRESS_STEP = 10;
 
 int clampPercent(int percent) {
   if (percent < 0) {
@@ -305,6 +307,14 @@ void EpubReaderActivity::loop() {
     requestUpdate();
   }
 
+  // Schedule one parser slice from the main loop. The render task must not
+  // chain slices directly, otherwise it starves input polling.
+  if (section && section->isBuilding() && !RenderLock::peek() && !mappedInput.wasAnyPressed() &&
+      !mappedInput.wasAnyReleased() && millis() - lastIncrementalBuildTick >= INCREMENTAL_BUILD_TICK_MS) {
+    lastIncrementalBuildTick = millis();
+    requestUpdate();
+  }
+
   // Enter reader menu activity on short-press Confirm. A long-press that fired a bound
   // function (bookmark or KOReader sync) sets ignoreNextConfirmRelease so the release
   // following the hold does not also open the menu.
@@ -407,14 +417,6 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  // Rendering and cache creation run on a separate task. In the preview path
-  // the temporary section reports only one page; handling a forward press at
-  // that moment would classify it as the last page and queue a chapter change
-  // after the render lock is released. Ignore page-turn input while rendering.
-  if (RenderLock::peek()) {
-    return;
-  }
-
   const auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   if (!prevTriggered && !nextTriggered) {
     return;
@@ -441,22 +443,21 @@ void EpubReaderActivity::loop() {
   }
 
   if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP) {
-    if (!nextTriggered && section && section->currentPage > 0) {
-      section->currentPage = 0;
-      requestUpdate();
-      return;
-    }
-
-    // We don't want to delete the section mid-render, so grab the semaphore
     {
       RenderLock lock(*this);
-      nextPageNumber = 0;
-      if (nextTriggered) {
-        currentSpineIndex++;
-      } else if (currentSpineIndex > 0) {
-        currentSpineIndex--;
+      if (!nextTriggered && section && section->currentPage > 0) {
+        section->currentPage = 0;
+        pageRenderRequested = true;
+      } else {
+        nextPageNumber = 0;
+        if (nextTriggered) {
+          currentSpineIndex++;
+        } else if (currentSpineIndex > 0) {
+          currentSpineIndex--;
+        }
+        section.reset();
+        pageRenderRequested = true;
       }
-      section.reset();
     }
     requestUpdate();
     return;
@@ -773,32 +774,44 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
 }
 
 void EpubReaderActivity::pageTurn(bool isForwardTurn) {
-  if (isForwardTurn) {
-    if (section->currentPage < section->pageCount - 1) {
-      section->currentPage++;
-    } else {
-      // We don't want to delete the section mid-render, so grab the semaphore
-      {
-        RenderLock lock(*this);
+  {
+    // Wait for the current short parser slice to finish, then make the page
+    // decision from a consistent partial-cache state. This preserves a press
+    // made during indexing instead of dropping its one-frame release event.
+    RenderLock lock(*this);
+    if (!section) {
+      return;
+    }
+
+    if (isForwardTurn) {
+      if (section->currentPage < section->pageCount - 1) {
+        section->currentPage++;
+        pageRenderRequested = true;
+      } else if (section->isBuilding()) {
+        // Keep the user's forward turn pending until the incremental index has
+        // produced the next page. Do not treat a partial cache as chapter end.
+        pendingForwardPageTurn = true;
+        lastIncrementalBuildTick = millis() - INCREMENTAL_BUILD_TICK_MS;
+      } else {
         nextPageNumber = 0;
         currentSpineIndex++;
         section.reset();
+        pageRenderRequested = true;
       }
-    }
-  } else {
-    if (section->currentPage > 0) {
-      section->currentPage--;
-    } else if (currentSpineIndex > 0) {
-      // We don't want to delete the section mid-render, so grab the semaphore
-      {
-        RenderLock lock(*this);
+    } else {
+      if (section->currentPage > 0) {
+        section->currentPage--;
+        pageRenderRequested = true;
+      } else if (currentSpineIndex > 0) {
         nextPageNumber = 0;
         pendingPageJump = std::numeric_limits<uint16_t>::max();
         currentSpineIndex--;
         section.reset();
+        pageRenderRequested = true;
       }
     }
   }
+
   lastPageTurnTime = millis();
   requestUpdate();
 }
@@ -857,6 +870,28 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   const uint16_t viewportWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
   const uint16_t viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
 
+  if (section && section->isBuilding()) {
+    const auto buildResult = section->buildNextChunk(1);
+    if (buildResult == Section::BuildResult::Failed) {
+      LOG_ERR("ERS", "Incremental section build failed");
+      section.reset();
+      showPendingSyncSaveError();
+      return;
+    }
+
+    if (pendingForwardPageTurn && section->currentPage < section->pageCount - 1) {
+      section->currentPage++;
+      pendingForwardPageTurn = false;
+      pageRenderRequested = true;
+    }
+
+    // Keep the already rendered page on screen until its replacement has
+    // been produced. This render tick only advances the parser.
+    if (!section->hasBuiltPage(section->currentPage) || !pageRenderRequested) {
+      return;
+    }
+  }
+
   if (!section) {
     const auto filepath = epub->getSpineItem(currentSpineIndex).href;
     LOG_DBG("ERS", "Loading file: %s, index: %d", filepath.c_str(), currentSpineIndex);
@@ -893,6 +928,20 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           renderContents(std::move(previewPage), orientedMarginTop, orientedMarginRight, orientedMarginBottom,
                          orientedMarginLeft);
           LOG_DBG("ERS", "Rendered preview page in %dms", millis() - start);
+
+          // A fresh book starts at page zero. Keep that preview on screen and
+          // build the remaining cache in small render-task slices instead of
+          // blocking until the whole chapter has been indexed.
+          if (previewPageNumber == 0 &&
+              section->beginIncrementalBuild(
+                  SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
+                  SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
+                  SETTINGS.embeddedStyle, SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, preloadProgressFn)) {
+            beginPreloadProgress();
+            pageRenderRequested = false;
+            lastIncrementalBuildTick = millis() - INCREMENTAL_BUILD_TICK_MS;
+            return;
+          }
 
           beginPreloadProgress();
           if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
@@ -1046,6 +1095,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   }
   silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
   saveProgress(currentSpineIndex, section->currentPage, section->pageCount);
+  pageRenderRequested = false;
 
   showPendingSyncSaveError();
 
@@ -1060,7 +1110,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 }
 
 void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportWidth, const uint16_t viewportHeight) {
-  if (!epub || !section || section->pageCount < 2) {
+  if (!epub || !section || section->isBuilding() || section->pageCount < 2) {
     return;
   }
 
@@ -1112,7 +1162,7 @@ void EpubReaderActivity::beginPreloadProgress() {
 void EpubReaderActivity::updatePreloadProgress(const uint8_t progress, const bool refreshStatusBar) {
   const uint8_t clampedProgress = std::min<uint8_t>(progress, 100);
   const uint8_t targetProgress =
-      clampedProgress >= 100 ? 100 : static_cast<uint8_t>((clampedProgress / 5) * 5);
+      clampedProgress >= 100 ? 100 : static_cast<uint8_t>((clampedProgress / PRELOAD_PROGRESS_STEP) * PRELOAD_PROGRESS_STEP);
   if (!refreshStatusBar ||
       SETTINGS.statusBarProgressBar != CrossPointSettings::STATUS_BAR_PROGRESS_BAR::PRELOAD_PROGRESS) {
     preloadProgressPercent = targetProgress;
@@ -1134,11 +1184,9 @@ void EpubReaderActivity::updatePreloadProgress(const uint8_t progress, const boo
   const int progressBarHeight =
       ((SETTINGS.statusBarProgressBarThickness + 1) * 2) + orientedMarginBottom - 1;
 
-  // Do not skip crossed thresholds when the parser reports a large jump. A
-  // single callback from 4% to 17%, for example, must visibly commit 5%, 10%
-  // and 15% in order.
-  for (uint8_t step = static_cast<uint8_t>(lastDisplayedPreloadProgressPercent + 5);
-       step <= targetProgress; step = static_cast<uint8_t>(step + 5)) {
+  // Do not skip crossed thresholds when the parser reports a large jump.
+  for (uint8_t step = static_cast<uint8_t>(lastDisplayedPreloadProgressPercent + PRELOAD_PROGRESS_STEP);
+       step <= targetProgress; step = static_cast<uint8_t>(step + PRELOAD_PROGRESS_STEP)) {
     preloadProgressPercent = step;
     lastDisplayedPreloadProgressPercent = step;
     renderStatusBar();

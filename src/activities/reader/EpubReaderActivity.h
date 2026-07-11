@@ -32,6 +32,9 @@ class EpubReaderActivity final : public Activity {
   float pendingSpineProgress = 0.0f;
   bool pendingScreenshot = false;
   bool pendingSyncSaveError = false;
+  bool pageRenderRequested = true;
+  bool pendingForwardPageTurn = false;
+  unsigned long lastIncrementalBuildTick = 0UL;
   bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
   bool automaticPageTurnActive = false;
   bool showBookmarkMessage = false;

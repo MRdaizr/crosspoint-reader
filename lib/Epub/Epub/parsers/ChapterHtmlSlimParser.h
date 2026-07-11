@@ -2,6 +2,8 @@
 
 #include <expat.h>
 
+#include <HalStorage.h>
+
 #include <climits>
 #include <cstdint>
 #include <functional>
@@ -30,6 +32,11 @@ class ChapterHtmlSlimParser {
   std::function<void()> popupFn;  // Popup callback
   std::function<void(uint8_t)> progressFn;
   XML_Parser activeParser = nullptr;
+  HalFile inputFile;
+  uint32_t totalBytes = 0;
+  uint32_t chapterStartTime = 0;
+  bool parseStarted = false;
+  bool parseFinished = false;
   uint16_t maxPagesToBuild = 0;
   bool stoppedAfterPageLimit = false;
   int depth = 0;
@@ -116,6 +123,8 @@ class ChapterHtmlSlimParser {
   static void XMLCALL endElement(void* userData, const XML_Char* name);
 
  public:
+  enum class ParseResult { InProgress, Complete, Failed };
+
   explicit ChapterHtmlSlimParser(std::shared_ptr<Epub> epub, const std::string& filepath, GfxRenderer& renderer,
                                  const int fontId, const float lineCompression, const bool extraParagraphSpacing,
                                  const uint8_t paragraphAlignment, const uint16_t viewportWidth,
@@ -151,8 +160,11 @@ class ChapterHtmlSlimParser {
         maxPagesToBuild(maxPagesToBuild),
         progressFn(progressFn) {}
 
-  ~ChapterHtmlSlimParser() = default;
+  ~ChapterHtmlSlimParser();
   bool parseAndBuildPages();
+  bool beginParsing();
+  ParseResult parseNextChunk(uint8_t maxChunks = 1);
+  bool isParsing() const { return parseStarted && !parseFinished; }
   void addLineToPage(std::shared_ptr<TextBlock> line);
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
 };

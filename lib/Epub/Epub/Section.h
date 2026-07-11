@@ -3,11 +3,14 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "Epub.h"
 
 class Page;
 class GfxRenderer;
+class ChapterHtmlSlimParser;
+class CssParser;
 
 class Section {
   std::shared_ptr<Epub> epub;
@@ -16,21 +19,34 @@ class Section {
   std::string filePath;
   HalFile file;
 
-  void writeSectionFileHeader(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
+  struct BuildPageEntry {
+    uint32_t fileOffset;
+    uint16_t paragraphIndex;
+    uint16_t listItemIndex;
+  };
+  std::string buildFilePath;
+  std::string buildHtmlPath;
+  HalFile buildFile;
+  std::vector<BuildPageEntry> buildLut;
+  std::unique_ptr<ChapterHtmlSlimParser> buildParser;
+  CssParser* buildCssParser = nullptr;
+  bool buildActive = false;
+
+  void writeSectionFileHeader(HalFile& target, int fontId, float lineCompression, bool extraParagraphSpacing,
+                              uint8_t paragraphAlignment,
                               uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled,
                               bool embeddedStyle, uint8_t imageRendering, bool focusReadingEnabled);
   uint32_t onPageComplete(std::unique_ptr<Page> page);
+  uint32_t onIncrementalPageComplete(std::unique_ptr<Page> page, uint16_t paragraphIndex, uint16_t listItemIndex);
+  bool finishIncrementalBuild();
+  void discardIncrementalBuild();
 
  public:
   uint16_t pageCount = 0;
   int currentPage = 0;
 
-  explicit Section(const std::shared_ptr<Epub>& epub, const int spineIndex, GfxRenderer& renderer)
-      : epub(epub),
-        spineIndex(spineIndex),
-        renderer(renderer),
-        filePath(epub->getCachePath() + "/sections/" + std::to_string(spineIndex) + ".bin") {}
-  ~Section() = default;
+  explicit Section(const std::shared_ptr<Epub>& epub, int spineIndex, GfxRenderer& renderer);
+  ~Section();
   bool loadSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                        uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
                        uint8_t imageRendering, bool focusReadingEnabled);
@@ -40,6 +56,14 @@ class Section {
                          uint8_t imageRendering, bool focusReadingEnabled,
                          const std::function<void()>& popupFn = nullptr,
                          const std::function<void(uint8_t)>& progressFn = nullptr);
+  bool beginIncrementalBuild(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
+                             uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled,
+                             bool embeddedStyle, uint8_t imageRendering, bool focusReadingEnabled,
+                             const std::function<void(uint8_t)>& progressFn = nullptr);
+  enum class BuildResult { InProgress, Complete, Failed };
+  BuildResult buildNextChunk(uint8_t maxChunks = 1);
+  bool isBuilding() const { return buildActive; }
+  bool hasBuiltPage(int page) const { return page >= 0 && page < pageCount; }
   std::unique_ptr<Page> buildPagePreview(int fontId, float lineCompression, bool extraParagraphSpacing,
                                          uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,
                                          bool hyphenationEnabled, bool embeddedStyle, uint8_t imageRendering,

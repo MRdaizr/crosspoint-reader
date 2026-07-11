@@ -26,6 +26,14 @@ struct PageLutEntry {
 };
 }  // namespace
 
+Section::Section(const std::shared_ptr<Epub>& epub, const int spineIndex, GfxRenderer& renderer)
+    : epub(epub),
+      spineIndex(spineIndex),
+      renderer(renderer),
+      filePath(epub->getCachePath() + "/sections/" + std::to_string(spineIndex) + ".bin"),
+      buildFilePath(filePath + ".building"),
+      buildHtmlPath(epub->getCachePath() + "/.tmp_build_" + std::to_string(spineIndex) + ".html") {}
+
 uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
   if (!file) {
     LOG_ERR("SCT", "File not open for writing page %d", pageCount);
@@ -43,12 +51,109 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
   return position;
 }
 
-void Section::writeSectionFileHeader(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
-                                     const uint8_t paragraphAlignment, const uint16_t viewportWidth,
+Section::~Section() { discardIncrementalBuild(); }
+
+uint32_t Section::onIncrementalPageComplete(std::unique_ptr<Page> page, const uint16_t paragraphIndex,
+                                             const uint16_t listItemIndex) {
+  if (!buildFile) {
+    LOG_ERR("SCT", "Build file not open for page %d", pageCount);
+    return 0;
+  }
+
+  const uint32_t position = buildFile.position();
+  if (!page->serialize(buildFile)) {
+    LOG_ERR("SCT", "Failed to serialize incremental page %d", pageCount);
+    return 0;
+  }
+  buildFile.flush();
+  buildLut.push_back({position, paragraphIndex, listItemIndex});
+  pageCount++;
+  return position;
+}
+
+void Section::discardIncrementalBuild() {
+  buildParser.reset();
+  if (buildFile) {
+    buildFile.close();
+  }
+  if (buildCssParser) {
+    buildCssParser->clear();
+    buildCssParser = nullptr;
+  }
+  if (!buildHtmlPath.empty() && Storage.exists(buildHtmlPath.c_str())) {
+    Storage.remove(buildHtmlPath.c_str());
+  }
+  if (buildActive && Storage.exists(buildFilePath.c_str())) {
+    Storage.remove(buildFilePath.c_str());
+  }
+  buildLut.clear();
+  buildActive = false;
+}
+
+bool Section::finishIncrementalBuild() {
+  if (!buildFile || !buildParser) {
+    return false;
+  }
+
+  const uint32_t lutOffset = buildFile.position();
+  for (const auto& entry : buildLut) {
+    if (entry.fileOffset == 0) {
+      LOG_ERR("SCT", "Failed to write incremental page LUT");
+      return false;
+    }
+    serialization::writePod(buildFile, entry.fileOffset);
+  }
+
+  const uint32_t anchorMapOffset = buildFile.position();
+  const auto& anchors = buildParser->getAnchors();
+  serialization::writePod(buildFile, static_cast<uint16_t>(anchors.size()));
+  for (const auto& [anchor, page] : anchors) {
+    serialization::writeString(buildFile, anchor);
+    serialization::writePod(buildFile, page);
+  }
+
+  const uint32_t paragraphLutOffset = buildFile.position();
+  serialization::writePod(buildFile, static_cast<uint16_t>(buildLut.size()));
+  for (const auto& entry : buildLut) {
+    serialization::writePod(buildFile, entry.paragraphIndex);
+  }
+
+  const uint32_t liLutOffset = buildFile.position();
+  for (const auto& entry : buildLut) {
+    serialization::writePod(buildFile, entry.listItemIndex);
+  }
+
+  buildFile.seek(HEADER_SIZE - sizeof(uint32_t) * 4 - sizeof(pageCount));
+  serialization::writePod(buildFile, pageCount);
+  serialization::writePod(buildFile, lutOffset);
+  serialization::writePod(buildFile, anchorMapOffset);
+  serialization::writePod(buildFile, paragraphLutOffset);
+  serialization::writePod(buildFile, liLutOffset);
+  buildFile.close();
+
+  buildParser.reset();
+  if (buildCssParser) {
+    buildCssParser->clear();
+    buildCssParser = nullptr;
+  }
+  Storage.remove(buildHtmlPath.c_str());
+  Storage.remove(filePath.c_str());
+  if (!Storage.rename(buildFilePath.c_str(), filePath.c_str())) {
+    LOG_ERR("SCT", "Failed to commit incremental section cache");
+    return false;
+  }
+  buildLut.clear();
+  buildActive = false;
+  return true;
+}
+
+void Section::writeSectionFileHeader(HalFile& target, const int fontId, const float lineCompression,
+                                     const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
+                                     const uint16_t viewportWidth,
                                      const uint16_t viewportHeight, const bool hyphenationEnabled,
                                      const bool embeddedStyle, const uint8_t imageRendering,
                                      const bool focusReadingEnabled) {
-  if (!file) {
+  if (!target) {
     LOG_DBG("SCT", "File not open for writing header");
     return;
   }
@@ -58,22 +163,22 @@ void Section::writeSectionFileHeader(const int fontId, const float lineCompressi
                                    sizeof(embeddedStyle) + sizeof(imageRendering) + sizeof(focusReadingEnabled) +
                                    sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t),
                 "Header size mismatch");
-  serialization::writePod(file, SECTION_FILE_VERSION);
-  serialization::writePod(file, fontId);
-  serialization::writePod(file, lineCompression);
-  serialization::writePod(file, extraParagraphSpacing);
-  serialization::writePod(file, paragraphAlignment);
-  serialization::writePod(file, viewportWidth);
-  serialization::writePod(file, viewportHeight);
-  serialization::writePod(file, hyphenationEnabled);
-  serialization::writePod(file, embeddedStyle);
-  serialization::writePod(file, imageRendering);
-  serialization::writePod(file, focusReadingEnabled);
-  serialization::writePod(file, pageCount);  // Placeholder for page count (will be initially 0, patched later)
-  serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
-  serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for anchor map offset (patched later)
-  serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for paragraph LUT offset (patched later)
-  serialization::writePod(file, static_cast<uint32_t>(0));  // Placeholder for li LUT offset (patched later)
+  serialization::writePod(target, SECTION_FILE_VERSION);
+  serialization::writePod(target, fontId);
+  serialization::writePod(target, lineCompression);
+  serialization::writePod(target, extraParagraphSpacing);
+  serialization::writePod(target, paragraphAlignment);
+  serialization::writePod(target, viewportWidth);
+  serialization::writePod(target, viewportHeight);
+  serialization::writePod(target, hyphenationEnabled);
+  serialization::writePod(target, embeddedStyle);
+  serialization::writePod(target, imageRendering);
+  serialization::writePod(target, focusReadingEnabled);
+  serialization::writePod(target, pageCount);  // Placeholder for page count (will be initially 0, patched later)
+  serialization::writePod(target, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
+  serialization::writePod(target, static_cast<uint32_t>(0));  // Placeholder for anchor map offset (patched later)
+  serialization::writePod(target, static_cast<uint32_t>(0));  // Placeholder for paragraph LUT offset (patched later)
+  serialization::writePod(target, static_cast<uint32_t>(0));  // Placeholder for li LUT offset (patched later)
 }
 
 bool Section::loadSectionFile(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
@@ -206,7 +311,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   if (!Storage.openFileForWrite("SCT", filePath, file)) {
     return false;
   }
-  writeSectionFileHeader(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
+  writeSectionFileHeader(file, fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
                          viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled);
   std::vector<PageLutEntry> lut = {};
 
@@ -315,6 +420,95 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   return true;
 }
 
+bool Section::beginIncrementalBuild(
+    const int fontId, const float lineCompression, const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
+    const uint16_t viewportWidth, const uint16_t viewportHeight, const bool hyphenationEnabled,
+    const bool embeddedStyle, const uint8_t imageRendering, const bool focusReadingEnabled,
+    const std::function<void(uint8_t)>& progressFn) {
+  discardIncrementalBuild();
+  pageCount = 0;
+
+  const auto sectionsDir = epub->getCachePath() + "/sections";
+  Storage.mkdir(sectionsDir.c_str());
+  Storage.remove(buildFilePath.c_str());
+  Storage.remove(buildHtmlPath.c_str());
+
+  const auto localPath = epub->getSpineItem(spineIndex).href;
+  bool streamed = false;
+  for (int attempt = 0; attempt < 3 && !streamed; attempt++) {
+    HalFile tmpHtml;
+    if (!Storage.openFileForWrite("SCT", buildHtmlPath, tmpHtml)) {
+      continue;
+    }
+    streamed = epub->readItemContentsToStream(localPath, tmpHtml, 1024);
+    tmpHtml.close();
+    if (!streamed) {
+      Storage.remove(buildHtmlPath.c_str());
+      delay(50);
+    }
+  }
+  if (!streamed || !Storage.openFileForWrite("SCT", buildFilePath, buildFile)) {
+    discardIncrementalBuild();
+    return false;
+  }
+
+  writeSectionFileHeader(buildFile, fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
+                         viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled);
+
+  size_t lastSlash = localPath.find_last_of('/');
+  const std::string contentBase = lastSlash != std::string::npos ? localPath.substr(0, lastSlash + 1) : "";
+  const std::string imageBasePath = epub->getCachePath() + "/img_" + std::to_string(spineIndex) + "_";
+
+  if (embeddedStyle) {
+    buildCssParser = epub->getCssParser();
+    if (buildCssParser && !buildCssParser->loadFromCache()) {
+      LOG_ERR("SCT", "Failed to load CSS from cache for incremental build");
+    }
+  }
+
+  std::vector<std::string> tocAnchors;
+  const int startTocIndex = epub->getTocIndexForSpineIndex(spineIndex);
+  if (startTocIndex >= 0) {
+    for (int i = startTocIndex; i < epub->getTocItemsCount(); i++) {
+      auto entry = epub->getTocItem(i);
+      if (entry.spineIndex != spineIndex) break;
+      if (!entry.anchor.empty()) tocAnchors.push_back(std::move(entry.anchor));
+    }
+  }
+
+  buildActive = true;
+  buildParser = std::make_unique<ChapterHtmlSlimParser>(
+      epub, buildHtmlPath, renderer, fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
+      viewportHeight, hyphenationEnabled, focusReadingEnabled,
+      [this](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex) {
+        onIncrementalPageComplete(std::move(page), paragraphIndex, listItemIndex);
+      },
+      embeddedStyle, contentBase, imageBasePath, imageRendering, std::move(tocAnchors), nullptr, buildCssParser, 0,
+      progressFn);
+  Hyphenator::setPreferredLanguage(epub->getLanguage());
+  if (!buildParser->beginParsing()) {
+    discardIncrementalBuild();
+    return false;
+  }
+  return true;
+}
+
+Section::BuildResult Section::buildNextChunk(const uint8_t maxChunks) {
+  if (!buildActive || !buildParser) {
+    return BuildResult::Failed;
+  }
+
+  const auto result = buildParser->parseNextChunk(maxChunks);
+  if (result == ChapterHtmlSlimParser::ParseResult::InProgress) {
+    return BuildResult::InProgress;
+  }
+  if (result == ChapterHtmlSlimParser::ParseResult::Failed || !finishIncrementalBuild()) {
+    discardIncrementalBuild();
+    return BuildResult::Failed;
+  }
+  return BuildResult::Complete;
+}
+
 std::unique_ptr<Page> Section::buildPagePreview(const int fontId, const float lineCompression,
                                                 const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
                                                 const uint16_t viewportWidth, const uint16_t viewportHeight,
@@ -384,6 +578,20 @@ std::unique_ptr<Page> Section::buildPagePreview(const int fontId, const float li
 }
 
 std::unique_ptr<Page> Section::loadPageFromSectionFile() {
+  if (buildActive) {
+    if (currentPage < 0 || currentPage >= static_cast<int>(buildLut.size())) {
+      return nullptr;
+    }
+    HalFile partialFile;
+    if (!Storage.openFileForRead("SCT", buildFilePath, partialFile)) {
+      return nullptr;
+    }
+    partialFile.seek(buildLut[currentPage].fileOffset);
+    auto page = Page::deserialize(partialFile);
+    partialFile.close();
+    return page;
+  }
+
   if (!Storage.openFileForRead("SCT", filePath, file)) {
     return nullptr;
   }
