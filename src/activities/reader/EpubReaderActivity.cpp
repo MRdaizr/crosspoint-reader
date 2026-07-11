@@ -407,6 +407,14 @@ void EpubReaderActivity::loop() {
     return;
   }
 
+  // Rendering and cache creation run on a separate task. In the preview path
+  // the temporary section reports only one page; handling a forward press at
+  // that moment would classify it as the last page and queue a chapter change
+  // after the render lock is released. Ignore page-turn input while rendering.
+  if (RenderLock::peek()) {
+    return;
+  }
+
   const auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   if (!prevTriggered && !nextTriggered) {
     return;
@@ -916,7 +924,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
             }
             updateBookmarkFlag();
             saveProgress(currentSpineIndex, section->currentPage, section->pageCount);
-            requestUpdate();
+            // This code runs on the render task, so notify that task directly.
+            // A deferred update may otherwise wait for another input event.
+            requestUpdate(true);
           }
           showPendingSyncSaveError();
           return;
