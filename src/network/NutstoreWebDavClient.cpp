@@ -107,6 +107,43 @@ struct DavParseState {
   bool inResourceType = false;
 };
 
+void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char**);
+void XMLCALL endElement(void* userData, const XML_Char* name);
+void XMLCALL characterData(void* userData, const XML_Char* s, int len);
+
+struct DavStream {
+  XML_Parser parser = nullptr;
+  DavParseState state;
+  std::string error;
+
+  ~DavStream() {
+    if (parser) XML_ParserFree(parser);
+  }
+
+  bool begin() {
+    if (parser) XML_ParserFree(parser);
+    parser = XML_ParserCreateNS(nullptr, '|');
+    state = DavParseState{};
+    error.clear();
+    if (!parser) {
+      error = "XML parser allocation failed";
+      return false;
+    }
+    XML_SetUserData(parser, &state);
+    XML_SetElementHandler(parser, startElement, endElement);
+    XML_SetCharacterDataHandler(parser, characterData);
+    return true;
+  }
+
+  bool feed(const char* data, const int length, const bool finished = false) {
+    if (!parser || XML_Parse(parser, data, length, finished ? XML_TRUE : XML_FALSE) != XML_STATUS_OK) {
+      error = "WebDAV XML parse failed";
+      return false;
+    }
+    return true;
+  }
+};
+
 void XMLCALL startElement(void* userData, const XML_Char* name, const XML_Char**) {
   auto* st = static_cast<DavParseState*>(userData);
   const std::string tag = localName(name);
@@ -153,25 +190,10 @@ void XMLCALL characterData(void* userData, const XML_Char* s, int len) {
   if (!st->currentTag.empty()) st->currentText.append(s, len);
 }
 
-bool parseDavXml(const std::string& xml, std::vector<NutstoreRemoteEntry>& out, std::string& error) {
-  XML_Parser parser = XML_ParserCreateNS(nullptr, '|');
-  if (!parser) {
-    error = "XML parser allocation failed";
-    return false;
-  }
-  DavParseState state;
-  XML_SetUserData(parser, &state);
-  XML_SetElementHandler(parser, startElement, endElement);
-  XML_SetCharacterDataHandler(parser, characterData);
-  const bool ok = XML_Parse(parser, xml.c_str(), static_cast<int>(xml.size()), XML_TRUE) == XML_STATUS_OK;
-  if (!ok) {
-    error = "WebDAV XML parse failed";
-    XML_ParserFree(parser);
-    return false;
-  }
-  XML_ParserFree(parser);
-  out = std::move(state.entries);
-  return true;
+esp_err_t onDavHttpEvent(esp_http_client_event_t* event) {
+  if (event->event_id != HTTP_EVENT_ON_DATA || !event->user_data) return ESP_OK;
+  auto* stream = static_cast<DavStream*>(event->user_data);
+  return stream->feed(static_cast<const char*>(event->data), event->data_len) ? ESP_OK : ESP_FAIL;
 }
 
 void setBasicAuth(esp_http_client_handle_t client, const std::string& username, const std::string& password) {
@@ -220,25 +242,30 @@ std::string NutstoreWebDavClient::relativeFromHref(const std::string& href) cons
   return rel;
 }
 
-bool NutstoreWebDavClient::propfindDepth1(const std::string& collectionUrl, std::vector<NutstoreRemoteEntry>& entries,
-                                          std::string& error) {
+bool NutstoreWebDavClient::listRecursive(const std::string& remotePath, EntryCallback onEntry, std::string& error) {
+  const std::string rootUrl = buildCollectionUrl(remotePath);
+  rootPath = urlPath(rootUrl);
+
+  if (ESP.getMaxAllocHeap() < MIN_MAX_ALLOC_FOR_TLS) {
+    error = "Low TLS memory. Restart the device and try again.";
+    return false;
+  }
+
+  DavStream stream;
   esp_http_client_config_t config = {};
-  config.url = collectionUrl.c_str();
+  config.url = rootUrl.c_str();
   config.buffer_size = HTTP_RX_BUF;
   config.buffer_size_tx = HTTP_TX_BUF;
   config.timeout_ms = HTTP_TIMEOUT_MS;
   config.crt_bundle_attach = esp_crt_bundle_attach;
-  config.keep_alive_enable = false;
-
-  LOG_DBG("NUT", "PROPFIND %s (heap: %u, max alloc: %u)", collectionUrl.c_str(), (unsigned)ESP.getFreeHeap(),
-          (unsigned)ESP.getMaxAllocHeap());
-
+  config.keep_alive_enable = true;
+  config.event_handler = onDavHttpEvent;
+  config.user_data = &stream;
   esp_http_client_handle_t client = esp_http_client_init(&config);
   if (!client) {
     error = "HTTP client allocation failed";
     return false;
   }
-  esp_http_client_set_method(client, HTTP_METHOD_PROPFIND);
   esp_http_client_set_header(client, "Depth", "1");
   esp_http_client_set_header(client, "Content-Type", "application/xml; charset=utf-8");
   esp_http_client_set_header(client, "User-Agent", "CrossPoint-ESP32-" CROSSPOINT_VERSION);
@@ -247,49 +274,6 @@ bool NutstoreWebDavClient::propfindDepth1(const std::string& collectionUrl, std:
   static constexpr const char* BODY =
       "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
       "<d:propfind xmlns:d=\"DAV:\"><d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>";
-  esp_err_t err = esp_http_client_open(client, strlen(BODY));
-  if (err != ESP_OK) {
-    error = std::string("PROPFIND open failed: ") + esp_err_to_name(err);
-    esp_http_client_cleanup(client);
-    return false;
-  }
-  esp_http_client_write(client, BODY, strlen(BODY));
-  esp_http_client_fetch_headers(client);
-  const int status = esp_http_client_get_status_code(client);
-  if (status != 207 && status != 200) {
-    error = "PROPFIND failed: HTTP " + std::to_string(status);
-    esp_http_client_cleanup(client);
-    return false;
-  }
-
-  std::string xml;
-  char buf[READ_CHUNK];
-  while (true) {
-    const int read = esp_http_client_read(client, buf, sizeof(buf));
-    if (read < 0) {
-      error = "PROPFIND read failed";
-      esp_http_client_cleanup(client);
-      return false;
-    }
-    if (read == 0) break;
-    xml.append(buf, read);
-  }
-  esp_http_client_cleanup(client);
-
-  std::vector<NutstoreRemoteEntry> parsed;
-  if (!parseDavXml(xml, parsed, error)) return false;
-  for (auto& e : parsed) {
-    e.relativePath = relativeFromHref(e.href);
-    if (!e.relativePath.empty()) entries.push_back(std::move(e));
-  }
-  return true;
-}
-
-bool NutstoreWebDavClient::listRecursive(const std::string& remotePath, std::vector<NutstoreRemoteEntry>& entries,
-                                         std::string& error) {
-  entries.clear();
-  const std::string rootUrl = buildCollectionUrl(remotePath);
-  rootPath = urlPath(rootUrl);
 
   std::vector<std::string> queue = {rootUrl};
   std::set<std::string> seenDirs;
@@ -301,26 +285,47 @@ bool NutstoreWebDavClient::listRecursive(const std::string& remotePath, std::vec
     scannedDirs++;
     if (scannedDirs > MAX_ENUM_DIRS) {
       error = "Too many folders. Set smaller Remote Path.";
+      esp_http_client_cleanup(client);
       return false;
     }
 
-    if (ESP.getMaxAllocHeap() < MIN_MAX_ALLOC_FOR_TLS) {
-      error = "Low TLS memory. Set smaller Remote Path.";
+    if (!stream.begin() || esp_http_client_set_url(client, url.c_str()) != ESP_OK) {
+      error = stream.error.empty() ? "PROPFIND client setup failed" : stream.error;
+      esp_http_client_cleanup(client);
+      return false;
+    }
+    esp_http_client_set_method(client, HTTP_METHOD_PROPFIND);
+    esp_http_client_set_post_field(client, BODY, strlen(BODY));
+    LOG_DBG("NUT", "PROPFIND %s (heap: %u, max alloc: %u)", url.c_str(), (unsigned)ESP.getFreeHeap(),
+            (unsigned)ESP.getMaxAllocHeap());
+    const esp_err_t requestErr = esp_http_client_perform(client);
+    const int status = esp_http_client_get_status_code(client);
+    if (requestErr != ESP_OK || !stream.feed(nullptr, 0, true)) {
+      error = !stream.error.empty() ? stream.error : std::string("PROPFIND failed: ") + esp_err_to_name(requestErr);
+      esp_http_client_cleanup(client);
+      return false;
+    }
+    if (status != 207 && status != 200) {
+      error = "PROPFIND failed: HTTP " + std::to_string(status);
+      esp_http_client_cleanup(client);
       return false;
     }
 
-    std::vector<NutstoreRemoteEntry> listed;
-    if (!propfindDepth1(url, listed, error)) return false;
-    for (const auto& e : listed) {
+    for (auto& e : stream.state.entries) {
+      e.relativePath = relativeFromHref(e.href);
+      if (e.relativePath.empty()) continue;
       if (e.isDirectory) {
         std::string child = e.href.rfind("http", 0) == 0 ? e.href : origin + e.href;
         child = ensureTrailingSlash(child);
         queue.push_back(child);
-      } else {
-        entries.push_back(e);
+      } else if (!onEntry || !onEntry(std::move(e), error)) {
+        if (error.empty()) error = "Could not store Nutstore file list";
+        esp_http_client_cleanup(client);
+        return false;
       }
     }
   }
+  esp_http_client_cleanup(client);
   return true;
 }
 

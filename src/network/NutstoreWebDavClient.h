@@ -15,10 +15,11 @@ struct NutstoreRemoteEntry {
 class NutstoreWebDavClient {
  public:
   using ProgressCallback = std::function<void(size_t done, size_t total)>;
+  using EntryCallback = std::function<bool(NutstoreRemoteEntry&& entry, std::string& error)>;
 
   NutstoreWebDavClient(std::string baseUrl, std::string username, std::string password);
 
-  bool listRecursive(const std::string& remotePath, std::vector<NutstoreRemoteEntry>& entries, std::string& error);
+  bool listRecursive(const std::string& remotePath, EntryCallback onEntry, std::string& error);
   bool downloadFile(const NutstoreRemoteEntry& entry, const std::string& destPath, ProgressCallback progress,
                     std::string& error);
 
@@ -30,7 +31,6 @@ class NutstoreWebDavClient {
   std::string basePath;
   std::string rootPath;
 
-  bool propfindDepth1(const std::string& collectionUrl, std::vector<NutstoreRemoteEntry>& entries, std::string& error);
   std::string buildCollectionUrl(const std::string& remotePath) const;
   std::string relativeFromHref(const std::string& href) const;
 };

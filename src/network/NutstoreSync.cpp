@@ -8,13 +8,15 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
-#include <set>
 #include <ctime>
 
 #include "NutstoreWebDavClient.h"
 
 namespace {
+constexpr const char* REMOTE_MANIFEST_PATH = "/Nutstore/.nutstore-manifest.tmp";
+
 std::string lower(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return s;
@@ -91,21 +93,89 @@ bool ensureParentDir(const std::string& path) {
   return Storage.mkdir(path.substr(0, slash).c_str());
 }
 
-void collectLocalFiles(const std::string& dir, const std::string& root, std::vector<std::string>& relFiles) {
+bool writeManifestEntry(HalFile& file, const NutstoreRemoteEntry& entry) {
+  char size[24] = {};
+  const int sizeLength = snprintf(size, sizeof(size), "%u", static_cast<unsigned>(entry.size));
+  static constexpr char TAB = '\t';
+  static constexpr char NEWLINE = '\n';
+  return sizeLength > 0 && file.write(size, sizeLength) == static_cast<size_t>(sizeLength) &&
+         file.write(&TAB, 1) == 1 && file.write(entry.href.c_str(), entry.href.size()) == entry.href.size() &&
+         file.write(&TAB, 1) == 1 && file.write(entry.relativePath.c_str(), entry.relativePath.size()) == entry.relativePath.size() &&
+         file.write(&NEWLINE, 1) == 1;
+}
+
+bool readManifestEntry(HalFile& file, NutstoreRemoteEntry& entry) {
+  std::string line;
+  line.reserve(192);
+  while (file.available() > 0) {
+    const int ch = file.read();
+    if (ch < 0 || ch == '\n') break;
+    if (ch != '\r') line.push_back(static_cast<char>(ch));
+  }
+  const size_t firstTab = line.find('\t');
+  const size_t secondTab = firstTab == std::string::npos ? std::string::npos : line.find('\t', firstTab + 1);
+  if (firstTab == std::string::npos || secondTab == std::string::npos || secondTab + 1 >= line.size()) return false;
+  entry = {};
+  entry.size = static_cast<size_t>(strtoull(line.c_str(), nullptr, 10));
+  entry.href = line.substr(firstTab + 1, secondTab - firstTab - 1);
+  entry.relativePath = line.substr(secondTab + 1);
+  return !entry.href.empty() && !entry.relativePath.empty();
+}
+
+bool manifestContains(HalFile& manifest, const std::string& relativePath) {
+  if (!manifest.seek(0)) return false;
+  while (manifest.available() > 0) {
+    NutstoreRemoteEntry entry;
+    if (!readManifestEntry(manifest, entry)) return false;
+    if (entry.relativePath == relativePath) return true;
+  }
+  return false;
+}
+
+size_t countLocalFiles(const std::string& dir) {
+  size_t count = 0;
   HalFile d = Storage.open(dir.c_str());
-  if (!d || !d.isDirectory()) return;
+  if (!d || !d.isDirectory()) return 0;
   for (HalFile f = d.openNextFile(); f; f = d.openNextFile()) {
     char name[256] = {};
     f.getName(name, sizeof(name));
     std::string full = joinPath(dir, name);
     if (f.isDirectory()) {
-      collectLocalFiles(full, root, relFiles);
+      count += countLocalFiles(full);
     } else {
-      if (full.rfind(root + "/", 0) == 0) {
-        relFiles.push_back(full.substr(root.size() + 1));
-      }
+      ++count;
     }
   }
+  return count;
+}
+
+bool deleteLocalFilesMissingRemote(const std::string& dir, const std::string& root, HalFile& manifest,
+                                   NutstoreSyncStatus& status, const NutstoreSync::StatusCallback& callback,
+                                   bool* cancelFlag) {
+  HalFile d = Storage.open(dir.c_str());
+  if (!d || !d.isDirectory()) return true;
+  for (HalFile f = d.openNextFile(); f; f = d.openNextFile()) {
+    if (cancelFlag && *cancelFlag) return false;
+    char name[256] = {};
+    f.getName(name, sizeof(name));
+    const std::string full = joinPath(dir, name);
+    if (f.isDirectory()) {
+      if (!deleteLocalFilesMissingRemote(full, root, manifest, status, callback, cancelFlag)) return false;
+      continue;
+    }
+    if (full.rfind(root + "/", 0) != 0) continue;
+    const std::string relativePath = full.substr(root.size() + 1);
+    status.currentFile = relativePath;
+    if (NutstoreSync::isAllowedReadingFile(relativePath) && !manifestContains(manifest, relativePath)) {
+      std::string protectedPath;
+      if (localPathForRelative(relativePath, protectedPath) && Storage.remove(protectedPath.c_str())) {
+        ++status.deleted;
+      }
+    }
+    ++status.processed;
+    notify(status, callback);
+  }
+  return true;
 }
 
 void removeEmptyDirs(const std::string& dir) {
@@ -183,40 +253,73 @@ bool NutstoreSync::run(const NutstoreConfig& config, NutstoreSyncStatus& status,
   ensureSystemTime();
 
   Storage.mkdir("/Nutstore");
+  Storage.remove(REMOTE_MANIFEST_PATH);
 
   NutstoreWebDavClient client(config.baseUrl, config.username, config.password);
-  std::vector<NutstoreRemoteEntry> remoteEntries;
+  HalFile manifest;
+  if (!Storage.openFileForWrite("NUT", REMOTE_MANIFEST_PATH, manifest)) {
+    status.phase = NutstoreSyncPhase::FAILED;
+    status.message = "Could not create Nutstore file list";
+    notify(status, callback);
+    return false;
+  }
+
+  size_t fileCount = 0;
   std::string error;
-  if (!client.listRecursive(config.remotePath, remoteEntries, error)) {
+  const bool listed = client.listRecursive(
+      config.remotePath,
+      [&manifest, &fileCount](NutstoreRemoteEntry&& entry, std::string& callbackError) {
+        if (!NutstoreSync::isAllowedReadingFile(entry.relativePath)) return true;
+        if (!writeManifestEntry(manifest, entry)) {
+          callbackError = "Could not save Nutstore file list";
+          return false;
+        }
+        ++fileCount;
+        return true;
+      },
+      error);
+  manifest.close();
+  if (!listed) {
+    Storage.remove(REMOTE_MANIFEST_PATH);
     status.phase = NutstoreSyncPhase::FAILED;
     status.message = error;
     notify(status, callback);
     return false;
   }
 
-  std::vector<NutstoreRemoteEntry> files;
-  std::set<std::string> remoteRelFiles;
-  for (auto& e : remoteEntries) {
-    if (e.isDirectory || e.relativePath.empty()) continue;
-    if (!isAllowedReadingFile(e.relativePath)) continue;
-    files.push_back(e);
-    remoteRelFiles.insert(e.relativePath);
+  if (!Storage.openFileForRead("NUT", REMOTE_MANIFEST_PATH, manifest)) {
+    Storage.remove(REMOTE_MANIFEST_PATH);
+    status.phase = NutstoreSyncPhase::FAILED;
+    status.message = "Could not read Nutstore file list";
+    notify(status, callback);
+    return false;
   }
 
   status.phase = NutstoreSyncPhase::DOWNLOADING;
-  status.total = files.size();
+  status.total = fileCount;
   status.processed = 0;
   status.message = "Downloading Nutstore files...";
   notify(status, callback);
 
-  for (const auto& entry : files) {
+  while (manifest.available() > 0) {
     if (cancelFlag && *cancelFlag) {
+      manifest.close();
+      Storage.remove(REMOTE_MANIFEST_PATH);
       status.phase = NutstoreSyncPhase::CANCELLED;
       status.message = "Sync cancelled";
       notify(status, callback);
       return false;
     }
 
+    NutstoreRemoteEntry entry;
+    if (!readManifestEntry(manifest, entry)) {
+      manifest.close();
+      Storage.remove(REMOTE_MANIFEST_PATH);
+      status.phase = NutstoreSyncPhase::FAILED;
+      status.message = "Nutstore file list is invalid";
+      notify(status, callback);
+      return false;
+    }
     std::string localPath;
     if (!localPathForRelative(entry.relativePath, localPath)) {
       LOG_ERR("NUT", "Skipping unsafe local path: %s", entry.relativePath.c_str());
@@ -244,6 +347,8 @@ bool NutstoreSync::run(const NutstoreConfig& config, NutstoreSyncStatus& status,
                                  notify(status, callback);
                                },
                                dlError)) {
+        manifest.close();
+        Storage.remove(REMOTE_MANIFEST_PATH);
         status.phase = NutstoreSyncPhase::FAILED;
         status.message = dlError;
         notify(status, callback);
@@ -261,31 +366,22 @@ bool NutstoreSync::run(const NutstoreConfig& config, NutstoreSyncStatus& status,
     status.phase = NutstoreSyncPhase::DELETING;
     status.message = "Deleting local files missing from Nutstore...";
     status.processed = 0;
-    std::vector<std::string> localFiles;
-    collectLocalFiles("/Nutstore", "/Nutstore", localFiles);
-    status.total = localFiles.size();
+    status.total = countLocalFiles("/Nutstore");
     notify(status, callback);
 
-    for (const auto& rel : localFiles) {
-      if (cancelFlag && *cancelFlag) {
-        status.phase = NutstoreSyncPhase::CANCELLED;
-        status.message = "Sync cancelled";
-        notify(status, callback);
-        return false;
-      }
-      status.currentFile = rel;
-      if (isAllowedReadingFile(rel) && remoteRelFiles.find(rel) == remoteRelFiles.end()) {
-        std::string localPath;
-        if (localPathForRelative(rel, localPath) && Storage.remove(localPath.c_str())) {
-          status.deleted++;
-        }
-      }
-      status.processed++;
+    if (!deleteLocalFilesMissingRemote("/Nutstore", "/Nutstore", manifest, status, callback, cancelFlag)) {
+      manifest.close();
+      Storage.remove(REMOTE_MANIFEST_PATH);
+      status.phase = NutstoreSyncPhase::CANCELLED;
+      status.message = "Sync cancelled";
       notify(status, callback);
+      return false;
     }
     removeEmptyDirs("/Nutstore");
   }
 
+  manifest.close();
+  Storage.remove(REMOTE_MANIFEST_PATH);
   status.phase = NutstoreSyncPhase::SUCCESS;
   status.message = "Nutstore sync complete";
   notify(status, callback);

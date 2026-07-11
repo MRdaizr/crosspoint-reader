@@ -34,7 +34,5 @@ class NutstoreSync {
   static bool run(const NutstoreConfig& config, NutstoreSyncStatus& status, StatusCallback callback,
                   bool* cancelFlag = nullptr);
   static const char* phaseName(NutstoreSyncPhase phase);
-
- private:
   static bool isAllowedReadingFile(const std::string& path);
 };
