@@ -13,6 +13,8 @@ namespace DynamicFont {
 
 inline bool isCjkCodepoint(uint32_t cp) {
   return (cp >= 0x3000 && cp <= 0x303F) ||    // CJK punctuation
+         (cp >= 0x3040 && cp <= 0x30FF) ||    // Hiragana and Katakana
+         (cp >= 0x31F0 && cp <= 0x31FF) ||    // Katakana phonetic extensions
          (cp >= 0x3400 && cp <= 0x9FFF) ||    // CJK unified ideographs
          (cp >= 0xF900 && cp <= 0xFAFF) ||    // CJK compatibility ideographs
          (cp >= 0xFF00 && cp <= 0xFFEF) ||    // fullwidth forms

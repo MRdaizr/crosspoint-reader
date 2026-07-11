@@ -5,6 +5,7 @@
 #include <I18n.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 
 #include "MappedInputManager.h"
@@ -14,7 +15,7 @@
 
 namespace {
 constexpr uint32_t FLASHCARD_INDEX_MAGIC = 0x31494346;  // "FCI1"
-constexpr uint32_t FLASHCARD_INDEX_VERSION = 1;
+constexpr uint32_t FLASHCARD_INDEX_VERSION = 2;
 constexpr size_t FINGERPRINT_BYTES = 64;
 
 struct FlashcardIndexHeader {
@@ -23,7 +24,24 @@ struct FlashcardIndexHeader {
   uint32_t sourceSize;
   uint32_t sourceFingerprint;
   uint32_t cardCount;
+  uint8_t wordColumn;
+  uint8_t phoneticColumn;
+  uint8_t definitionColumn;
 };
+
+std::string normalizedColumnName(const std::string& value) {
+  size_t begin = 0;
+  size_t end = value.size();
+  while (begin < end && std::isspace(static_cast<unsigned char>(value[begin]))) begin++;
+  while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1]))) end--;
+
+  std::string normalized;
+  normalized.reserve(end - begin);
+  for (size_t i = begin; i < end; ++i) {
+    normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(value[i]))));
+  }
+  return normalized;
+}
 
 uint32_t updateFingerprint(uint32_t hash, const uint8_t* data, size_t length) {
   for (size_t i = 0; i < length; ++i) {
@@ -93,6 +111,26 @@ bool FlashcardReviewActivity::readIndexHeader(HalFile& indexFile, const uint32_t
          header.sourceSize == sourceSize && header.sourceFingerprint == sourceFingerprint;
 }
 
+bool FlashcardReviewActivity::configureColumnsFromHeader(const std::vector<std::string>& fields) {
+  int word = -1;
+  int phonetic = -1;
+  int definition = -1;
+  for (size_t i = 0; i < fields.size(); ++i) {
+    const auto name = normalizedColumnName(fields[i]);
+    if (name == "word" || name == "term" || name == "front") word = static_cast<int>(i);
+    if (name == "phonetic" || name == "pronunciation" || name == "ipa") phonetic = static_cast<int>(i);
+    if (name == "definition" || name == "meaning" || name == "translation" || name == "back") {
+      definition = static_cast<int>(i);
+    }
+  }
+  if (word < 0) return false;
+
+  wordColumn = static_cast<uint8_t>(word);
+  phoneticColumn = phonetic >= 0 ? static_cast<uint8_t>(phonetic) : UINT8_MAX;
+  definitionColumn = definition >= 0 ? static_cast<uint8_t>(definition) : UINT8_MAX;
+  return true;
+}
+
 bool FlashcardReviewActivity::buildIndex(const uint32_t sourceSize, const uint32_t sourceFingerprint) {
   const std::string tempPath = indexPath + ".tmp";
   Storage.remove(tempPath.c_str());
@@ -108,7 +146,7 @@ bool FlashcardReviewActivity::buildIndex(const uint32_t sourceSize, const uint32
   }
 
   const FlashcardIndexHeader emptyHeader{FLASHCARD_INDEX_MAGIC, FLASHCARD_INDEX_VERSION, sourceSize,
-                                         sourceFingerprint, 0};
+                                         sourceFingerprint, 0, wordColumn, phoneticColumn, definitionColumn};
   if (indexFile.write(&emptyHeader, sizeof(emptyHeader)) != sizeof(emptyHeader)) {
     source.close();
     indexFile.close();
@@ -124,9 +162,14 @@ bool FlashcardReviewActivity::buildIndex(const uint32_t sourceSize, const uint32
 
   const auto indexLine = [&](const uint32_t offset, const std::string& csvLine, const bool isFirstLine) {
     const auto fields = parseCsvLine(csvLine);
-    if (fields.size() < 3 || (isFirstLine && fields[0] == "word")) {
+    if (isFirstLine && configureColumnsFromHeader(fields)) {
       return true;
     }
+    if (wordColumn == UINT8_MAX || definitionColumn == UINT8_MAX) {
+      return true;
+    }
+    const size_t requiredColumn = std::max(static_cast<size_t>(wordColumn), static_cast<size_t>(definitionColumn));
+    if (fields.size() <= requiredColumn) return true;
     if (indexFile.write(&offset, sizeof(offset)) != sizeof(offset)) {
       return false;
     }
@@ -158,8 +201,9 @@ bool FlashcardReviewActivity::buildIndex(const uint32_t sourceSize, const uint32
     return false;
   }
 
-  if (!indexFile.seek(offsetof(FlashcardIndexHeader, cardCount)) ||
-      indexFile.write(&count, sizeof(count)) != sizeof(count)) {
+  const FlashcardIndexHeader completeHeader{FLASHCARD_INDEX_MAGIC, FLASHCARD_INDEX_VERSION, sourceSize,
+                                            sourceFingerprint, count, wordColumn, phoneticColumn, definitionColumn};
+  if (!indexFile.seek(0) || indexFile.write(&completeHeader, sizeof(completeHeader)) != sizeof(completeHeader)) {
     source.close();
     indexFile.close();
     Storage.remove(tempPath.c_str());
@@ -199,7 +243,12 @@ bool FlashcardReviewActivity::loadIndex() {
     indexFile.read(&header, sizeof(header));
     const uint64_t expectedSize = sizeof(header) + static_cast<uint64_t>(header.cardCount) * sizeof(uint32_t);
     valid = indexFile.fileSize64() == expectedSize;
-    if (valid) cardCount = header.cardCount;
+    if (valid) {
+      cardCount = header.cardCount;
+      wordColumn = header.wordColumn;
+      phoneticColumn = header.phoneticColumn;
+      definitionColumn = header.definitionColumn;
+    }
   }
   indexFile.close();
 
@@ -237,8 +286,13 @@ bool FlashcardReviewActivity::loadCard(const int index) {
   source.close();
 
   const auto fields = parseCsvLine(line);
-  if (fields.size() < 3) return false;
-  currentCard = {fields[0], fields[1], fields[2]};
+  if (wordColumn == UINT8_MAX || definitionColumn == UINT8_MAX || fields.size() <= wordColumn ||
+      fields.size() <= definitionColumn) {
+    return false;
+  }
+  currentCard.word = fields[wordColumn];
+  currentCard.phonetic = phoneticColumn != UINT8_MAX && fields.size() > phoneticColumn ? fields[phoneticColumn] : "";
+  currentCard.definition = fields[definitionColumn];
   return true;
 }
 
@@ -255,6 +309,9 @@ void FlashcardReviewActivity::onExit() {
   Activity::onExit();
   currentCard = {};
   cardCount = 0;
+  wordColumn = 0;
+  phoneticColumn = 1;
+  definitionColumn = 2;
   indexPath.clear();
 }
 
@@ -304,11 +361,18 @@ void FlashcardReviewActivity::render(RenderLock&&) {
     std::string prewarm = card.word + "\n" + card.phonetic + "\n" + card.definition;
     const int cardFontId = DynamicFont::fontForCjkText(renderer, prewarm.c_str(), UI_12_FONT_ID);
     DynamicFont::prewarmIfSdFont(renderer, cardFontId, prewarm);
+    int phoneticFontId = cardFontId;
+    if (!card.phonetic.empty()) {
+      sdFontSystem.ensureLoaded(renderer);
+      const int sdFontId = sdFontSystem.currentFontId();
+      if (renderer.isSdCardFont(sdFontId)) phoneticFontId = sdFontId;
+      DynamicFont::prewarmIfSdFont(renderer, phoneticFontId, card.phonetic);
+    }
     const auto cardStyle = renderer.isSdCardFont(cardFontId) ? EpdFontFamily::REGULAR : EpdFontFamily::BOLD;
 
     renderer.drawCenteredText(cardFontId, contentTop + 55, card.word.c_str(), true, cardStyle);
     if (!card.phonetic.empty()) {
-      renderer.drawCenteredText(UI_10_FONT_ID, contentTop + 95, card.phonetic.c_str());
+      renderer.drawCenteredText(phoneticFontId, contentTop + 95, card.phonetic.c_str());
     }
 
     if (showingAnswer) {

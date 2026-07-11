@@ -21,6 +21,9 @@ class FlashcardReviewActivity final : public Activity {
   std::string indexPath;
   FlashcardCard currentCard;
   uint32_t cardCount = 0;
+  uint8_t wordColumn = 0;
+  uint8_t phoneticColumn = 1;
+  uint8_t definitionColumn = 2;
   int selectedIndex = 0;
   bool showingAnswer = false;
 
@@ -28,6 +31,7 @@ class FlashcardReviewActivity final : public Activity {
   bool buildIndex(uint32_t sourceSize, uint32_t sourceFingerprint);
   bool loadCard(int index);
   bool readIndexHeader(HalFile& indexFile, uint32_t sourceSize, uint32_t sourceFingerprint);
+  bool configureColumnsFromHeader(const std::vector<std::string>& fields);
   static std::vector<std::string> parseCsvLine(const std::string& line);
 
  public:
