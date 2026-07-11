@@ -31,6 +31,7 @@ class Section {
   std::unique_ptr<ChapterHtmlSlimParser> buildParser;
   CssParser* buildCssParser = nullptr;
   bool buildActive = false;
+  bool lowMemoryPauseLogged = false;
 
   void writeSectionFileHeader(HalFile& target, int fontId, float lineCompression, bool extraParagraphSpacing,
                               uint8_t paragraphAlignment,
@@ -60,7 +61,7 @@ class Section {
                              uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled,
                              bool embeddedStyle, uint8_t imageRendering, bool focusReadingEnabled,
                              const std::function<void(uint8_t)>& progressFn = nullptr);
-  enum class BuildResult { InProgress, Complete, Failed };
+  enum class BuildResult { InProgress, Complete, PausedLowMemory, Failed };
   BuildResult buildNextChunk(uint8_t maxChunks = 1);
   bool isBuilding() const { return buildActive; }
   bool hasBuiltPage(int page) const { return page >= 0 && page < pageCount; }

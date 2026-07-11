@@ -37,6 +37,7 @@ class ChapterHtmlSlimParser {
   uint32_t chapterStartTime = 0;
   bool parseStarted = false;
   bool parseFinished = false;
+  uint16_t parseBufferSize = 1024;
   uint16_t maxPagesToBuild = 0;
   bool stoppedAfterPageLimit = false;
   int depth = 0;
@@ -136,7 +137,8 @@ class ChapterHtmlSlimParser {
                                  std::vector<std::string> tocAnchors = {},
                                  const std::function<void()>& popupFn = nullptr, const CssParser* cssParser = nullptr,
                                  const uint16_t maxPagesToBuild = 0,
-                                 const std::function<void(uint8_t)>& progressFn = nullptr)
+                                 const std::function<void(uint8_t)>& progressFn = nullptr,
+                                 const uint16_t parseBufferSize = 1024)
 
       : epub(epub),
         filepath(filepath),
@@ -158,7 +160,8 @@ class ChapterHtmlSlimParser {
         imageBasePath(imageBasePath),
         tocAnchors(std::move(tocAnchors)),
         maxPagesToBuild(maxPagesToBuild),
-        progressFn(progressFn) {}
+        progressFn(progressFn),
+        parseBufferSize(parseBufferSize) {}
 
   ~ChapterHtmlSlimParser();
   bool parseAndBuildPages();

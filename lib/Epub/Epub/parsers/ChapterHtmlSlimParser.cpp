@@ -7,6 +7,8 @@
 #include <Utf8.h>
 #include <XmlParserUtils.h>
 #include <expat.h>
+#include <esp_heap_caps.h>
+#include <esp_system.h>
 
 #include <algorithm>
 #include <iterator>
@@ -20,7 +22,8 @@
 
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
 constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
-constexpr size_t PARSE_BUFFER_SIZE = 1024;
+constexpr size_t MIN_FREE_HEAP_FOR_IMAGE = 40 * 1024;
+constexpr size_t MIN_MAX_ALLOC_FOR_IMAGE = 24 * 1024;
 
 // Hard cap on the number of anchor IDs recorded per chapter. Legitimate navigation
 // anchors (TOC entries, footnotes, cross-references) rarely exceed a few hundred per
@@ -483,7 +486,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         }
       }
 
-      if (!src.empty() && self->imageRendering != 1) {
+      const bool enoughMemoryForImage = esp_get_free_heap_size() >= MIN_FREE_HEAP_FOR_IMAGE &&
+                                        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= MIN_MAX_ALLOC_FOR_IMAGE;
+      if (!src.empty() && self->imageRendering != 1 && enoughMemoryForImage) {
         LOG_DBG("EHP", "Found image: src=%s", src.c_str());
 
         {
@@ -697,6 +702,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
             }
           }  // isFormatSupported
         }
+      }
+
+      if (!src.empty() && self->imageRendering != 1 && !enoughMemoryForImage) {
+        LOG_INF("EHP", "Skipping image for low memory: free=%u maxAlloc=%u", esp_get_free_heap_size(),
+                heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
       }
 
       // Fallback to alt text if image processing fails
@@ -1344,7 +1354,7 @@ ChapterHtmlSlimParser::ParseResult ChapterHtmlSlimParser::parseNextChunk(const u
 
   for (uint8_t chunk = 0; chunk < std::max<uint8_t>(1, maxChunks); chunk++) {
     XML_Parser parser = activeParser;
-    void* const buf = XML_GetBuffer(parser, PARSE_BUFFER_SIZE);
+    void* const buf = XML_GetBuffer(parser, parseBufferSize);
     if (!buf) {
       LOG_ERR("EHP", "Couldn't allocate memory for buffer");
       destroyXmlParser(parser);
@@ -1353,7 +1363,7 @@ ChapterHtmlSlimParser::ParseResult ChapterHtmlSlimParser::parseNextChunk(const u
       return ParseResult::Failed;
     }
 
-    const size_t len = inputFile.read(buf, PARSE_BUFFER_SIZE);
+    const size_t len = inputFile.read(buf, parseBufferSize);
 
     if (len == 0 && inputFile.available() > 0) {
       LOG_ERR("EHP", "File read error");

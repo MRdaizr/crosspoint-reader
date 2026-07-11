@@ -3,6 +3,8 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Serialization.h>
+#include <esp_heap_caps.h>
+#include <esp_system.h>
 
 #include <algorithm>
 
@@ -14,6 +16,9 @@
 namespace {
 // v27: words NFC-composed at layout time; bump invalidates NFD section caches.
 constexpr uint8_t SECTION_FILE_VERSION = 27;
+constexpr size_t MIN_INCREMENTAL_FREE_HEAP = 40 * 1024;
+constexpr size_t MIN_INCREMENTAL_MAX_ALLOC = 24 * 1024;
+constexpr uint16_t INCREMENTAL_PARSE_BUFFER_SIZE = 256;
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
@@ -484,7 +489,7 @@ bool Section::beginIncrementalBuild(
         onIncrementalPageComplete(std::move(page), paragraphIndex, listItemIndex);
       },
       embeddedStyle, contentBase, imageBasePath, imageRendering, std::move(tocAnchors), nullptr, buildCssParser, 0,
-      progressFn);
+      progressFn, INCREMENTAL_PARSE_BUFFER_SIZE);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
   if (!buildParser->beginParsing()) {
     discardIncrementalBuild();
@@ -497,6 +502,17 @@ Section::BuildResult Section::buildNextChunk(const uint8_t maxChunks) {
   if (!buildActive || !buildParser) {
     return BuildResult::Failed;
   }
+
+  const size_t freeHeap = esp_get_free_heap_size();
+  const size_t maxAlloc = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  if (freeHeap < MIN_INCREMENTAL_FREE_HEAP || maxAlloc < MIN_INCREMENTAL_MAX_ALLOC) {
+    if (!lowMemoryPauseLogged) {
+      LOG_INF("SCT", "Pausing incremental build for low memory: free=%u maxAlloc=%u", freeHeap, maxAlloc);
+      lowMemoryPauseLogged = true;
+    }
+    return BuildResult::PausedLowMemory;
+  }
+  lowMemoryPauseLogged = false;
 
   const auto result = buildParser->parseNextChunk(maxChunks);
   if (result == ChapterHtmlSlimParser::ParseResult::InProgress) {

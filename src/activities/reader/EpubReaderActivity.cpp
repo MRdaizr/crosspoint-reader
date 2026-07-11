@@ -878,6 +878,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       showPendingSyncSaveError();
       return;
     }
+    if (buildResult == Section::BuildResult::PausedLowMemory) {
+      // Keep the preview or last completed page visible. The main-loop
+      // scheduler will retry after transient page/image allocations are freed.
+      return;
+    }
 
     if (pendingForwardPageTurn && section->currentPage < section->pageCount - 1) {
       section->currentPage++;
@@ -929,11 +934,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
                          orientedMarginLeft);
           LOG_DBG("ERS", "Rendered preview page in %dms", millis() - start);
 
-          // A fresh book starts at page zero. Keep that preview on screen and
-          // build the remaining cache in small render-task slices instead of
-          // blocking until the whole chapter has been indexed.
-          if (previewPageNumber == 0 &&
-              section->beginIncrementalBuild(
+          // Keep the preview on screen and build the remaining cache in small
+          // slices. This also applies to resumed positions and chapter jumps.
+          if (section->beginIncrementalBuild(
                   SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
                   SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
                   SETTINGS.embeddedStyle, SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, preloadProgressFn)) {
