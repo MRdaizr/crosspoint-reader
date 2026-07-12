@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <ctime>
 
 #include "MappedInputManager.h"
@@ -297,6 +298,11 @@ bool FlashcardReviewActivity::loadCard(const int index) {
   currentCard.word = fields[wordColumn];
   currentCard.phonetic = phoneticColumn != UINT8_MAX && fields.size() > phoneticColumn ? fields[phoneticColumn] : "";
   currentCard.definition = fields[definitionColumn];
+  prewarmedCardText.clear();
+  preloadedDefinitionLines.clear();
+  preloadedCardId = 0;
+  preloadedCardFontId = 0;
+  answerPreloadPending = true;
   currentCardId = entry.cardId;
   return true;
 }
@@ -370,6 +376,34 @@ void FlashcardReviewActivity::gradeCurrent(const FlashcardGrade grade) {
   requestUpdate();
 }
 
+void FlashcardReviewActivity::preloadCurrentAnswer() {
+  if (!answerPreloadPending || currentCardId == 0 || showingAnswer || showingStats) return;
+
+  RenderLock lock(*this);
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const int boxY = contentTop + 135;
+  const std::string prewarm = currentCard.word + "\n" + currentCard.phonetic + "\n" + currentCard.definition;
+  const int fontId = DynamicFont::fontForCjkText(renderer, prewarm.c_str(), UI_12_FONT_ID);
+  DynamicFont::prewarmIfSdFont(renderer, fontId, prewarm);
+  prewarmedCardText = prewarm;
+
+  std::string definitionLayout = currentCard.definition;
+  size_t separator = 0;
+  while ((separator = definitionLayout.find("｜", separator)) != std::string::npos) {
+    definitionLayout.replace(separator, strlen("｜"), "｜ ");
+    separator += strlen("｜ ");
+  }
+  const int lineHeight = renderer.getLineHeight(fontId);
+  const int availableHeight = renderer.getScreenHeight() - metrics.buttonHintsHeight - metrics.verticalSpacing - boxY;
+  const int maxLines = std::max(1, availableHeight / lineHeight);
+  preloadedDefinitionLines = renderer.wrappedText(fontId, definitionLayout.c_str(),
+                                                   renderer.getScreenWidth() - metrics.contentSidePadding * 2, maxLines);
+  preloadedCardFontId = fontId;
+  preloadedCardId = currentCardId;
+  answerPreloadPending = false;
+}
+
 void FlashcardReviewActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     if (showingStats) {
@@ -406,6 +440,8 @@ void FlashcardReviewActivity::loop() {
     requestUpdate();
     return;
   }
+
+  preloadCurrentAnswer();
 }
 
 void FlashcardReviewActivity::render(RenderLock&&) {
@@ -443,9 +479,12 @@ void FlashcardReviewActivity::render(RenderLock&&) {
              tr(STR_FLASHCARD_LEARNED), static_cast<unsigned long>(totalLearned), progress);
     renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding, contentTop, counter);
 
-    std::string prewarm = card.word + "\n" + card.phonetic + "\n" + card.definition;
+    const std::string prewarm = card.word + "\n" + card.phonetic + "\n" + card.definition;
     const int cardFontId = DynamicFont::fontForCjkText(renderer, prewarm.c_str(), UI_12_FONT_ID);
-    DynamicFont::prewarmIfSdFont(renderer, cardFontId, prewarm);
+    if (prewarmedCardText != prewarm) {
+      DynamicFont::prewarmIfSdFont(renderer, cardFontId, prewarm);
+      prewarmedCardText = prewarm;
+    }
     int phoneticFontId = cardFontId;
     if (!card.phonetic.empty()) {
       sdFontSystem.ensureLoaded(renderer);
@@ -464,14 +503,18 @@ void FlashcardReviewActivity::render(RenderLock&&) {
       const int boxY = contentTop + 135;
       renderer.drawLine(metrics.contentSidePadding, boxY - 10, pageWidth - metrics.contentSidePadding, boxY - 10);
       const int lineHeight = renderer.getLineHeight(cardFontId);
-      const int availableHeight = pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing - boxY;
-      const int maxLines = std::max(1, availableHeight / lineHeight);
-      const auto definitionLines = renderer.wrappedText(cardFontId, card.definition.c_str(),
-                                                        pageWidth - metrics.contentSidePadding * 2, maxLines);
+      const bool hasPreloadedAnswer = preloadedCardId == currentCardId && preloadedCardFontId == cardFontId;
+      const auto& definitionLines = preloadedDefinitionLines;
       int definitionY = boxY;
-      for (const auto& line : definitionLines) {
-        renderer.drawText(cardFontId, metrics.contentSidePadding, definitionY, line.c_str(), true);
-        definitionY += lineHeight;
+      if (hasPreloadedAnswer) {
+        for (const auto& line : definitionLines) {
+          renderer.drawText(cardFontId, metrics.contentSidePadding, definitionY, line.c_str(), true);
+          definitionY += lineHeight;
+        }
+      } else {
+        const auto fallback = renderer.truncatedText(cardFontId, card.definition.c_str(),
+                                                     pageWidth - metrics.contentSidePadding * 2);
+        renderer.drawText(cardFontId, metrics.contentSidePadding, definitionY, fallback.c_str(), true);
       }
     } else {
       renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 25, tr(STR_FLASHCARD_SHOW_ANSWER));

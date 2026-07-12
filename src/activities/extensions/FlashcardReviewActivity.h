@@ -19,6 +19,11 @@ class FlashcardReviewActivity final : public Activity {
   std::string deckPath;
   std::string indexPath;
   FlashcardCard currentCard;
+  std::string prewarmedCardText;
+  std::vector<std::string> preloadedDefinitionLines;
+  uint64_t preloadedCardId = 0;
+  int preloadedCardFontId = 0;
+  bool answerPreloadPending = false;
   uint32_t cardCount = 0;
   uint8_t wordColumn = 0;
   uint8_t phoneticColumn = 1;
@@ -41,6 +46,7 @@ class FlashcardReviewActivity final : public Activity {
   bool isTimeValid() const;
   void gradeCurrent(FlashcardGrade grade);
   void renderStats();
+  void preloadCurrentAnswer();
   static std::vector<std::string> parseCsvLine(const std::string& line);
 
  public:
