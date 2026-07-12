@@ -4,6 +4,7 @@
 #include <I18n.h>
 
 #include "FlashcardDeckListActivity.h"
+#include "NtpClockActivity.h"
 #include "PomodoroActivity.h"
 #include "ReadingStatsActivity.h"
 #include "MappedInputManager.h"
@@ -12,11 +13,12 @@
 #include "util/DynamicFont.h"
 
 namespace {
-constexpr int MENU_ITEMS = 3;
-const StrId menuLabels[MENU_ITEMS] = {StrId::STR_FLASHCARDS, StrId::STR_READING_STATS, StrId::STR_POMODORO};
+constexpr int MENU_ITEMS = 4;
+const StrId menuLabels[MENU_ITEMS] = {StrId::STR_FLASHCARDS, StrId::STR_READING_STATS, StrId::STR_POMODORO,
+                                      StrId::STR_NTP_CLOCK};
 const StrId menuDescs[MENU_ITEMS] = {StrId::STR_FLASHCARDS_DESC, StrId::STR_READING_STATS_DESC,
-                                     StrId::STR_POMODORO_DESC};
-const UIIcon menuIcons[MENU_ITEMS] = {UIIcon::Book, UIIcon::Recent, UIIcon::Settings};
+                                     StrId::STR_POMODORO_DESC, StrId::STR_NTP_CLOCK_DESC};
+const UIIcon menuIcons[MENU_ITEMS] = {UIIcon::Book, UIIcon::Recent, UIIcon::Settings, UIIcon::Recent};
 }  // namespace
 
 void ExtensionsMenuActivity::onEnter() {
@@ -41,6 +43,9 @@ void ExtensionsMenuActivity::loop() {
         break;
       case 2:
         startActivityForResult(std::make_unique<PomodoroActivity>(renderer, mappedInput), nullptr);
+        break;
+      case 3:
+        startActivityForResult(std::make_unique<NtpClockActivity>(renderer, mappedInput), nullptr);
         break;
       default:
         break;
