@@ -26,14 +26,18 @@ void ClearCacheActivity::render(RenderLock&&) {
 
   renderer.clearScreen();
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_CLEAR_READING_CACHE));
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight},
+                 I18N.get(flashcardCache ? StrId::STR_CLEAR_FLASHCARD_CACHE : StrId::STR_CLEAR_READING_CACHE));
 
   if (state == WARNING) {
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 60, tr(STR_CLEAR_CACHE_WARNING_1), true);
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 30, tr(STR_CLEAR_CACHE_WARNING_2), true,
+    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 60,
+                              I18N.get(flashcardCache ? StrId::STR_CLEAR_FLASHCARD_WARNING_1 : StrId::STR_CLEAR_CACHE_WARNING_1), true);
+    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 30,
+                              I18N.get(flashcardCache ? StrId::STR_CLEAR_FLASHCARD_WARNING_2 : StrId::STR_CLEAR_CACHE_WARNING_2), true,
                               EpdFontFamily::BOLD);
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 10, tr(STR_CLEAR_CACHE_WARNING_3), true);
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 30, tr(STR_CLEAR_CACHE_WARNING_4), true);
+    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 10,
+                              I18N.get(flashcardCache ? StrId::STR_CLEAR_FLASHCARD_WARNING_3 : StrId::STR_CLEAR_CACHE_WARNING_3), true);
+    if (!flashcardCache) renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 30, tr(STR_CLEAR_CACHE_WARNING_4), true);
 
     const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_CLEAR_BUTTON), "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -75,6 +79,33 @@ void ClearCacheActivity::render(RenderLock&&) {
 
 void ClearCacheActivity::clearCache() {
   LOG_DBG("CLEAR_CACHE", "Clearing cache...");
+
+  if (flashcardCache) {
+    clearedCount = 0;
+    failedCount = 0;
+    if (Storage.exists("/.crosspoint/flashcards")) {
+      if (Storage.removeDir("/.crosspoint/flashcards")) ++clearedCount;
+      else ++failedCount;
+    }
+    auto decks = Storage.open("/flashcards");
+    if (decks && decks.isDirectory()) {
+      char name[160];
+      for (auto file = decks.openNextFile(); file; file = decks.openNextFile()) {
+        file.getName(name, sizeof(name));
+        const std::string filename(name);
+        file.close();
+        if (filename.size() > 4 && filename.rfind(".idx") == filename.size() - 4) {
+          const std::string path = std::string("/flashcards/") + filename;
+          if (Storage.remove(path.c_str())) ++clearedCount;
+          else ++failedCount;
+        }
+      }
+      decks.close();
+    }
+    state = failedCount == 0 ? SUCCESS : (clearedCount > 0 ? SUCCESS : FAILED);
+    requestUpdate();
+    return;
+  }
 
   // Open .crosspoint directory
   auto root = Storage.open("/.crosspoint");

@@ -386,6 +386,11 @@ void FlashcardReviewActivity::loop() {
     return;
   }
   if (showingStats) return;
+  if (currentCardId == 0 && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    selectNextCard();
+    requestUpdate();
+    return;
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (showingAnswer) gradeCurrent(FlashcardGrade::GOOD);
     else { showingAnswer = true; requestUpdate(); }
@@ -457,7 +462,16 @@ void FlashcardReviewActivity::render(RenderLock&&) {
     if (showingAnswer) {
       const int boxY = contentTop + 135;
       renderer.drawLine(metrics.contentSidePadding, boxY - 10, pageWidth - metrics.contentSidePadding, boxY - 10);
-      renderer.drawText(cardFontId, metrics.contentSidePadding, boxY, card.definition.c_str(), true);
+      const int lineHeight = renderer.getLineHeight(cardFontId);
+      const int availableHeight = pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing - boxY;
+      const int maxLines = std::max(1, availableHeight / lineHeight);
+      const auto definitionLines = renderer.wrappedText(cardFontId, card.definition.c_str(),
+                                                        pageWidth - metrics.contentSidePadding * 2, maxLines);
+      int definitionY = boxY;
+      for (const auto& line : definitionLines) {
+        renderer.drawText(cardFontId, metrics.contentSidePadding, definitionY, line.c_str(), true);
+        definitionY += lineHeight;
+      }
     } else {
       renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 25, tr(STR_FLASHCARD_SHOW_ANSWER));
     }
@@ -465,7 +479,9 @@ void FlashcardReviewActivity::render(RenderLock&&) {
 
   const auto labels = showingAnswer ? mappedInput.mapLabels(tr(STR_BACK), tr(STR_FLASHCARD_GOOD), tr(STR_FLASHCARD_AGAIN),
                                                              tr(STR_FLASHCARD_HARD))
-                                    : mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "", tr(STR_FLASHCARD_STATS));
+                                    : currentCardId == 0
+                                          ? mappedInput.mapLabels(tr(STR_BACK), tr(STR_FLASHCARD_CONTINUE), "", tr(STR_FLASHCARD_STATS))
+                                          : mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "", tr(STR_FLASHCARD_STATS));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }

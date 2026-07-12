@@ -6,8 +6,9 @@
 
 class ClearCacheActivity final : public Activity {
  public:
-  explicit ClearCacheActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("ClearCache", renderer, mappedInput) {}
+  explicit ClearCacheActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool flashcardCache = false)
+      : Activity(flashcardCache ? "ClearFlashcardCache" : "ClearCache", renderer, mappedInput),
+        flashcardCache(flashcardCache) {}
 
   void onEnter() override;
   void onExit() override;
@@ -24,5 +25,6 @@ class ClearCacheActivity final : public Activity {
 
   int clearedCount = 0;
   int failedCount = 0;
+  bool flashcardCache = false;
   void clearCache();
 };
