@@ -22,7 +22,6 @@ enum class SettingAction {
   ClearFlashcardCache,
   SdFirmwareUpdate,
   Language,
-  DownloadFonts,
 };
 
 struct SettingInfo {
