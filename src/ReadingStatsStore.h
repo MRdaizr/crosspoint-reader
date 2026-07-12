@@ -21,6 +21,7 @@ class ReadingStatsStore {
 
   void loadFromFile();
   bool saveToFile() const;
+  void clear();
   void addSession(const std::string& path, const std::string& title, uint32_t seconds);
   const std::vector<ReadingStatEntry>& getEntries();
 };

@@ -98,6 +98,16 @@ bool PomodoroStatsStore::saveToFile() const {
   return Storage.writeFile(STATS_FILE_JSON, json);
 }
 
+void PomodoroStatsStore::clear() {
+  totalCompletedFocuses = 0;
+  totalFocusSeconds = 0;
+  dailyEntries.clear();
+  loaded = true;
+  if (Storage.exists(STATS_FILE_JSON) && !Storage.remove(STATS_FILE_JSON)) {
+    LOG_ERR("PST", "Failed to remove pomodoro stats");
+  }
+}
+
 void PomodoroStatsStore::recordCompletedFocus(const uint32_t seconds) {
   loadFromFile();
   totalCompletedFocuses++;

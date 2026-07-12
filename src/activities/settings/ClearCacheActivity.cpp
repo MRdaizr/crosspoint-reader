@@ -6,9 +6,44 @@
 #include <Logging.h>
 
 #include "MappedInputManager.h"
+#include "PomodoroStatsStore.h"
+#include "ReadingStatsStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+
+namespace {
+StrId titleFor(ClearCacheType type) {
+  switch (type) {
+    case ClearCacheType::Flashcards:
+      return StrId::STR_CLEAR_FLASHCARD_CACHE;
+    case ClearCacheType::ReadingStats:
+      return StrId::STR_CLEAR_READING_STATS_CACHE;
+    case ClearCacheType::PomodoroStats:
+      return StrId::STR_CLEAR_POMODORO_CACHE;
+    case ClearCacheType::Reading:
+    default:
+      return StrId::STR_CLEAR_READING_CACHE;
+  }
+}
+
+StrId warningFor(ClearCacheType type, int line) {
+  if (type == ClearCacheType::Flashcards) {
+    return line == 1 ? StrId::STR_CLEAR_FLASHCARD_WARNING_1
+                     : line == 2 ? StrId::STR_CLEAR_FLASHCARD_WARNING_2 : StrId::STR_CLEAR_FLASHCARD_WARNING_3;
+  }
+  if (type == ClearCacheType::ReadingStats) {
+    return line == 1 ? StrId::STR_CLEAR_READING_STATS_WARNING_1
+                     : line == 2 ? StrId::STR_CLEAR_READING_STATS_WARNING_2 : StrId::STR_NONE_OPT;
+  }
+  if (type == ClearCacheType::PomodoroStats) {
+    return line == 1 ? StrId::STR_CLEAR_POMODORO_WARNING_1
+                     : line == 2 ? StrId::STR_CLEAR_POMODORO_WARNING_2 : StrId::STR_NONE_OPT;
+  }
+  return line == 1 ? StrId::STR_CLEAR_CACHE_WARNING_1
+                   : line == 2 ? StrId::STR_CLEAR_CACHE_WARNING_2 : StrId::STR_CLEAR_CACHE_WARNING_3;
+}
+}  // namespace
 
 void ClearCacheActivity::onEnter() {
   Activity::onEnter();
@@ -26,18 +61,19 @@ void ClearCacheActivity::render(RenderLock&&) {
 
   renderer.clearScreen();
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight},
-                 I18N.get(flashcardCache ? StrId::STR_CLEAR_FLASHCARD_CACHE : StrId::STR_CLEAR_READING_CACHE));
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, I18N.get(titleFor(cacheType)));
 
   if (state == WARNING) {
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 60,
-                              I18N.get(flashcardCache ? StrId::STR_CLEAR_FLASHCARD_WARNING_1 : StrId::STR_CLEAR_CACHE_WARNING_1), true);
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 30,
-                              I18N.get(flashcardCache ? StrId::STR_CLEAR_FLASHCARD_WARNING_2 : StrId::STR_CLEAR_CACHE_WARNING_2), true,
+    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 35, I18N.get(warningFor(cacheType, 1)), true);
+    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 5, I18N.get(warningFor(cacheType, 2)), true,
                               EpdFontFamily::BOLD);
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 10,
-                              I18N.get(flashcardCache ? StrId::STR_CLEAR_FLASHCARD_WARNING_3 : StrId::STR_CLEAR_CACHE_WARNING_3), true);
-    if (!flashcardCache) renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 30, tr(STR_CLEAR_CACHE_WARNING_4), true);
+    const StrId thirdWarning = warningFor(cacheType, 3);
+    if (thirdWarning != StrId::STR_NONE_OPT) {
+      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 25, I18N.get(thirdWarning), true);
+    }
+    if (cacheType == ClearCacheType::Reading) {
+      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 45, tr(STR_CLEAR_CACHE_WARNING_4), true);
+    }
 
     const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_CLEAR_BUTTON), "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
@@ -80,7 +116,27 @@ void ClearCacheActivity::render(RenderLock&&) {
 void ClearCacheActivity::clearCache() {
   LOG_DBG("CLEAR_CACHE", "Clearing cache...");
 
-  if (flashcardCache) {
+  if (cacheType == ClearCacheType::ReadingStats) {
+    const bool existed = Storage.exists("/.crosspoint/reading_stats.json");
+    READING_STATS.clear();
+    clearedCount = existed ? 1 : 0;
+    failedCount = existed && Storage.exists("/.crosspoint/reading_stats.json") ? 1 : 0;
+    state = failedCount == 0 ? SUCCESS : FAILED;
+    requestUpdate();
+    return;
+  }
+
+  if (cacheType == ClearCacheType::PomodoroStats) {
+    const bool existed = Storage.exists("/.crosspoint/pomodoro_stats.json");
+    POMODORO_STATS.clear();
+    clearedCount = existed ? 1 : 0;
+    failedCount = existed && Storage.exists("/.crosspoint/pomodoro_stats.json") ? 1 : 0;
+    state = failedCount == 0 ? SUCCESS : FAILED;
+    requestUpdate();
+    return;
+  }
+
+  if (cacheType == ClearCacheType::Flashcards) {
     clearedCount = 0;
     failedCount = 0;
     if (Storage.exists("/.crosspoint/flashcards")) {

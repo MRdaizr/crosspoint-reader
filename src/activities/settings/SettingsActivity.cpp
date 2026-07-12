@@ -62,6 +62,8 @@ void SettingsActivity::rebuildSettingsLists() {
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_FLASHCARD_CACHE, SettingAction::ClearFlashcardCache));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_STATS_CACHE, SettingAction::ClearReadingStatsCache));
+  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_POMODORO_CACHE, SettingAction::ClearPomodoroCache));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
   readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
@@ -244,7 +246,13 @@ void SettingsActivity::toggleCurrentSetting() {
         startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::ClearFlashcardCache:
-        startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput, true), resultHandler);
+        startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput, ClearCacheType::Flashcards), resultHandler);
+        break;
+      case SettingAction::ClearReadingStatsCache:
+        startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput, ClearCacheType::ReadingStats), resultHandler);
+        break;
+      case SettingAction::ClearPomodoroCache:
+        startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput, ClearCacheType::PomodoroStats), resultHandler);
         break;
       case SettingAction::SdFirmwareUpdate:
         startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput), resultHandler);

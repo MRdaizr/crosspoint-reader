@@ -20,6 +20,8 @@ enum class SettingAction {
   Network,
   ClearCache,
   ClearFlashcardCache,
+  ClearReadingStatsCache,
+  ClearPomodoroCache,
   SdFirmwareUpdate,
   Language,
 };

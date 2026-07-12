@@ -70,6 +70,14 @@ bool ReadingStatsStore::saveToFile() const {
   return Storage.writeFile(STATS_FILE_JSON, json);
 }
 
+void ReadingStatsStore::clear() {
+  entries.clear();
+  loaded = true;
+  if (Storage.exists(STATS_FILE_JSON) && !Storage.remove(STATS_FILE_JSON)) {
+    LOG_ERR("RST", "Failed to remove reading stats");
+  }
+}
+
 void ReadingStatsStore::addSession(const std::string& path, const std::string& title, uint32_t seconds) {
   if (path.empty() || seconds == 0) return;
   loadFromFile();

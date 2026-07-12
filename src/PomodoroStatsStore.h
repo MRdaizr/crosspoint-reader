@@ -23,6 +23,7 @@ class PomodoroStatsStore {
 
   void loadFromFile();
   bool saveToFile() const;
+  void clear();
   void recordCompletedFocus(uint32_t seconds);
   bool hasValidDate() const;
   uint32_t getTotalCompletedFocuses();

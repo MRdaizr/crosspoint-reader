@@ -4,11 +4,13 @@
 
 #include "activities/Activity.h"
 
+enum class ClearCacheType { Reading, Flashcards, ReadingStats, PomodoroStats };
+
 class ClearCacheActivity final : public Activity {
  public:
-  explicit ClearCacheActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, bool flashcardCache = false)
-      : Activity(flashcardCache ? "ClearFlashcardCache" : "ClearCache", renderer, mappedInput),
-        flashcardCache(flashcardCache) {}
+  explicit ClearCacheActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                              ClearCacheType cacheType = ClearCacheType::Reading)
+      : Activity("ClearCache", renderer, mappedInput), cacheType(cacheType) {}
 
   void onEnter() override;
   void onExit() override;
@@ -25,6 +27,6 @@ class ClearCacheActivity final : public Activity {
 
   int clearedCount = 0;
   int failedCount = 0;
-  bool flashcardCache = false;
+  ClearCacheType cacheType;
   void clearCache();
 };
