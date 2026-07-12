@@ -6,6 +6,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -221,11 +222,12 @@ int LyraTheme::getListPageItems(int contentHeight, bool hasSubtitle) const {
   return contentHeight / rowHeight;
 }
 
-int LyraTheme::getListRowStep(bool hasSubtitle) const {
-  return hasSubtitle ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
+ListRowLayout LyraTheme::getListRowLayout(const GfxRenderer& renderer, int contentHeight, int titleFontId,
+                                          bool hasSubtitle) const {
+  const int rowHeight = hasSubtitle ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
+  const int fontId = titleFontId != 0 ? titleFontId : UI_10_FONT_ID;
+  return {rowHeight, rowHeight, 7, renderer.getLineHeight(fontId), std::max(1, contentHeight / rowHeight)};
 }
-
-int LyraTheme::getListTitleOffsetY(const GfxRenderer&, int, int) const { return 7; }
 
 void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
                          const std::function<std::string(int index)>& rowTitle,

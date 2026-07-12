@@ -51,21 +51,15 @@ int RoundedRaffTheme::subtitleFontId() const { return SMALL_FONT_ID; }
 
 int RoundedRaffTheme::guideFontId() const { return SMALL_FONT_ID; }
 
-int RoundedRaffTheme::getListPageItems(int contentHeight, bool hasSubtitle) const {
-  const int rowHeight = hasSubtitle ? RoundedRaffMetrics::values.listWithSubtitleRowHeight
-                                    : RoundedRaffMetrics::values.listRowHeight;
-  return std::max(1, contentHeight / (rowHeight + kSelectableRowGap));
-}
-
-int RoundedRaffTheme::getListRowStep(bool hasSubtitle) const {
-  const int rowHeight = hasSubtitle ? RoundedRaffMetrics::values.listWithSubtitleRowHeight
-                                    : RoundedRaffMetrics::values.listRowHeight;
-  return rowHeight + kSelectableRowGap;
-}
-
-int RoundedRaffTheme::getListTitleOffsetY(const GfxRenderer& renderer, int rowHeight, int titleFontId) const {
+ListRowLayout RoundedRaffTheme::getListRowLayout(const GfxRenderer& renderer, int contentHeight, int titleFontId,
+                                                 bool hasSubtitle) const {
   const int fontId = titleFontId != 0 ? titleFontId : this->titleFontId();
-  return (rowHeight - renderer.getLineHeight(fontId)) / 2;
+  const int titleLineHeight = renderer.getLineHeight(fontId);
+  const int rowHeight = hasSubtitle ? 10 + titleLineHeight + 4 + renderer.getLineHeight(subtitleFontId()) + 10
+                                    : RoundedRaffMetrics::values.listRowHeight;
+  const int titleOffsetY = hasSubtitle ? 10 : (rowHeight - titleLineHeight) / 2;
+  const int rowStep = rowHeight + kSelectableRowGap;
+  return {rowHeight, rowStep, titleOffsetY, titleLineHeight, std::max(1, contentHeight / rowStep)};
 }
 
 void RoundedRaffTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title,

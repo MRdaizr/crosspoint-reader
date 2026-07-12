@@ -1458,6 +1458,7 @@ void CrossPointWebServer::handleGetTodos() const {
     JsonObject entry = jsonItems.add<JsonObject>();
     entry["id"] = item.id;
     entry["title"] = item.title;
+    entry["scheduledAt"] = item.scheduledAt;
     entry["completed"] = item.completed;
   }
   String json;
@@ -1467,15 +1468,21 @@ void CrossPointWebServer::handleGetTodos() const {
 
 void CrossPointWebServer::handlePostTodo() {
   JsonDocument doc;
-  if (deserializeJson(doc, server->arg("plain")) || !doc["title"].is<const char*>()) {
+  if (deserializeJson(doc, server->arg("plain")) || !doc["title"].is<const char*>() ||
+      !doc["scheduledAt"].is<const char*>()) {
     server->send(400, "application/json", "{\"error\":\"Invalid to-do item\"}");
     return;
   }
 
   String title = doc["title"].as<String>();
+  const std::string scheduledAt = doc["scheduledAt"].as<std::string>();
   title.trim();
   if (title.isEmpty() || title.length() > TodoStore::MAX_TITLE_BYTES) {
     server->send(400, "application/json", "{\"error\":\"Title must contain 1-120 bytes\"}");
+    return;
+  }
+  if (!TodoStore::isValidScheduledAt(scheduledAt)) {
+    server->send(400, "application/json", "{\"error\":\"Enter a valid date and time\"}");
     return;
   }
 
@@ -1490,7 +1497,7 @@ void CrossPointWebServer::handlePostTodo() {
   }
 
   TodoItem item;
-  if (!TODO_STORE.add(title.c_str(), item)) {
+  if (!TODO_STORE.add(title.c_str(), scheduledAt, item)) {
     server->send(500, "application/json", "{\"error\":\"Could not save to-do item\"}");
     return;
   }

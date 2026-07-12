@@ -10,6 +10,15 @@
 #include "fontIds.h"
 #include "util/DynamicFont.h"
 
+namespace {
+std::string scheduledAtText(const TodoItem& item) {
+  if (item.scheduledAt.empty()) return tr(STR_NOT_SET);
+  std::string value = item.scheduledAt;
+  value[10] = ' ';
+  return value;
+}
+}  // namespace
+
 bool TodoActivity::reload(const uint32_t selectedId) {
   loadFailed = !TODO_STORE.getItems(items);
   if (loadFailed) {
@@ -85,23 +94,20 @@ void TodoActivity::render(RenderLock&&) {
     }
     const int fontId = DynamicFont::fontForCjkText(renderer, allTitles.c_str(), 0);
     DynamicFont::prewarmIfSdFont(renderer, fontId, allTitles);
-    const int pageItems = std::max(1, GUI.getListPageItems(contentHeight, false));
-    const int rowHeight = metrics.listRowHeight;
-    const int rowStep = GUI.getListRowStep(false);
-    const int titleFontId = fontId != 0 ? fontId : UI_10_FONT_ID;
-    const int titleOffsetY = GUI.getListTitleOffsetY(renderer, rowHeight, titleFontId);
-    const int first = selectedIndex / pageItems * pageItems;
+    const ListRowLayout layout = GUI.getListRowLayout(renderer, contentHeight, fontId, true);
+    const int first = selectedIndex / layout.pageItems * layout.pageItems;
 
     GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, static_cast<int>(items.size()), selectedIndex,
-                 [this](int index) { return std::string("    ") + items[index].title; }, nullptr, nullptr, nullptr,
-                 false, [this](int index) { return items[index].completed; }, fontId);
+                 [this](int index) { return std::string("    ") + items[index].title; },
+                 [this](int index) { return scheduledAtText(items[index]); }, nullptr, nullptr, false,
+                 [this](int index) { return items[index].completed; }, fontId);
 
-    for (int index = first; index < static_cast<int>(items.size()) && index < first + pageItems; ++index) {
-      const int rowY = contentTop + (index - first) * rowStep;
+    for (int index = first; index < static_cast<int>(items.size()) && index < first + layout.pageItems; ++index) {
+      const int rowY = contentTop + (index - first) * layout.rowStep;
       const bool selected = index == selectedIndex;
       const int boxSize = 13;
       const int boxX = metrics.contentSidePadding;
-      const int boxY = rowY + titleOffsetY + (renderer.getLineHeight(titleFontId) - boxSize) / 2;
+      const int boxY = rowY + layout.titleOffsetY + (layout.titleLineHeight - boxSize) / 2;
       if (items[index].completed) renderer.fillRect(boxX, boxY, boxSize, boxSize, !selected);
       else renderer.drawRect(boxX, boxY, boxSize, boxSize, !selected);
     }

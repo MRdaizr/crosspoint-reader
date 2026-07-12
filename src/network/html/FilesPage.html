@@ -145,7 +145,8 @@
       gap: 10px;
       margin-top: 14px;
     }
-    .todo-add-input {
+    .todo-add-input,
+    .todo-time-input {
       flex: 1;
       min-width: 0;
       padding: 9px 10px;
@@ -155,6 +156,7 @@
       background: var(--card-bg);
       font: inherit;
     }
+    .todo-time-input { flex: 0 1 190px; }
     .todo-add-btn {
       background: var(--accent-color);
       color: white;
@@ -179,7 +181,9 @@
     }
     .todo-item:last-child { border-bottom: 0; }
     .todo-item input { width: 18px; height: 18px; margin: 0; flex: 0 0 auto; }
-    .todo-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .todo-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .todo-title { overflow-wrap: anywhere; }
+    .todo-time { color: var(--label-color); font-size: 0.82em; }
     .todo-item.completed .todo-title { color: var(--label-color); text-decoration: line-through; }
     .todo-delete-btn {
       border: 0;
@@ -1315,6 +1319,8 @@
       .action-buttons {
         gap: 6px;
       }
+      .todo-add-row { flex-wrap: wrap; }
+      .todo-time-input { flex: 1 1 180px; }
       .action-btn {
         padding: 8px 10px;
         font-size: 0.85em;
@@ -1579,6 +1585,7 @@
   <h2>To-do List</h2>
   <div class="todo-add-row">
     <input class="todo-add-input" id="todoTitle" type="text" maxlength="120" placeholder="Add a task" aria-label="To-do title" onkeydown="if (event.key === 'Enter') addTodo()">
+    <input class="todo-time-input" id="todoScheduledAt" type="datetime-local" required aria-label="To-do time" onkeydown="if (event.key === 'Enter') addTodo()">
     <button class="todo-add-btn" onclick="addTodo()">Add</button>
   </div>
   <div id="todoList"><p class="todo-empty">Loading to-do items...</p></div>
@@ -2102,7 +2109,8 @@
       const items = result.items.map(item => {
         const checked = item.completed ? ' checked' : '';
         const completed = item.completed ? ' completed' : '';
-        return `<li class="todo-item${completed}"><input type="checkbox"${checked} onchange="toggleTodo(${item.id})" aria-label="Toggle task"><span class="todo-title">${escapeHtml(item.title)}</span><button class="todo-delete-btn" onclick="deleteTodo(${item.id})" title="Delete task" aria-label="Delete task">🗑️</button></li>`;
+        const scheduledAt = item.scheduledAt ? item.scheduledAt.replace('T', ' ') : 'Not set';
+        return `<li class="todo-item${completed}"><input type="checkbox"${checked} onchange="toggleTodo(${item.id})" aria-label="Toggle task"><span class="todo-text"><span class="todo-title">${escapeHtml(item.title)}</span><span class="todo-time">${escapeHtml(scheduledAt)}</span></span><button class="todo-delete-btn" onclick="deleteTodo(${item.id})" title="Delete task" aria-label="Delete task">🗑️</button></li>`;
       }).join('');
       container.innerHTML = `<ul class="todo-list">${items}</ul>`;
     } catch (error) {
@@ -2112,14 +2120,20 @@
 
   async function addTodo() {
     const input = document.getElementById('todoTitle');
+    const timeInput = document.getElementById('todoScheduledAt');
     const title = input.value.trim();
     if (!title) {
       input.focus();
       return;
     }
+    if (!timeInput.value) {
+      timeInput.focus();
+      return;
+    }
     try {
-      await todoRequest('/api/todos', {title});
+      await todoRequest('/api/todos', {title, scheduledAt: timeInput.value});
       input.value = '';
+      timeInput.value = '';
       await loadTodos();
     } catch (error) {
       alert(error.message);
