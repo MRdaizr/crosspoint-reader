@@ -30,5 +30,6 @@ class NtpClockActivity final : public Activity {
   void onExit() override;
   void loop() override;
   bool skipLoopDelay() override { return true; }
+  bool preventAutoSleep() override { return true; }
   void render(RenderLock&&) override;
 };

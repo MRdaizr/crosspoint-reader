@@ -5,6 +5,7 @@
 #include <I18n.h>
 
 #include "MappedInputManager.h"
+#include "BigClock.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -27,7 +28,8 @@ void PomodoroActivity::loop() {
     requestUpdate();
     return;
   }
-  if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Left) ||
+      mappedInput.wasReleased(MappedInputManager::Button::Up)) {
     remainingMs = durationMs;
     running = false;
     requestUpdate();
@@ -57,10 +59,9 @@ void PomodoroActivity::render(RenderLock&&) {
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_POMODORO));
 
   const unsigned long totalSeconds = (remainingMs + 999) / 1000;
-  char timeText[16];
-  snprintf(timeText, sizeof(timeText), "%02lu:%02lu", totalSeconds / 60, totalSeconds % 60);
-  renderer.drawCenteredText(UI_12_FONT_ID, pageHeight / 2 - 15, timeText, true, EpdFontFamily::BOLD);
-  renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 25,
+  BigClock::drawTime(renderer, pageWidth, pageHeight, static_cast<int>(totalSeconds / 60),
+                     static_cast<int>(totalSeconds % 60));
+  renderer.drawCenteredText(UI_10_FONT_ID, BigClock::top(pageHeight) + BigClock::DIGIT_HEIGHT + 32,
                             running ? tr(STR_POMODORO_RUNNING) : tr(STR_POMODORO_PAUSED));
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_START_PAUSE), tr(STR_RESET), "");
