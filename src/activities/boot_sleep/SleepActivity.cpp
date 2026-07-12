@@ -107,8 +107,10 @@ void SleepActivity::renderCustomSleepScreen() const {
         continue;
       }
       Bitmap bitmap(dirFile);
-      if (bitmap.parseHeaders() != BmpReaderError::Ok) {
-        LOG_DBG("SLP", "Skipping invalid BMP file: %s", name);
+      const BmpReaderError parseResult = bitmap.parseHeaders();
+      if (parseResult != BmpReaderError::Ok) {
+        LOG_DBG("SLP", "Skipping invalid BMP file: %s (%u bytes, %s)", name,
+                static_cast<unsigned>(dirFile.fileSize()), Bitmap::errorToString(parseResult));
         dirFile.close();
         continue;
       }
@@ -134,12 +136,15 @@ void SleepActivity::renderCustomSleepScreen() const {
         LOG_DBG("SLP", "Randomly loading: %s/%s", sleepDir, files[randomFileIndex].c_str());
         delay(100);
         Bitmap bitmap(randFile, true);
-        if (bitmap.parseHeaders() == BmpReaderError::Ok) {
+        const BmpReaderError parseResult = bitmap.parseHeaders();
+        if (parseResult == BmpReaderError::Ok) {
           renderBitmapSleepScreen(bitmap);
           randFile.close();
           dir.close();
           return;
         }
+        LOG_DBG("SLP", "Selected BMP became invalid: %s (%u bytes, %s)", filename.c_str(),
+                static_cast<unsigned>(randFile.fileSize()), Bitmap::errorToString(parseResult));
         randFile.close();
       }
     }
