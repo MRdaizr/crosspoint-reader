@@ -2,6 +2,7 @@
 
 #include <Txt.h>
 
+#include <atomic>
 #include <vector>
 
 #include "CrossPointSettings.h"
@@ -9,6 +10,14 @@
 #include "activities/reader/TxtReaderMenuActivity.h"
 
 class TxtReaderActivity final : public Activity {
+  struct PageLayout {
+    int page = -1;
+    size_t nextOffset = 0;
+    std::vector<std::string> lines;
+  };
+
+  enum class NextPagePrepareStage : uint8_t { NONE, LAYOUT, FONT };
+
   std::unique_ptr<Txt> txt;
 
   int currentPage = 0;
@@ -23,13 +32,21 @@ class TxtReaderActivity final : public Activity {
   bool initialized = false;
   bool pendingScreenshot = false;
   bool pageIndexComplete = false;
-  bool pendingForwardPageTurn = false;
+  // Written by the input task and consumed by the render task. Coalescing to
+  // one request prevents a long background layout from advancing page state
+  // more than once before the display catches up.
+  std::atomic<int8_t> pendingPageTurn{0};
   bool indexBuildOnlyRequested = false;
   bool indexProgressRefreshPending = false;
   bool nextPagePrepareRequested = false;
+  NextPagePrepareStage nextPagePrepareStage = NextPagePrepareStage::NONE;
+  int nextPagePrepareTarget = -1;
+  size_t nextPagePrepareNextOffset = 0;
+  std::vector<std::string> nextPagePrepareLines;
   int preparedPage = -1;
   size_t preparedPageNextOffset = 0;
   std::vector<std::string> preparedPageLines;
+  std::vector<PageLayout> pageLayoutCache;
   int pendingResumePageTarget = -1;
   int pendingPercentTarget = -1;
   uint8_t indexProgressPercent = 100;
@@ -67,6 +84,12 @@ class TxtReaderActivity final : public Activity {
   void removePartialPageIndexCache() const;
   void buildPageIndexSlice();
   void prepareNextPage();
+  void cancelNextPagePreparation();
+  bool applyPendingPageTurn();
+  void scheduleBackgroundWork();
+  const PageLayout* findPageLayout(int page) const;
+  void cachePageLayout(int page, size_t nextOffset, const std::vector<std::string>& lines);
+  void clearPageLayouts();
   void updateIndexProgress(bool requestRefresh);
   void saveProgress();
   void loadProgress();

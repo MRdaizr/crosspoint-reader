@@ -597,13 +597,8 @@ void loop() {
     powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
-    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
-      // If we've been inactive for a while, increase the delay to save power
-      powerManager.setPowerSaving(true);  // Lower CPU frequency after extended inactivity
-      delay(50);
-    } else {
-      // Short delay to prevent tight loop while still being responsive
-      delay(10);
-    }
+    // Keep the CPU at normal frequency while awake. Deep sleep remains the
+    // power-saving mechanism selected by the user's auto-sleep timeout.
+    delay(10);
   }
 }

@@ -26,7 +26,13 @@
 #include "util/ScreenshotUtil.h"
 
 namespace {
-constexpr size_t CHUNK_SIZE = 4 * 1024;  // Enough for one page without priming unrelated glyphs
+// Most pages in a CJK TXT are below 1 KiB. Start there and only expand when a
+// page really crosses the boundary; priming a fixed 4 KiB made every turn read
+// metrics for hundreds of characters that would not appear on screen.
+constexpr size_t INITIAL_LAYOUT_CHUNK_SIZE = 1024;
+constexpr size_t LAYOUT_CHUNK_GROWTH = 1024;
+constexpr size_t MAX_LAYOUT_CHUNK_SIZE = 4 * 1024;
+constexpr size_t PAGE_LAYOUT_CACHE_SIZE = 3;
 // Cache file magic and version
 constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
 constexpr uint8_t CACHE_VERSION = 5;          // Increment when page offset calculation changes
@@ -105,6 +111,8 @@ void TxtReaderActivity::onEnter() {
 void TxtReaderActivity::onExit() {
   Activity::onExit();
 
+  pendingPageTurn.store(0, std::memory_order_release);
+
   if (txt && initialized) {
     if (!pageIndexComplete) savePartialPageIndexCache();
     saveProgress();
@@ -115,6 +123,7 @@ void TxtReaderActivity::onExit() {
 
   pageOffsets.clear();
   currentPageLines.clear();
+  clearPageLayouts();
   if (txt && readingSessionStartMs != 0UL) {
     READING_STATS.addSession(txt->getPath(), txt->getTitle(), (millis() - readingSessionStartMs) / 1000UL);
     readingSessionStartMs = 0UL;
@@ -155,44 +164,13 @@ void TxtReaderActivity::loop() {
 
   const auto [prevTriggered, nextTriggered, fromTilt] = ReaderUtils::detectPageTurn(mappedInput);
   if (!prevTriggered && !nextTriggered) {
-    const int nextPage = currentPage + 1;
-    const bool canPrepareNext = initialized && preparedPage != nextPage &&
-                                (nextPage < static_cast<int>(pageOffsets.size()) || !pageIndexComplete);
-    if (canPrepareNext && !nextPagePrepareRequested && !RenderLock::peek() && !mappedInput.wasAnyPressed() &&
-        !mappedInput.wasAnyReleased()) {
-      nextPagePrepareRequested = true;
-      requestUpdate();
-    } else if (initialized && !pageIndexComplete && !RenderLock::peek() && !mappedInput.wasAnyPressed() &&
-               !mappedInput.wasAnyReleased() && millis() - lastIndexBuildTick >= INDEX_BUILD_TICK_MS) {
-      lastIndexBuildTick = millis() - INDEX_BUILD_TICK_MS;
-      indexBuildOnlyRequested = true;
-      requestUpdate();
-    }
     return;
   }
 
-  // A user page turn always needs a full page render, never a background-only slice.
-  indexBuildOnlyRequested = false;
-  nextPagePrepareRequested = false;
-
-  if (prevTriggered && currentPage > 0) {
-    currentPage--;
-    requestUpdate();
-  } else if (nextTriggered) {
-    if (currentPage + 1 >= static_cast<int>(pageOffsets.size()) && !pageIndexComplete) {
-      pendingForwardPageTurn = true;
-      lastIndexBuildTick = millis() - INDEX_BUILD_TICK_MS;
-      requestUpdate();
-      return;
-    }
-    updateTotalPages();
-    if (currentPage < static_cast<int>(pageOffsets.size()) - 1) {
-      currentPage++;
-      requestUpdate();
-    } else if (pageIndexComplete) {
-      onGoHome();
-    }
-  }
+  // The render task exclusively owns page/index/preload state. Keep only one
+  // intent while it is busy so a delayed display can never skip a page.
+  pendingPageTurn.store(prevTriggered ? -1 : 1, std::memory_order_release);
+  requestUpdate();
 }
 
 void TxtReaderActivity::applyOrientation(const uint8_t orientation) {
@@ -207,8 +185,12 @@ void TxtReaderActivity::applyOrientation(const uint8_t orientation) {
   pageIndexComplete = false;
   pendingResumePageTarget = -1;
   pendingPercentTarget = -1;
+  pendingPageTurn.store(0, std::memory_order_release);
+  cancelNextPagePreparation();
   preparedPage = -1;
+  preparedPageNextOffset = 0;
   preparedPageLines.clear();
+  clearPageLayouts();
   removePartialPageIndexCache();
   pageOffsets.clear();
   currentPageLines.clear();
@@ -405,32 +387,157 @@ void TxtReaderActivity::buildPageIndexSlice() {
 }
 
 void TxtReaderActivity::prepareNextPage() {
-  const int targetPage = currentPage + 1;
-  if (targetPage < 0) return;
-  if (targetPage >= static_cast<int>(pageOffsets.size()) && !pageIndexComplete) {
+  if (nextPagePrepareStage == NextPagePrepareStage::NONE) {
+    nextPagePrepareStage = NextPagePrepareStage::LAYOUT;
+    nextPagePrepareTarget = currentPage + 1;
+  }
+  if (nextPagePrepareTarget != currentPage + 1 || nextPagePrepareTarget < 0) {
+    cancelNextPagePreparation();
+    return;
+  }
+
+  if (nextPagePrepareStage == NextPagePrepareStage::LAYOUT) {
+    const unsigned long startMs = millis();
+    if (nextPagePrepareTarget >= static_cast<int>(pageOffsets.size()) && !pageIndexComplete) {
+      indexNextPage();
+      updateIndexProgress(true);
+    }
+    if (nextPagePrepareTarget >= static_cast<int>(pageOffsets.size())) {
+      cancelNextPagePreparation();
+      return;
+    }
+
+    if (const auto* cached = findPageLayout(nextPagePrepareTarget)) {
+      nextPagePrepareLines = cached->lines;
+      nextPagePrepareNextOffset = cached->nextOffset;
+    } else if (!loadPageAtOffset(pageOffsets[nextPagePrepareTarget], nextPagePrepareLines,
+                                 nextPagePrepareNextOffset)) {
+      cancelNextPagePreparation();
+      return;
+    } else {
+      cachePageLayout(nextPagePrepareTarget, nextPagePrepareNextOffset, nextPagePrepareLines);
+    }
+
+    LOG_DBG("TRS", "Prepared page %d layout=%lums lines=%u", nextPagePrepareTarget, millis() - startMs,
+            static_cast<unsigned>(nextPagePrepareLines.size()));
+    if (auto* cache = renderer.getFontCacheManager()) {
+      cache->clearCache();
+      cache->resetStats();
+    }
+    nextPagePrepareStage = NextPagePrepareStage::FONT;
+    requestUpdate();
+    return;
+  }
+
+  // SdCardFont replaces its page glyph table on every prewarm call, so this
+  // must remain one full-page call rather than a line-by-line accumulation.
+  // Layout already ran in the preceding update, keeping this phase bounded to
+  // the bitmap reads required for the actual next page.
+  const unsigned long startMs = millis();
+  if (auto* cache = renderer.getFontCacheManager()) {
+    std::string pageText;
+    for (const auto& line : nextPagePrepareLines) {
+      pageText += line;
+      pageText.push_back('\n');
+    }
+    cache->prewarmCache(cachedFontId, pageText.c_str(), 0x01);
+    LOG_DBG("TRS", "Prepared page %d font=%lums", nextPagePrepareTarget, millis() - startMs);
+    cache->logStats("TXT-next");
+  }
+
+  preparedPageLines = std::move(nextPagePrepareLines);
+  preparedPageNextOffset = nextPagePrepareNextOffset;
+  preparedPage = nextPagePrepareTarget;
+  LOG_DBG("TRS", "Prepared page %d font ready", preparedPage);
+  nextPagePrepareStage = NextPagePrepareStage::NONE;
+  nextPagePrepareTarget = -1;
+  scheduleBackgroundWork();
+}
+
+void TxtReaderActivity::cancelNextPagePreparation() {
+  nextPagePrepareRequested = false;
+  nextPagePrepareStage = NextPagePrepareStage::NONE;
+  nextPagePrepareTarget = -1;
+  nextPagePrepareNextOffset = 0;
+  nextPagePrepareLines.clear();
+}
+
+bool TxtReaderActivity::applyPendingPageTurn() {
+  const int8_t direction = pendingPageTurn.exchange(0, std::memory_order_acq_rel);
+  if (direction == 0) return false;
+
+  // All of these fields are render-task owned. Cancel only here, never from
+  // the input task, so a layout cannot observe a half-cleared target page.
+  indexBuildOnlyRequested = false;
+  cancelNextPagePreparation();
+
+  if (direction < 0) {
+    if (currentPage > 0) --currentPage;
+    return true;
+  }
+
+  if (currentPage + 1 >= static_cast<int>(pageOffsets.size()) && !pageIndexComplete) {
+    lastIndexBuildTick = millis() - INDEX_BUILD_TICK_MS;
     indexNextPage();
     updateIndexProgress(true);
   }
-  if (targetPage >= static_cast<int>(pageOffsets.size())) return;
-
-  std::vector<std::string> lines;
-  size_t nextOffset = pageOffsets[targetPage];
-  if (!loadPageAtOffset(pageOffsets[targetPage], lines, nextOffset)) return;
-
-  std::string pageText;
-  for (const auto& line : lines) {
-    pageText += line;
-    pageText.push_back('\n');
+  updateTotalPages();
+  if (currentPage < static_cast<int>(pageOffsets.size()) - 1) {
+    ++currentPage;
   }
-  if (auto* cache = renderer.getFontCacheManager()) {
-    cache->clearCache();
-    cache->resetStats();
-    cache->prewarmCache(cachedFontId, pageText.c_str(), 0x01);
-  }
-  preparedPageLines = std::move(lines);
-  preparedPageNextOffset = nextOffset;
-  preparedPage = targetPage;
+  return true;
 }
+
+void TxtReaderActivity::scheduleBackgroundWork() {
+  if (!initialized || pendingPageTurn.load(std::memory_order_acquire) != 0) return;
+
+  const int nextPage = currentPage + 1;
+  const bool canPrepareNext = preparedPage != nextPage &&
+                              (nextPage < static_cast<int>(pageOffsets.size()) || !pageIndexComplete);
+  if (canPrepareNext && nextPagePrepareStage == NextPagePrepareStage::NONE && !nextPagePrepareRequested) {
+    nextPagePrepareRequested = true;
+    requestUpdate();
+    return;
+  }
+
+  if (!pageIndexComplete) {
+    indexBuildOnlyRequested = true;
+    requestUpdate();
+  }
+}
+
+const TxtReaderActivity::PageLayout* TxtReaderActivity::findPageLayout(const int page) const {
+  for (const auto& cached : pageLayoutCache) {
+    if (cached.page == page) return &cached;
+  }
+  return nullptr;
+}
+
+void TxtReaderActivity::cachePageLayout(const int page, const size_t nextOffset, const std::vector<std::string>& lines) {
+  for (auto& cached : pageLayoutCache) {
+    if (cached.page == page) {
+      cached.nextOffset = nextOffset;
+      cached.lines = lines;
+      return;
+    }
+  }
+  pageLayoutCache.push_back({page, nextOffset, lines});
+  while (pageLayoutCache.size() > PAGE_LAYOUT_CACHE_SIZE) {
+    size_t evict = 0;
+    int greatestDistance = -1;
+    for (size_t i = 0; i < pageLayoutCache.size(); ++i) {
+      const int distance = pageLayoutCache[i].page > currentPage ? pageLayoutCache[i].page - currentPage
+                                                                   : currentPage - pageLayoutCache[i].page;
+      if (distance > greatestDistance) {
+        greatestDistance = distance;
+        evict = i;
+      }
+    }
+    pageLayoutCache.erase(pageLayoutCache.begin() + evict);
+  }
+}
+
+void TxtReaderActivity::clearPageLayouts() { pageLayoutCache.clear(); }
 
 void TxtReaderActivity::updateIndexProgress(const bool requestRefresh) {
   const size_t fileSize = txt ? txt->getFileSize() : 0;
@@ -470,8 +577,12 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
     return false;
   }
 
-  // Read a chunk from file
-  size_t chunkSize = std::min(CHUNK_SIZE, fileSize - offset);
+  // Begin with the amount a normal page needs. A long paragraph can request a
+  // larger retry below, but short pages never pay to inspect an unrelated 4 KiB.
+  size_t chunkSize = std::min(INITIAL_LAYOUT_CHUNK_SIZE, fileSize - offset);
+  const size_t maxChunkSize = std::min(MAX_LAYOUT_CHUNK_SIZE, fileSize - offset);
+  while (true) {
+    outLines.clear();
   auto* buffer = static_cast<uint8_t*>(malloc(chunkSize + 1));
   if (!buffer) {
     LOG_ERR("TRS", "Failed to allocate %zu bytes", chunkSize);
@@ -582,7 +693,16 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
 
   free(buffer);
 
-  return !outLines.empty();
+    // Do not make a page break simply because the initial read ended in the
+    // middle of a source line. Retry with a little more text only when this
+    // attempt did not fill the visual page and the file still has content.
+    if (outLines.size() < static_cast<size_t>(linesPerPage) && nextOffset < fileSize && chunkSize < maxChunkSize) {
+      chunkSize = std::min(maxChunkSize, chunkSize + LAYOUT_CHUNK_GROWTH);
+      continue;
+    }
+
+    return !outLines.empty();
+  }
 }
 
 void TxtReaderActivity::render(RenderLock&&) {
@@ -595,7 +715,9 @@ void TxtReaderActivity::render(RenderLock&&) {
     initializeReader();
   }
 
-  if (nextPagePrepareRequested) {
+  const bool pageTurnApplied = applyPendingPageTurn();
+
+  if (!pageTurnApplied && (nextPagePrepareRequested || nextPagePrepareStage != NextPagePrepareStage::NONE)) {
     nextPagePrepareRequested = false;
     prepareNextPage();
     return;
@@ -606,21 +728,18 @@ void TxtReaderActivity::render(RenderLock&&) {
 
   // Page offsets are shared with input handling. Build one slice only while
   // rendering owns the lock, so page turns never race a vector reallocation.
-  if (!pageIndexComplete && (buildOnly || pendingForwardPageTurn) &&
-      millis() - lastIndexBuildTick >= INDEX_BUILD_TICK_MS) {
+  if (!pageIndexComplete && buildOnly && millis() - lastIndexBuildTick >= INDEX_BUILD_TICK_MS) {
     lastIndexBuildTick = millis();
     buildPageIndexSlice();
   }
 
   // Normal background slices should not redraw the whole e-paper page. A
   // redraw is reserved for the 5% progress checkpoints or a user action.
-  if (buildOnly && !indexProgressRefreshPending) return;
-  indexProgressRefreshPending = false;
-
-  if (pendingForwardPageTurn && currentPage < static_cast<int>(pageOffsets.size()) - 1) {
-    ++currentPage;
-    pendingForwardPageTurn = false;
+  if (buildOnly && !indexProgressRefreshPending) {
+    scheduleBackgroundWork();
+    return;
   }
+  indexProgressRefreshPending = false;
 
   ensurePageIndexed(currentPage);
 
@@ -639,12 +758,22 @@ void TxtReaderActivity::render(RenderLock&&) {
   size_t offset = pageOffsets[currentPage];
   size_t nextOffset = offset;
   const bool usePreparedPage = preparedPage == currentPage;
+  const unsigned long layoutStartMs = millis();
   if (usePreparedPage) {
-    currentPageLines = std::move(preparedPageLines);
+    currentPageLines = preparedPageLines;
     nextOffset = preparedPageNextOffset;
+  } else if (const auto* cached = findPageLayout(currentPage)) {
+    currentPageLines = cached->lines;
+    nextOffset = cached->nextOffset;
   } else {
     currentPageLines.clear();
     loadPageAtOffset(offset, currentPageLines, nextOffset);
+    if (!currentPageLines.empty()) cachePageLayout(currentPage, nextOffset, currentPageLines);
+  }
+  const unsigned long layoutMs = millis() - layoutStartMs;
+  if (!usePreparedPage && layoutMs >= 50) {
+    LOG_DBG("TRS", "Page %d layout=%lums lines=%u", currentPage, layoutMs,
+            static_cast<unsigned>(currentPageLines.size()));
   }
   if (!pageIndexComplete && currentPage + 1 == static_cast<int>(pageOffsets.size())) {
     if (nextOffset > offset && nextOffset < txt->getFileSize()) {
@@ -662,6 +791,7 @@ void TxtReaderActivity::render(RenderLock&&) {
   renderer.clearScreen();
   renderPage(usePreparedPage);
   preparedPage = -1;
+  preparedPageNextOffset = 0;
   preparedPageLines.clear();
 
   if (!pageIndexComplete) savePartialPageIndexCache();
@@ -671,6 +801,8 @@ void TxtReaderActivity::render(RenderLock&&) {
     pendingScreenshot = false;
     ScreenshotUtil::takeScreenshot(renderer);
   }
+
+  scheduleBackgroundWork();
 }
 
 void TxtReaderActivity::renderPage(const bool fontPrewarmed) {
@@ -727,15 +859,22 @@ void TxtReaderActivity::renderPage(const bool fontPrewarmed) {
   };
 
   if (fontPrewarmed) {
+    LOG_DBG("TRS", "Page %d uses prepared font cache", currentPage);
     drawAndDisplay();
     return;
   }
 
   // Font prewarm: scan pass accumulates text, then prewarm, then real render.
   auto* fcm = renderer.getFontCacheManager();
+  const unsigned long prewarmStartMs = millis();
   auto scope = fcm->createPrewarmScope();
   renderLines();
   scope.endScanAndPrewarm();
+  const unsigned long prewarmMs = millis() - prewarmStartMs;
+  if (prewarmMs >= 50) {
+    LOG_DBG("TRS", "Page %d font prewarm=%lums", currentPage, prewarmMs);
+    fcm->logStats("TXT-render");
+  }
   drawAndDisplay();
   // scope destructor clears font cache via FontCacheManager.
 }
@@ -761,6 +900,8 @@ void TxtReaderActivity::saveProgress() {
   memcpy(data + 8, &offset, sizeof(offset));
   if (!ProgressFile::writeAtomic(txt->getCachePath(), data, sizeof(data))) {
     LOG_ERR("TRS", "Failed to save progress: page %d", currentPage);
+  } else {
+    LOG_DBG("TRS", "Saved progress: page=%u offset=%u", static_cast<unsigned>(page), static_cast<unsigned>(offset));
   }
 }
 
