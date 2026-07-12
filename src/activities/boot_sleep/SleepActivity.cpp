@@ -163,7 +163,7 @@ void SleepActivity::renderDefaultSleepScreen() const {
     renderer.invertScreen();
   }
 
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  renderer.displayBuffer(HalDisplay::FULL_REFRESH);
 }
 
 void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
@@ -222,10 +222,10 @@ void SleepActivity::renderBitmapSleepScreen(const Bitmap& bitmap) const {
     // OEM grayscale pipeline base: on X3 this displays the frame with the
     // dedicated "AA-pre-BW(mid)" differential waveform, leaving every pixel
     // in the calibrated state the gray nudge refresh expects; on X4 it is a
-    // plain HALF refresh (previous behavior).
-    renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
+    // full refresh so the sleep image starts from a clean e-paper baseline.
+    renderer.displayGrayscaleBase(HalDisplay::FULL_REFRESH);
   } else {
-    renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+    renderer.displayBuffer(HalDisplay::FULL_REFRESH);
   }
 
   if (hasGreyscale) {
@@ -333,5 +333,5 @@ void SleepActivity::renderLastScreenSleepScreen() const {
 
 void SleepActivity::renderBlankSleepScreen() const {
   renderer.clearScreen();
-  renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+  renderer.displayBuffer(HalDisplay::FULL_REFRESH);
 }
