@@ -4,8 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "FlashcardScheduler.h"
 #include "activities/Activity.h"
-#include "util/ButtonNavigator.h"
 
 class HalFile;
 
@@ -16,7 +16,6 @@ struct FlashcardCard {
 };
 
 class FlashcardReviewActivity final : public Activity {
-  ButtonNavigator buttonNavigator;
   std::string deckPath;
   std::string indexPath;
   FlashcardCard currentCard;
@@ -25,13 +24,21 @@ class FlashcardReviewActivity final : public Activity {
   uint8_t phoneticColumn = 1;
   uint8_t definitionColumn = 2;
   int selectedIndex = 0;
+  uint64_t currentCardId = 0;
+  uint32_t sessionCompleted = 0;
+  uint32_t totalLearned = 0;
+  uint32_t dueReviews = 0;
   bool showingAnswer = false;
+  FlashcardScheduler scheduler;
 
   bool loadIndex();
   bool buildIndex(uint32_t sourceSize, uint32_t sourceFingerprint);
   bool loadCard(int index);
   bool readIndexHeader(HalFile& indexFile, uint32_t sourceSize, uint32_t sourceFingerprint);
   bool configureColumnsFromHeader(const std::vector<std::string>& fields);
+  bool selectNextCard();
+  bool isTimeValid() const;
+  void gradeCurrent(FlashcardGrade grade);
   static std::vector<std::string> parseCsvLine(const std::string& line);
 
  public:

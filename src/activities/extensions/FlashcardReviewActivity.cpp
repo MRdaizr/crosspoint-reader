@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <ctime>
 
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
@@ -15,8 +16,7 @@
 
 namespace {
 constexpr uint32_t FLASHCARD_INDEX_MAGIC = 0x31494346;  // "FCI1"
-constexpr uint32_t FLASHCARD_INDEX_VERSION = 2;
-constexpr size_t FINGERPRINT_BYTES = 64;
+constexpr uint32_t FLASHCARD_INDEX_VERSION = 3;
 
 struct FlashcardIndexHeader {
   uint32_t magic;
@@ -27,6 +27,11 @@ struct FlashcardIndexHeader {
   uint8_t wordColumn;
   uint8_t phoneticColumn;
   uint8_t definitionColumn;
+};
+
+struct FlashcardIndexEntry {
+  uint32_t offset;
+  uint64_t cardId;
 };
 
 std::string normalizedColumnName(const std::string& value) {
@@ -52,21 +57,15 @@ uint32_t updateFingerprint(uint32_t hash, const uint8_t* data, size_t length) {
 }
 
 uint32_t fileFingerprint(HalFile& file, const uint32_t fileSize) {
-  uint8_t buffer[FINGERPRINT_BYTES];
+  uint8_t buffer[256];
   uint32_t hash = 2166136261u;
-  const size_t firstBytes = std::min<size_t>(fileSize, FINGERPRINT_BYTES);
-
-  if (!file.seek(0) || file.read(buffer, firstBytes) != static_cast<int>(firstBytes)) {
-    return 0;
-  }
-  hash = updateFingerprint(hash, buffer, firstBytes);
-
-  if (fileSize > FINGERPRINT_BYTES) {
-    const size_t lastBytes = std::min<size_t>(fileSize, FINGERPRINT_BYTES);
-    if (!file.seek(fileSize - lastBytes) || file.read(buffer, lastBytes) != static_cast<int>(lastBytes)) {
-      return 0;
-    }
-    hash = updateFingerprint(hash, buffer, lastBytes);
+  if (!file.seek(0)) return 0;
+  uint32_t remaining = fileSize;
+  while (remaining > 0) {
+    const size_t bytes = std::min<size_t>(remaining, sizeof(buffer));
+    if (file.read(buffer, bytes) != static_cast<int>(bytes)) return 0;
+    hash = updateFingerprint(hash, buffer, bytes);
+    remaining -= bytes;
   }
   return hash;
 }
@@ -170,7 +169,12 @@ bool FlashcardReviewActivity::buildIndex(const uint32_t sourceSize, const uint32
     }
     const size_t requiredColumn = std::max(static_cast<size_t>(wordColumn), static_cast<size_t>(definitionColumn));
     if (fields.size() <= requiredColumn) return true;
-    if (indexFile.write(&offset, sizeof(offset)) != sizeof(offset)) {
+    const uint64_t cardId = FlashcardScheduler::cardId(fields[wordColumn],
+                                                        phoneticColumn != UINT8_MAX && fields.size() > phoneticColumn
+                                                            ? fields[phoneticColumn] : "",
+                                                        fields[definitionColumn]);
+    const FlashcardIndexEntry entry{offset, cardId};
+    if (indexFile.write(&entry, sizeof(entry)) != sizeof(entry)) {
       return false;
     }
     ++count;
@@ -241,7 +245,7 @@ bool FlashcardReviewActivity::loadIndex() {
     FlashcardIndexHeader header{};
     indexFile.seek(0);
     indexFile.read(&header, sizeof(header));
-    const uint64_t expectedSize = sizeof(header) + static_cast<uint64_t>(header.cardCount) * sizeof(uint32_t);
+    const uint64_t expectedSize = sizeof(header) + static_cast<uint64_t>(header.cardCount) * sizeof(FlashcardIndexEntry);
     valid = indexFile.fileSize64() == expectedSize;
     if (valid) {
       cardCount = header.cardCount;
@@ -266,10 +270,10 @@ bool FlashcardReviewActivity::loadCard(const int index) {
     return false;
   }
 
-  const size_t offsetPosition = sizeof(FlashcardIndexHeader) + static_cast<size_t>(index) * sizeof(uint32_t);
-  uint32_t offset = 0;
-  if (!indexFile.seek(offsetPosition) || indexFile.read(&offset, sizeof(offset)) != sizeof(offset) ||
-      !source.seek(offset)) {
+  const size_t offsetPosition = sizeof(FlashcardIndexHeader) + static_cast<size_t>(index) * sizeof(FlashcardIndexEntry);
+  FlashcardIndexEntry entry{};
+  if (!indexFile.seek(offsetPosition) || indexFile.read(&entry, sizeof(entry)) != sizeof(entry) ||
+      !source.seek(entry.offset)) {
     indexFile.close();
     source.close();
     return false;
@@ -293,6 +297,7 @@ bool FlashcardReviewActivity::loadCard(const int index) {
   currentCard.word = fields[wordColumn];
   currentCard.phonetic = phoneticColumn != UINT8_MAX && fields.size() > phoneticColumn ? fields[phoneticColumn] : "";
   currentCard.definition = fields[definitionColumn];
+  currentCardId = entry.cardId;
   return true;
 }
 
@@ -301,7 +306,8 @@ void FlashcardReviewActivity::onEnter() {
   selectedIndex = 0;
   showingAnswer = false;
   loadIndex();
-  if (cardCount > 0) loadCard(0);
+  scheduler.load(deckPath);
+  selectNextCard();
   requestUpdate();
 }
 
@@ -313,6 +319,54 @@ void FlashcardReviewActivity::onExit() {
   phoneticColumn = 1;
   definitionColumn = 2;
   indexPath.clear();
+  currentCardId = 0;
+}
+
+bool FlashcardReviewActivity::isTimeValid() const { return scheduler.hasValidTime(); }
+
+bool FlashcardReviewActivity::selectNextCard() {
+  currentCard = {};
+  currentCardId = 0;
+  showingAnswer = false;
+  if (cardCount == 0 || !isTimeValid()) return false;
+
+  HalFile indexFile;
+  if (!Storage.openFileForRead("FC", indexPath, indexFile)) return false;
+  const time_t now = time(nullptr);
+  int firstNew = -1;
+  int selected = -1;
+  uint32_t learningCount = 0;
+  const bool allowReviews = scheduler.reviewCardsRemaining() > 0;
+  for (uint32_t i = 0; i < cardCount; ++i) {
+    FlashcardIndexEntry entry{};
+    const size_t pos = sizeof(FlashcardIndexHeader) + static_cast<size_t>(i) * sizeof(entry);
+    if (!indexFile.seek(pos) || indexFile.read(&entry, sizeof(entry)) != sizeof(entry)) break;
+    const auto* record = scheduler.get(entry.cardId);
+    if (!record) { if (firstNew < 0) firstNew = static_cast<int>(i); continue; }
+    if (record->dueAt > now) continue;
+    if (record->state != static_cast<uint8_t>(FlashcardSrsState::REVIEW)) {
+      if (selected < 0) selected = static_cast<int>(i);
+      ++learningCount;
+    } else if (allowReviews && selected < 0) {
+      selected = static_cast<int>(i);
+    }
+  }
+  indexFile.close();
+  if (selected < 0 && firstNew >= 0 && scheduler.newCardsRemaining() > 0) selected = firstNew;
+  if (selected < 0) { totalLearned = scheduler.learnedCount(); dueReviews = scheduler.dueReviewCount(); return false; }
+  selectedIndex = selected;
+  if (!loadCard(selectedIndex)) return false;
+  if (!scheduler.get(currentCardId) && !scheduler.introduce(currentCardId)) return false;
+  totalLearned = scheduler.learnedCount();
+  dueReviews = scheduler.dueReviewCount();
+  return true;
+}
+
+void FlashcardReviewActivity::gradeCurrent(const FlashcardGrade grade) {
+  if (currentCardId == 0 || !scheduler.grade(currentCardId, grade)) return;
+  ++sessionCompleted;
+  selectNextCard();
+  requestUpdate();
 }
 
 void FlashcardReviewActivity::loop() {
@@ -321,24 +375,19 @@ void FlashcardReviewActivity::loop() {
     return;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    showingAnswer = !showingAnswer;
+    if (showingAnswer) gradeCurrent(FlashcardGrade::GOOD);
+    else { showingAnswer = true; requestUpdate(); }
+    return;
+  }
+  if (showingAnswer && mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+    gradeCurrent(FlashcardGrade::AGAIN);
+    return;
+  }
+  if (showingAnswer && mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+    gradeCurrent(FlashcardGrade::HARD);
     requestUpdate();
     return;
   }
-
-  const int listSize = static_cast<int>(cardCount);
-  buttonNavigator.onNextRelease([this, listSize] {
-    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, listSize);
-    loadCard(selectedIndex);
-    showingAnswer = false;
-    requestUpdate();
-  });
-  buttonNavigator.onPreviousRelease([this, listSize] {
-    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, listSize);
-    loadCard(selectedIndex);
-    showingAnswer = false;
-    requestUpdate();
-  });
 }
 
 void FlashcardReviewActivity::render(RenderLock&&) {
@@ -352,10 +401,22 @@ void FlashcardReviewActivity::render(RenderLock&&) {
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   if (cardCount == 0) {
     renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, tr(STR_NO_FLASHCARDS));
+  } else if (!isTimeValid()) {
+    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 - 10, tr(STR_FLASHCARD_TIME_REQUIRED), true,
+                              EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 20, tr(STR_FLASHCARD_TIME_REQUIRED_DESC));
+  } else if (currentCardId == 0) {
+    renderer.drawCenteredText(UI_12_FONT_ID, pageHeight / 2 - 20, tr(STR_FLASHCARD_DONE), true, EpdFontFamily::BOLD);
+    char summary[64];
+    snprintf(summary, sizeof(summary), "%s %lu  %s %lu", tr(STR_FLASHCARD_SESSION),
+             static_cast<unsigned long>(sessionCompleted), tr(STR_FLASHCARD_LEARNED), static_cast<unsigned long>(totalLearned));
+    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 15, summary);
   } else {
     const auto& card = currentCard;
     char counter[32];
-    snprintf(counter, sizeof(counter), "%d/%d", selectedIndex + 1, static_cast<int>(cardCount));
+    const unsigned long progress = cardCount == 0 ? 0 : static_cast<unsigned long>(totalLearned) * 100UL / cardCount;
+    snprintf(counter, sizeof(counter), "%d/%d  %s:%lu (%lu%%)", selectedIndex + 1, static_cast<int>(cardCount),
+             tr(STR_FLASHCARD_LEARNED), static_cast<unsigned long>(totalLearned), progress);
     renderer.drawText(SMALL_FONT_ID, metrics.contentSidePadding, contentTop, counter);
 
     std::string prewarm = card.word + "\n" + card.phonetic + "\n" + card.definition;
@@ -384,7 +445,9 @@ void FlashcardReviewActivity::render(RenderLock&&) {
     }
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  const auto labels = showingAnswer ? mappedInput.mapLabels(tr(STR_BACK), tr(STR_FLASHCARD_GOOD), tr(STR_FLASHCARD_AGAIN),
+                                                             tr(STR_FLASHCARD_HARD))
+                                    : mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "", "");
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
 }
