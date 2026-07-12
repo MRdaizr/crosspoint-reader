@@ -256,6 +256,12 @@ int BaseTheme::getListPageItems(int contentHeight, bool hasSubtitle) const {
   return contentHeight / rowHeight;
 }
 
+int BaseTheme::getListRowStep(bool hasSubtitle) const {
+  return hasSubtitle ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
+}
+
+int BaseTheme::getListTitleOffsetY(const GfxRenderer&, int, int) const { return 0; }
+
 void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
                          const std::function<std::string(int index)>& rowTitle,
                          const std::function<std::string(int index)>& rowSubtitle,

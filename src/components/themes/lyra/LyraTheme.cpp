@@ -221,6 +221,12 @@ int LyraTheme::getListPageItems(int contentHeight, bool hasSubtitle) const {
   return contentHeight / rowHeight;
 }
 
+int LyraTheme::getListRowStep(bool hasSubtitle) const {
+  return hasSubtitle ? LyraMetrics::values.listWithSubtitleRowHeight : LyraMetrics::values.listRowHeight;
+}
+
+int LyraTheme::getListTitleOffsetY(const GfxRenderer&, int, int) const { return 7; }
+
 void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
                          const std::function<std::string(int index)>& rowTitle,
                          const std::function<std::string(int index)>& rowSubtitle,

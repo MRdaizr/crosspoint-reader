@@ -136,6 +136,12 @@ class CrossPointWebServer {
   void handlePostNutstoreSync();
   void handleGetNutstoreStatus() const;
 
+  // To-do handlers
+  void handleGetTodos() const;
+  void handlePostTodo();
+  void handleToggleTodo();
+  void handleDeleteTodo();
+
   // Font management handlers
   void handleFontsPage() const;
   void handleFontList() const;

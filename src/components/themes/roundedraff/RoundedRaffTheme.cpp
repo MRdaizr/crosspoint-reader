@@ -51,6 +51,23 @@ int RoundedRaffTheme::subtitleFontId() const { return SMALL_FONT_ID; }
 
 int RoundedRaffTheme::guideFontId() const { return SMALL_FONT_ID; }
 
+int RoundedRaffTheme::getListPageItems(int contentHeight, bool hasSubtitle) const {
+  const int rowHeight = hasSubtitle ? RoundedRaffMetrics::values.listWithSubtitleRowHeight
+                                    : RoundedRaffMetrics::values.listRowHeight;
+  return std::max(1, contentHeight / (rowHeight + kSelectableRowGap));
+}
+
+int RoundedRaffTheme::getListRowStep(bool hasSubtitle) const {
+  const int rowHeight = hasSubtitle ? RoundedRaffMetrics::values.listWithSubtitleRowHeight
+                                    : RoundedRaffMetrics::values.listRowHeight;
+  return rowHeight + kSelectableRowGap;
+}
+
+int RoundedRaffTheme::getListTitleOffsetY(const GfxRenderer& renderer, int rowHeight, int titleFontId) const {
+  const int fontId = titleFontId != 0 ? titleFontId : this->titleFontId();
+  return (rowHeight - renderer.getLineHeight(fontId)) / 2;
+}
+
 void RoundedRaffTheme::drawHeader(const GfxRenderer& renderer, Rect rect, const char* title,
                                   const char* subtitle) const {
   (void)subtitle;

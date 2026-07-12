@@ -18,6 +18,7 @@
 #include "OpdsServerStore.h"
 #include "SdCardFontSystem.h"
 #include "SettingsList.h"
+#include "TodoStore.h"
 #include "WebDAVHandler.h"
 #include "WifiCredentialStore.h"
 #include "html/FilesPageHtml.generated.h"
@@ -204,6 +205,12 @@ void CrossPointWebServer::begin() {
   server->on("/api/nutstore/config", HTTP_POST, [this] { handlePostNutstoreConfig(); });
   server->on("/api/nutstore/sync", HTTP_POST, [this] { handlePostNutstoreSync(); });
   server->on("/api/nutstore/status", HTTP_GET, [this] { handleGetNutstoreStatus(); });
+
+  // To-do endpoints
+  server->on("/api/todos", HTTP_GET, [this] { handleGetTodos(); });
+  server->on("/api/todos", HTTP_POST, [this] { handlePostTodo(); });
+  server->on("/api/todos/toggle", HTTP_POST, [this] { handleToggleTodo(); });
+  server->on("/api/todos/delete", HTTP_POST, [this] { handleDeleteTodo(); });
 
   // Font management endpoints
   server->on("/fonts", HTTP_GET, [this] { handleFontsPage(); });
@@ -1435,6 +1442,128 @@ void CrossPointWebServer::handleGetNutstoreStatus() const {
   String json;
   serializeJson(doc, json);
   server->send(200, "application/json", json);
+}
+
+void CrossPointWebServer::handleGetTodos() const {
+  std::vector<TodoItem> items;
+  if (!TODO_STORE.getItems(items)) {
+    server->send(500, "application/json", "{\"error\":\"Could not load to-do list\"}");
+    return;
+  }
+
+  JsonDocument doc;
+  doc["maxItems"] = TodoStore::MAX_ITEMS;
+  JsonArray jsonItems = doc["items"].to<JsonArray>();
+  for (const auto& item : items) {
+    JsonObject entry = jsonItems.add<JsonObject>();
+    entry["id"] = item.id;
+    entry["title"] = item.title;
+    entry["completed"] = item.completed;
+  }
+  String json;
+  serializeJson(doc, json);
+  server->send(200, "application/json", json);
+}
+
+void CrossPointWebServer::handlePostTodo() {
+  JsonDocument doc;
+  if (deserializeJson(doc, server->arg("plain")) || !doc["title"].is<const char*>()) {
+    server->send(400, "application/json", "{\"error\":\"Invalid to-do item\"}");
+    return;
+  }
+
+  String title = doc["title"].as<String>();
+  title.trim();
+  if (title.isEmpty() || title.length() > TodoStore::MAX_TITLE_BYTES) {
+    server->send(400, "application/json", "{\"error\":\"Title must contain 1-120 bytes\"}");
+    return;
+  }
+
+  std::vector<TodoItem> items;
+  if (!TODO_STORE.getItems(items)) {
+    server->send(500, "application/json", "{\"error\":\"Could not load to-do list\"}");
+    return;
+  }
+  if (items.size() >= TodoStore::MAX_ITEMS) {
+    server->send(400, "application/json", "{\"error\":\"To-do list is full\"}");
+    return;
+  }
+
+  TodoItem item;
+  if (!TODO_STORE.add(title.c_str(), item)) {
+    server->send(500, "application/json", "{\"error\":\"Could not save to-do item\"}");
+    return;
+  }
+  JsonDocument response;
+  response["ok"] = true;
+  response["id"] = item.id;
+  String json;
+  serializeJson(response, json);
+  server->send(200, "application/json", json);
+}
+
+void CrossPointWebServer::handleToggleTodo() {
+  JsonDocument doc;
+  if (deserializeJson(doc, server->arg("plain"))) {
+    server->send(400, "application/json", "{\"error\":\"Invalid request\"}");
+    return;
+  }
+  const uint32_t id = doc["id"] | 0U;
+  if (id == 0) {
+    server->send(400, "application/json", "{\"error\":\"Invalid to-do id\"}");
+    return;
+  }
+
+  std::vector<TodoItem> items;
+  if (!TODO_STORE.getItems(items)) {
+    server->send(500, "application/json", "{\"error\":\"Could not load to-do list\"}");
+    return;
+  }
+  if (std::none_of(items.begin(), items.end(), [id](const TodoItem& item) { return item.id == id; })) {
+    server->send(404, "application/json", "{\"error\":\"To-do item not found\"}");
+    return;
+  }
+
+  TodoItem item;
+  if (!TODO_STORE.toggle(id, item)) {
+    server->send(500, "application/json", "{\"error\":\"Could not save to-do item\"}");
+    return;
+  }
+  JsonDocument response;
+  response["ok"] = true;
+  response["id"] = item.id;
+  response["completed"] = item.completed;
+  String json;
+  serializeJson(response, json);
+  server->send(200, "application/json", json);
+}
+
+void CrossPointWebServer::handleDeleteTodo() {
+  JsonDocument doc;
+  if (deserializeJson(doc, server->arg("plain"))) {
+    server->send(400, "application/json", "{\"error\":\"Invalid request\"}");
+    return;
+  }
+  const uint32_t id = doc["id"] | 0U;
+  if (id == 0) {
+    server->send(400, "application/json", "{\"error\":\"Invalid to-do id\"}");
+    return;
+  }
+
+  std::vector<TodoItem> items;
+  if (!TODO_STORE.getItems(items)) {
+    server->send(500, "application/json", "{\"error\":\"Could not load to-do list\"}");
+    return;
+  }
+  if (std::none_of(items.begin(), items.end(), [id](const TodoItem& item) { return item.id == id; })) {
+    server->send(404, "application/json", "{\"error\":\"To-do item not found\"}");
+    return;
+  }
+  if (!TODO_STORE.remove(id)) {
+    server->send(500, "application/json", "{\"error\":\"Could not save to-do item\"}");
+    return;
+  }
+  server->send(200, "application/json", "{\"ok\":true}");
 }
 
 // ---- OPDS Server API ----

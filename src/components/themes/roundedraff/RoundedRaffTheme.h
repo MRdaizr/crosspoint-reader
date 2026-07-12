@@ -88,6 +88,9 @@ class RoundedRaffTheme : public BaseTheme {
   void drawKeyboardKey(const GfxRenderer& renderer, Rect rect, const char* label, bool isSelected,
                        const char* secondaryLabel = nullptr, KeyboardKeyType keyType = KeyboardKeyType::Normal,
                        bool inactiveSelection = false) const override;
+  int getListPageItems(int contentHeight, bool hasSubtitle) const override;
+  int getListRowStep(bool hasSubtitle) const override;
+  int getListTitleOffsetY(const GfxRenderer& renderer, int rowHeight, int titleFontId) const override;
   void drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
                 const std::function<std::string(int index)>& rowTitle,
                 const std::function<std::string(int index)>& rowSubtitle = nullptr,
