@@ -33,6 +33,7 @@ constexpr size_t INITIAL_LAYOUT_CHUNK_SIZE = 1024;
 constexpr size_t LAYOUT_CHUNK_GROWTH = 1024;
 constexpr size_t MAX_LAYOUT_CHUNK_SIZE = 4 * 1024;
 constexpr size_t PAGE_LAYOUT_CACHE_SIZE = 3;
+constexpr int APPROXIMATE_PAGE_KEY_BASE = -1000000;
 // Cache file magic and version
 constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
 constexpr uint8_t CACHE_VERSION = 5;          // Increment when page offset calculation changes
@@ -112,6 +113,7 @@ void TxtReaderActivity::onExit() {
   Activity::onExit();
 
   pendingPageTurn.store(0, std::memory_order_release);
+  pendingPercentJump.store(-1, std::memory_order_release);
 
   if (txt && initialized) {
     if (!pageIndexComplete) savePartialPageIndexCache();
@@ -135,9 +137,11 @@ void TxtReaderActivity::onExit() {
 
 void TxtReaderActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    const int progressPercent = totalPages > 0 ? static_cast<int>((currentPage + 1) * 100.0f / totalPages + 0.5f) : 0;
+    const int page = displayedPage();
+    const int pageCount = displayedTotalPages();
+    const int progressPercent = pageCount > 0 ? static_cast<int>((page + 1) * 100.0f / pageCount + 0.5f) : 0;
     startActivityForResult(std::make_unique<TxtReaderMenuActivity>(
-                               renderer, mappedInput, txt ? txt->getTitle() : "", currentPage + 1, totalPages,
+                               renderer, mappedInput, txt ? txt->getTitle() : "", page + 1, pageCount,
                                progressPercent, SETTINGS.orientation),
                            [this](const ActivityResult& result) {
                              const auto& menu = std::get<TxtMenuResult>(result.data);
@@ -186,6 +190,10 @@ void TxtReaderActivity::applyOrientation(const uint8_t orientation) {
   pendingResumePageTarget = -1;
   pendingPercentTarget = -1;
   pendingPageTurn.store(0, std::memory_order_release);
+  pendingPercentJump.store(-1, std::memory_order_release);
+  approximatePosition = false;
+  approximatePageOffsets.clear();
+  approximateLocalPage = 0;
   cancelNextPagePreparation();
   preparedPage = -1;
   preparedPageNextOffset = 0;
@@ -199,9 +207,16 @@ void TxtReaderActivity::applyOrientation(const uint8_t orientation) {
 
 void TxtReaderActivity::jumpToPercent(int percent) {
   percent = std::clamp(percent, 0, 100);
+  pendingPercentJump.store(percent, std::memory_order_release);
+  requestUpdate();
+}
+
+void TxtReaderActivity::applyPercentJump(const int percent) {
   if (!pageIndexComplete) {
-    pendingPercentTarget = percent;
-    GUI.drawPopup(renderer, tr(STR_INDEXING));
+    beginApproximatePosition(percent);
+    LOG_DBG("TRS", "Approximate percent jump: %d%% offset=%u", percent,
+            static_cast<unsigned>(displayedOffset()));
+    requestUpdate();
     return;
   }
 
@@ -209,6 +224,11 @@ void TxtReaderActivity::jumpToPercent(int percent) {
     return;
   }
 
+  approximatePosition = false;
+  approximatePageOffsets.clear();
+  approximateLocalPage = 0;
+  cancelNextPagePreparation();
+  clearPageLayouts();
   int targetPage = percent >= 100 ? totalPages - 1 : (totalPages * percent) / 100;
   if (targetPage < 0) targetPage = 0;
   if (targetPage >= totalPages) targetPage = totalPages - 1;
@@ -216,11 +236,110 @@ void TxtReaderActivity::jumpToPercent(int percent) {
   requestUpdate();
 }
 
+int TxtReaderActivity::displayPageKey() const {
+  // Negative keys keep approximate pages distinct from the canonical index.
+  return approximatePosition ? APPROXIMATE_PAGE_KEY_BASE - approximateLocalPage : currentPage;
+}
+
+int TxtReaderActivity::nextDisplayPageKey() const {
+  return approximatePosition ? APPROXIMATE_PAGE_KEY_BASE - approximateLocalPage - 1 : currentPage + 1;
+}
+
+int TxtReaderActivity::displayedPage() const {
+  return approximatePosition ? approximateBasePage + approximateLocalPage : currentPage;
+}
+
+int TxtReaderActivity::displayedTotalPages() const {
+  return approximatePosition ? approximateTotalPages : totalPages;
+}
+
+size_t TxtReaderActivity::displayedOffset() const {
+  if (approximatePosition && approximateLocalPage >= 0 &&
+      approximateLocalPage < static_cast<int>(approximatePageOffsets.size())) {
+    return approximatePageOffsets[approximateLocalPage];
+  }
+  return currentPage >= 0 && currentPage < static_cast<int>(pageOffsets.size()) ? pageOffsets[currentPage] : 0;
+}
+
+size_t TxtReaderActivity::alignApproximateOffset(size_t offset) const {
+  const size_t fileSize = txt ? txt->getFileSize() : 0;
+  if (fileSize == 0) return 0;
+  offset = std::min(offset, fileSize - 1);
+
+  constexpr size_t SEARCH_BYTES = 1024;
+  const size_t start = offset > 3 ? offset - 3 : 0;
+  const size_t length = std::min(SEARCH_BYTES + (offset - start), fileSize - start);
+  std::vector<uint8_t> buffer(length);
+  if (length == 0 || !txt->readContent(buffer.data(), start, length)) return offset;
+
+  const size_t relative = offset - start;
+  for (size_t i = relative; i < buffer.size(); ++i) {
+    if (buffer[i] == '\n') return std::min(fileSize, start + i + 1);
+  }
+
+  size_t aligned = relative;
+  while (aligned > 0 && (buffer[aligned] & 0xC0) == 0x80) --aligned;
+  return start + aligned;
+}
+
+void TxtReaderActivity::beginApproximatePosition(const int percent, size_t offset) {
+  const size_t fileSize = txt ? txt->getFileSize() : 0;
+  if (fileSize == 0) return;
+  if (offset == 0 && percent > 0) offset = fileSize * static_cast<size_t>(percent) / 100;
+  offset = alignApproximateOffset(offset);
+
+  const size_t indexedOffset = pageOffsets.empty() ? 0 : pageOffsets.back();
+  const size_t indexedPages = pageOffsets.size();
+  if (indexedOffset > 0 && indexedPages > 0) {
+    approximateTotalPages = static_cast<int>(std::max<size_t>(
+        totalPages, (fileSize * indexedPages + indexedOffset / 2) / indexedOffset));
+  } else {
+    approximateTotalPages = std::max(1, totalPages);
+  }
+  approximateBasePage = std::clamp(static_cast<int>(fileSize == 0 ? 0 :
+                                                        (offset * static_cast<size_t>(approximateTotalPages)) / fileSize),
+                                   0, std::max(0, approximateTotalPages - 1));
+  approximatePosition = true;
+  approximatePageOffsets.assign(1, offset);
+  approximateLocalPage = 0;
+  cancelNextPagePreparation();
+  clearPageLayouts();
+}
+
+bool TxtReaderActivity::ensureApproximatePage(const int page) {
+  if (!approximatePosition || page < 0) return false;
+  while (page >= static_cast<int>(approximatePageOffsets.size())) {
+    const size_t offset = approximatePageOffsets.back();
+    const int sourcePage = static_cast<int>(approximatePageOffsets.size()) - 1;
+    std::vector<std::string> lines;
+    size_t nextOffset = offset;
+    if (!loadPageAtOffset(offset, lines, nextOffset) || nextOffset <= offset) return false;
+    cachePageLayout(APPROXIMATE_PAGE_KEY_BASE - sourcePage, nextOffset, lines);
+    approximatePageOffsets.push_back(nextOffset);
+  }
+  return true;
+}
+
+void TxtReaderActivity::reconcileApproximatePosition() {
+  if (!approximatePosition || pageOffsets.empty()) return;
+
+  const size_t offset = displayedOffset();
+  const auto it = std::upper_bound(pageOffsets.begin(), pageOffsets.end(), offset);
+  currentPage = it == pageOffsets.begin() ? 0 : static_cast<int>(std::distance(pageOffsets.begin(), it) - 1);
+  approximatePosition = false;
+  approximatePageOffsets.clear();
+  approximateLocalPage = 0;
+  cancelNextPagePreparation();
+  clearPageLayouts();
+  LOG_DBG("TRS", "Exact index ready; reconciled offset=%u to page=%d", static_cast<unsigned>(offset), currentPage);
+}
+
 void TxtReaderActivity::onReaderMenuConfirm(TxtReaderMenuActivity::MenuAction action) {
   switch (action) {
     case TxtReaderMenuActivity::MenuAction::GO_TO_PERCENT: {
-      const int initialPercent =
-          totalPages > 0 ? static_cast<int>((currentPage + 1) * 100.0f / totalPages + 0.5f) : 0;
+      const int page = displayedPage();
+      const int pageCount = displayedTotalPages();
+      const int initialPercent = pageCount > 0 ? static_cast<int>((page + 1) * 100.0f / pageCount + 0.5f) : 0;
       startActivityForResult(std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
                              [this](const ActivityResult& result) {
                                if (!result.isCancelled) {
@@ -278,7 +397,10 @@ void TxtReaderActivity::initializeReader() {
 
   // Load saved progress
   loadProgress();
-  if (!pageIndexComplete && currentPage >= static_cast<int>(pageOffsets.size())) {
+  if (pendingApproximateResumeOffset > 0) {
+    beginApproximatePosition(0, pendingApproximateResumeOffset);
+    pendingApproximateResumeOffset = 0;
+  } else if (!pageIndexComplete && currentPage >= static_cast<int>(pageOffsets.size())) {
     pendingResumePageTarget = currentPage;
     currentPage = std::max(0, static_cast<int>(pageOffsets.size()) - 1);
   }
@@ -352,6 +474,7 @@ bool TxtReaderActivity::indexNextPage() {
     pageIndexComplete = true;
     savePageIndexCache();
     removePartialPageIndexCache();
+    reconcileApproximatePosition();
     return false;
   }
 
@@ -363,6 +486,7 @@ bool TxtReaderActivity::indexNextPage() {
     pageOffsets.push_back(nextOffset);
   }
   updateTotalPages();
+  if (pageIndexComplete) reconcileApproximatePosition();
   if (pageIndexComplete && pendingPercentTarget >= 0) {
     const int target = pendingPercentTarget;
     pendingPercentTarget = -1;
@@ -389,29 +513,36 @@ void TxtReaderActivity::buildPageIndexSlice() {
 void TxtReaderActivity::prepareNextPage() {
   if (nextPagePrepareStage == NextPagePrepareStage::NONE) {
     nextPagePrepareStage = NextPagePrepareStage::LAYOUT;
-    nextPagePrepareTarget = currentPage + 1;
+    nextPagePrepareTarget = nextDisplayPageKey();
   }
-  if (nextPagePrepareTarget != currentPage + 1 || nextPagePrepareTarget < 0) {
+  if (nextPagePrepareTarget != nextDisplayPageKey()) {
     cancelNextPagePreparation();
     return;
   }
 
   if (nextPagePrepareStage == NextPagePrepareStage::LAYOUT) {
     const unsigned long startMs = millis();
-    if (nextPagePrepareTarget >= static_cast<int>(pageOffsets.size()) && !pageIndexComplete) {
+    size_t targetOffset = 0;
+    if (approximatePosition) {
+      if (!ensureApproximatePage(approximateLocalPage + 1)) {
+        cancelNextPagePreparation();
+        return;
+      }
+      targetOffset = approximatePageOffsets[approximateLocalPage + 1];
+    } else if (nextPagePrepareTarget >= static_cast<int>(pageOffsets.size()) && !pageIndexComplete) {
       indexNextPage();
       updateIndexProgress(true);
     }
-    if (nextPagePrepareTarget >= static_cast<int>(pageOffsets.size())) {
+    if (!approximatePosition && nextPagePrepareTarget >= static_cast<int>(pageOffsets.size())) {
       cancelNextPagePreparation();
       return;
     }
+    if (!approximatePosition) targetOffset = pageOffsets[nextPagePrepareTarget];
 
     if (const auto* cached = findPageLayout(nextPagePrepareTarget)) {
       nextPagePrepareLines = cached->lines;
       nextPagePrepareNextOffset = cached->nextOffset;
-    } else if (!loadPageAtOffset(pageOffsets[nextPagePrepareTarget], nextPagePrepareLines,
-                                 nextPagePrepareNextOffset)) {
+    } else if (!loadPageAtOffset(targetOffset, nextPagePrepareLines, nextPagePrepareNextOffset)) {
       cancelNextPagePreparation();
       return;
     } else {
@@ -471,6 +602,15 @@ bool TxtReaderActivity::applyPendingPageTurn() {
   indexBuildOnlyRequested = false;
   cancelNextPagePreparation();
 
+  if (approximatePosition) {
+    if (direction < 0) {
+      if (approximateLocalPage > 0) --approximateLocalPage;
+    } else if (ensureApproximatePage(approximateLocalPage + 1)) {
+      ++approximateLocalPage;
+    }
+    return true;
+  }
+
   if (direction < 0) {
     if (currentPage > 0) --currentPage;
     return true;
@@ -491,9 +631,9 @@ bool TxtReaderActivity::applyPendingPageTurn() {
 void TxtReaderActivity::scheduleBackgroundWork() {
   if (!initialized || pendingPageTurn.load(std::memory_order_acquire) != 0) return;
 
-  const int nextPage = currentPage + 1;
+  const int nextPage = nextDisplayPageKey();
   const bool canPrepareNext = preparedPage != nextPage &&
-                              (nextPage < static_cast<int>(pageOffsets.size()) || !pageIndexComplete);
+                              (approximatePosition || nextPage < static_cast<int>(pageOffsets.size()) || !pageIndexComplete);
   if (canPrepareNext && nextPagePrepareStage == NextPagePrepareStage::NONE && !nextPagePrepareRequested) {
     nextPagePrepareRequested = true;
     requestUpdate();
@@ -715,9 +855,16 @@ void TxtReaderActivity::render(RenderLock&&) {
     initializeReader();
   }
 
-  const bool pageTurnApplied = applyPendingPageTurn();
+  const int16_t requestedPercent = pendingPercentJump.exchange(-1, std::memory_order_acq_rel);
+  const bool percentJumpApplied = requestedPercent >= 0;
+  const bool pageTurnApplied = percentJumpApplied ? false : applyPendingPageTurn();
+  if (percentJumpApplied) {
+    indexBuildOnlyRequested = false;
+    applyPercentJump(requestedPercent);
+  }
 
-  if (!pageTurnApplied && (nextPagePrepareRequested || nextPagePrepareStage != NextPagePrepareStage::NONE)) {
+  if (!pageTurnApplied && !percentJumpApplied &&
+      (nextPagePrepareRequested || nextPagePrepareStage != NextPagePrepareStage::NONE)) {
     nextPagePrepareRequested = false;
     prepareNextPage();
     return;
@@ -741,7 +888,7 @@ void TxtReaderActivity::render(RenderLock&&) {
   }
   indexProgressRefreshPending = false;
 
-  ensurePageIndexed(currentPage);
+  if (!approximatePosition) ensurePageIndexed(currentPage);
 
   if (pageOffsets.empty()) {
     renderer.clearScreen();
@@ -750,32 +897,35 @@ void TxtReaderActivity::render(RenderLock&&) {
     return;
   }
 
-  // Bounds check
-  if (currentPage < 0) currentPage = 0;
-  if (currentPage >= totalPages) currentPage = totalPages - 1;
+  // Bounds check for the canonical, from-start page index.
+  if (!approximatePosition) {
+    if (currentPage < 0) currentPage = 0;
+    if (currentPage >= totalPages) currentPage = totalPages - 1;
+  }
 
   // Load current page content
-  size_t offset = pageOffsets[currentPage];
+  const int pageKey = displayPageKey();
+  size_t offset = displayedOffset();
   size_t nextOffset = offset;
-  const bool usePreparedPage = preparedPage == currentPage;
+  const bool usePreparedPage = preparedPage == pageKey;
   const unsigned long layoutStartMs = millis();
   if (usePreparedPage) {
     currentPageLines = preparedPageLines;
     nextOffset = preparedPageNextOffset;
-  } else if (const auto* cached = findPageLayout(currentPage)) {
+  } else if (const auto* cached = findPageLayout(pageKey)) {
     currentPageLines = cached->lines;
     nextOffset = cached->nextOffset;
   } else {
     currentPageLines.clear();
     loadPageAtOffset(offset, currentPageLines, nextOffset);
-    if (!currentPageLines.empty()) cachePageLayout(currentPage, nextOffset, currentPageLines);
+    if (!currentPageLines.empty()) cachePageLayout(pageKey, nextOffset, currentPageLines);
   }
   const unsigned long layoutMs = millis() - layoutStartMs;
   if (!usePreparedPage && layoutMs >= 50) {
-    LOG_DBG("TRS", "Page %d layout=%lums lines=%u", currentPage, layoutMs,
+    LOG_DBG("TRS", "Page %d layout=%lums lines=%u", displayedPage(), layoutMs,
             static_cast<unsigned>(currentPageLines.size()));
   }
-  if (!pageIndexComplete && currentPage + 1 == static_cast<int>(pageOffsets.size())) {
+  if (!approximatePosition && !pageIndexComplete && currentPage + 1 == static_cast<int>(pageOffsets.size())) {
     if (nextOffset > offset && nextOffset < txt->getFileSize()) {
       pageOffsets.push_back(nextOffset);
       updateIndexProgress(false);
@@ -859,7 +1009,7 @@ void TxtReaderActivity::renderPage(const bool fontPrewarmed) {
   };
 
   if (fontPrewarmed) {
-    LOG_DBG("TRS", "Page %d uses prepared font cache", currentPage);
+    LOG_DBG("TRS", "Page %d uses prepared font cache", displayedPage());
     drawAndDisplay();
     return;
   }
@@ -872,7 +1022,7 @@ void TxtReaderActivity::renderPage(const bool fontPrewarmed) {
   scope.endScanAndPrewarm();
   const unsigned long prewarmMs = millis() - prewarmStartMs;
   if (prewarmMs >= 50) {
-    LOG_DBG("TRS", "Page %d font prewarm=%lums", currentPage, prewarmMs);
+    LOG_DBG("TRS", "Page %d font prewarm=%lums", displayedPage(), prewarmMs);
     fcm->logStats("TXT-render");
   }
   drawAndDisplay();
@@ -880,21 +1030,24 @@ void TxtReaderActivity::renderPage(const bool fontPrewarmed) {
 }
 
 void TxtReaderActivity::renderStatusBar() const {
-  const float progress = totalPages > 0 ? (currentPage + 1) * 100.0f / totalPages : 0;
+  const int page = displayedPage();
+  const int pageCount = displayedTotalPages();
+  const size_t fileSize = txt ? txt->getFileSize() : 0;
+  const float progress = approximatePosition && fileSize > 0
+                             ? displayedOffset() * 100.0f / fileSize
+                             : (pageCount > 0 ? (page + 1) * 100.0f / pageCount : 0);
   std::string title;
   if (SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE) {
     title = txt->getTitle();
   }
   const int indexProgress = pageIndexComplete ? 100 : indexProgressPercent;
-  GUI.drawStatusBar(renderer, progress, currentPage + 1, totalPages, title, 0, 0, true, false, indexProgress);
+  GUI.drawStatusBar(renderer, progress, page + 1, pageCount, title, 0, 0, true, false, indexProgress);
 }
 
 void TxtReaderActivity::saveProgress() {
   uint8_t data[12] = {};
-  const uint32_t page = static_cast<uint32_t>(std::max(0, currentPage));
-  const uint32_t offset = currentPage >= 0 && currentPage < static_cast<int>(pageOffsets.size())
-                              ? static_cast<uint32_t>(pageOffsets[currentPage])
-                              : 0;
+  const uint32_t page = static_cast<uint32_t>(std::max(0, displayedPage()));
+  const uint32_t offset = static_cast<uint32_t>(displayedOffset());
   memcpy(data, &PROGRESS_MAGIC, sizeof(PROGRESS_MAGIC));
   memcpy(data + 4, &page, sizeof(page));
   memcpy(data + 8, &offset, sizeof(offset));
@@ -921,6 +1074,8 @@ void TxtReaderActivity::loadProgress() {
       const auto offsetIt = std::lower_bound(pageOffsets.begin(), pageOffsets.end(), savedOffset);
       if (offsetIt != pageOffsets.end() && *offsetIt == savedOffset) {
         currentPage = static_cast<int>(std::distance(pageOffsets.begin(), offsetIt));
+      } else if (savedOffset > 0 && savedOffset < txt->getFileSize()) {
+        pendingApproximateResumeOffset = savedOffset;
       }
     } else if (bytesRead >= 4) {
       currentPage = data[0] + (data[1] << 8);

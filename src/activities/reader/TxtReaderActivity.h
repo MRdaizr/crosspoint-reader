@@ -36,6 +36,7 @@ class TxtReaderActivity final : public Activity {
   // one request prevents a long background layout from advancing page state
   // more than once before the display catches up.
   std::atomic<int8_t> pendingPageTurn{0};
+  std::atomic<int16_t> pendingPercentJump{-1};
   bool indexBuildOnlyRequested = false;
   bool indexProgressRefreshPending = false;
   bool nextPagePrepareRequested = false;
@@ -47,6 +48,14 @@ class TxtReaderActivity final : public Activity {
   size_t preparedPageNextOffset = 0;
   std::vector<std::string> preparedPageLines;
   std::vector<PageLayout> pageLayoutCache;
+  // A local page window used after an approximate percent jump. The canonical
+  // pageOffsets vector remains a strictly sequential index from file start.
+  bool approximatePosition = false;
+  std::vector<size_t> approximatePageOffsets;
+  int approximateLocalPage = 0;
+  int approximateBasePage = 0;
+  int approximateTotalPages = 1;
+  size_t pendingApproximateResumeOffset = 0;
   int pendingResumePageTarget = -1;
   int pendingPercentTarget = -1;
   uint8_t indexProgressPercent = 100;
@@ -69,6 +78,16 @@ class TxtReaderActivity final : public Activity {
   void renderStatusBar() const;
   void applyOrientation(uint8_t orientation);
   void jumpToPercent(int percent);
+  void applyPercentJump(int percent);
+  void beginApproximatePosition(int percent, size_t offset = 0);
+  size_t alignApproximateOffset(size_t offset) const;
+  bool ensureApproximatePage(int page);
+  void reconcileApproximatePosition();
+  int displayPageKey() const;
+  int nextDisplayPageKey() const;
+  int displayedPage() const;
+  int displayedTotalPages() const;
+  size_t displayedOffset() const;
   void onReaderMenuConfirm(TxtReaderMenuActivity::MenuAction action);
 
   void initializeReader();
