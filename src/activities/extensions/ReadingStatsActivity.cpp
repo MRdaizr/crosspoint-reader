@@ -21,7 +21,7 @@ std::string formatDuration(uint32_t seconds) {
   const uint32_t hours = minutes / 60U;
   const uint32_t remainingMinutes = minutes % 60U;
   char buf[24];
-  snprintf(buf, sizeof(buf), "%luh%02lu", static_cast<unsigned long>(hours), static_cast<unsigned long>(remainingMinutes));
+  snprintf(buf, sizeof(buf), "%luh%02lum", static_cast<unsigned long>(hours), static_cast<unsigned long>(remainingMinutes));
   return buf;
 }
 
@@ -35,8 +35,11 @@ uint32_t totalReadingSeconds(const std::vector<ReadingStatEntry>& entries) {
 
 void ReadingStatsActivity::onEnter() {
   Activity::onEnter();
+  // Load before the first render so the initial screen never uses an empty lazy-load result.
+  READING_STATS.loadFromFile();
+  displayedEntries = READING_STATS.getEntries();
   selectedIndex = 0;
-  requestUpdate();
+  requestUpdate(true);
 }
 
 void ReadingStatsActivity::loop() {
@@ -45,7 +48,7 @@ void ReadingStatsActivity::loop() {
     return;
   }
 
-  const int itemCount = static_cast<int>(READING_STATS.getEntries().size());
+  const int itemCount = static_cast<int>(displayedEntries.size());
   if (itemCount <= 0) return;
   buttonNavigator.onNextRelease([this, itemCount] {
     selectedIndex = ButtonNavigator::nextIndex(selectedIndex, itemCount);
@@ -66,7 +69,7 @@ void ReadingStatsActivity::render(RenderLock&&) {
   const int top = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_READING_STATS));
 
-  const auto& entries = READING_STATS.getEntries();
+  const auto& entries = displayedEntries;
   char line[64];
   snprintf(line, sizeof(line), "%s %s", tr(STR_TOTAL_READING_TIME), formatDuration(totalReadingSeconds(entries)).c_str());
   renderer.drawText(UI_12_FONT_ID, metrics.contentSidePadding, top + 10, line, true, EpdFontFamily::BOLD);

@@ -15,6 +15,13 @@ std::string fallbackTitle(const std::string& path, const std::string& title) {
   const size_t slash = path.find_last_of('/');
   return slash == std::string::npos ? path : path.substr(slash + 1);
 }
+
+void sortByReadingTime(std::vector<ReadingStatEntry>& entries) {
+  std::sort(entries.begin(), entries.end(), [](const ReadingStatEntry& left, const ReadingStatEntry& right) {
+    if (left.totalSeconds != right.totalSeconds) return left.totalSeconds > right.totalSeconds;
+    return left.title < right.title;
+  });
+}
 }  // namespace
 
 ReadingStatsStore ReadingStatsStore::instance;
@@ -44,6 +51,7 @@ void ReadingStatsStore::loadFromFile() {
     entry.totalSeconds = obj["totalSeconds"] | 0;
     if (!entry.path.empty()) entries.push_back(entry);
   }
+  sortByReadingTime(entries);
 }
 
 bool ReadingStatsStore::saveToFile() const {
@@ -70,13 +78,13 @@ void ReadingStatsStore::addSession(const std::string& path, const std::string& t
     return entry.path == path;
   });
   if (it == entries.end()) {
-    entries.insert(entries.begin(), {path, fallbackTitle(path, title), seconds});
-    if (static_cast<int>(entries.size()) > MAX_STATS_ENTRIES) entries.resize(MAX_STATS_ENTRIES);
+    entries.push_back({path, fallbackTitle(path, title), seconds});
   } else {
     it->title = fallbackTitle(path, title);
     it->totalSeconds += seconds;
-    std::rotate(entries.begin(), it, it + 1);
   }
+  sortByReadingTime(entries);
+  if (static_cast<int>(entries.size()) > MAX_STATS_ENTRIES) entries.resize(MAX_STATS_ENTRIES);
 
   if (!saveToFile()) {
     LOG_ERR("RST", "Failed to save reading stats");
