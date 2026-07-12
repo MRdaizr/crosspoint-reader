@@ -387,6 +387,7 @@ void FlashcardReviewActivity::loop() {
   }
   if (showingStats) return;
   if (currentCardId == 0 && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    scheduler.unlockNextNewBatch();
     selectNextCard();
     requestUpdate();
     return;
@@ -480,7 +481,7 @@ void FlashcardReviewActivity::render(RenderLock&&) {
   const auto labels = showingAnswer ? mappedInput.mapLabels(tr(STR_BACK), tr(STR_FLASHCARD_GOOD), tr(STR_FLASHCARD_AGAIN),
                                                              tr(STR_FLASHCARD_HARD))
                                     : currentCardId == 0
-                                          ? mappedInput.mapLabels(tr(STR_BACK), tr(STR_FLASHCARD_CONTINUE), "", tr(STR_FLASHCARD_STATS))
+                                          ? mappedInput.mapLabels(tr(STR_BACK), tr(STR_FLASHCARD_NEXT_BATCH), "", tr(STR_FLASHCARD_STATS))
                                           : mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "", tr(STR_FLASHCARD_STATS));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();

@@ -26,6 +26,7 @@ class FlashcardScheduler {
   std::vector<FlashcardSrsRecord> records;
   std::string dailyDate;
   uint16_t newCardsToday = 0;
+  uint16_t newCardLimitToday = 20;
   uint16_t reviewsToday = 0;
   uint16_t completedToday = 0;
   std::string lastStudyDate;
@@ -46,6 +47,7 @@ class FlashcardScheduler {
   bool load(const std::string& deckPath);
   bool hasValidTime() const;
   uint16_t newCardsRemaining();
+  bool unlockNextNewBatch();
   uint16_t reviewCardsRemaining();
   uint16_t getCompletedToday() const { return completedToday; }
   uint16_t getCurrentStreak() const { return currentStreak; }
