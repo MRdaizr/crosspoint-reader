@@ -27,6 +27,11 @@ class FlashcardScheduler {
   std::string dailyDate;
   uint16_t newCardsToday = 0;
   uint16_t reviewsToday = 0;
+  uint16_t completedToday = 0;
+  std::string lastStudyDate;
+  uint16_t currentStreak = 0;
+  uint16_t maxStreak = 0;
+  uint32_t totalReviews = 0;
   bool loaded = false;
 
   FlashcardSrsRecord* find(uint64_t cardId);
@@ -42,6 +47,10 @@ class FlashcardScheduler {
   bool hasValidTime() const;
   uint16_t newCardsRemaining();
   uint16_t reviewCardsRemaining();
+  uint16_t getCompletedToday() const { return completedToday; }
+  uint16_t getCurrentStreak() const { return currentStreak; }
+  uint16_t getMaxStreak() const { return maxStreak; }
+  uint32_t getTotalReviews() const { return totalReviews; }
   uint16_t getNewCardsToday() const { return newCardsToday; }
   const FlashcardSrsRecord* get(uint64_t cardId) const;
   bool isDue(uint64_t cardId, time_t now) const;
@@ -50,5 +59,6 @@ class FlashcardScheduler {
   bool grade(uint64_t cardId, FlashcardGrade grade);
   uint32_t learnedCount() const;
   uint32_t dueReviewCount() const;
+  uint32_t dueCountWithinDays(uint8_t days) const;
   static uint64_t cardId(const std::string& word, const std::string& phonetic, const std::string& definition);
 };

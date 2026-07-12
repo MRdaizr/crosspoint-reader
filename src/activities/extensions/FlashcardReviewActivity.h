@@ -29,6 +29,7 @@ class FlashcardReviewActivity final : public Activity {
   uint32_t totalLearned = 0;
   uint32_t dueReviews = 0;
   bool showingAnswer = false;
+  bool showingStats = false;
   FlashcardScheduler scheduler;
 
   bool loadIndex();
@@ -39,6 +40,7 @@ class FlashcardReviewActivity final : public Activity {
   bool selectNextCard();
   bool isTimeValid() const;
   void gradeCurrent(FlashcardGrade grade);
+  void renderStats();
   static std::vector<std::string> parseCsvLine(const std::string& line);
 
  public:

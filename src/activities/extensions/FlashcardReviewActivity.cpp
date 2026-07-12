@@ -305,6 +305,7 @@ void FlashcardReviewActivity::onEnter() {
   Activity::onEnter();
   selectedIndex = 0;
   showingAnswer = false;
+  showingStats = false;
   loadIndex();
   scheduler.load(deckPath);
   selectNextCard();
@@ -371,9 +372,20 @@ void FlashcardReviewActivity::gradeCurrent(const FlashcardGrade grade) {
 
 void FlashcardReviewActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    if (showingStats) {
+      showingStats = false;
+      requestUpdate();
+      return;
+    }
     finish();
     return;
   }
+  if (!showingAnswer && mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+    showingStats = true;
+    requestUpdate();
+    return;
+  }
+  if (showingStats) return;
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (showingAnswer) gradeCurrent(FlashcardGrade::GOOD);
     else { showingAnswer = true; requestUpdate(); }
@@ -397,6 +409,12 @@ void FlashcardReviewActivity::render(RenderLock&&) {
   const auto pageWidth = renderer.getScreenWidth();
   const auto pageHeight = renderer.getScreenHeight();
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_FLASHCARDS));
+
+  if (showingStats) {
+    renderStats();
+    renderer.displayBuffer();
+    return;
+  }
 
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   if (cardCount == 0) {
@@ -447,7 +465,37 @@ void FlashcardReviewActivity::render(RenderLock&&) {
 
   const auto labels = showingAnswer ? mappedInput.mapLabels(tr(STR_BACK), tr(STR_FLASHCARD_GOOD), tr(STR_FLASHCARD_AGAIN),
                                                              tr(STR_FLASHCARD_HARD))
-                                    : mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "", "");
+                                    : mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "", tr(STR_FLASHCARD_STATS));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   renderer.displayBuffer();
+}
+
+void FlashcardReviewActivity::renderStats() {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int left = metrics.contentSidePadding;
+  int y = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing + 8;
+  char line[64];
+  const unsigned long progress = cardCount == 0 ? 0 : static_cast<unsigned long>(scheduler.learnedCount()) * 100UL / cardCount;
+
+  snprintf(line, sizeof(line), "%s: %lu / %lu (%lu%%)", tr(STR_FLASHCARD_LEARNED),
+           static_cast<unsigned long>(scheduler.learnedCount()), static_cast<unsigned long>(cardCount), progress);
+  renderer.drawText(UI_12_FONT_ID, left, y, line, true, EpdFontFamily::BOLD);
+  y += 34;
+  snprintf(line, sizeof(line), "%s: %u  %s: %u", tr(STR_FLASHCARD_TODAY), scheduler.getCompletedToday(),
+           tr(STR_FLASHCARD_TOTAL_REVIEWS), static_cast<unsigned>(scheduler.getTotalReviews()));
+  renderer.drawText(UI_10_FONT_ID, left, y, line);
+  y += 27;
+  snprintf(line, sizeof(line), "%s: %u  %s: %u", tr(STR_FLASHCARD_STREAK), scheduler.getCurrentStreak(),
+           tr(STR_FLASHCARD_BEST_STREAK), scheduler.getMaxStreak());
+  renderer.drawText(UI_10_FONT_ID, left, y, line);
+  y += 36;
+  snprintf(line, sizeof(line), "%s: %lu", tr(STR_FLASHCARD_DUE), static_cast<unsigned long>(scheduler.dueReviewCount()));
+  renderer.drawText(UI_10_FONT_ID, left, y, line, true, EpdFontFamily::BOLD);
+  y += 27;
+  snprintf(line, sizeof(line), "%s: %lu", tr(STR_FLASHCARD_NEXT_SEVEN_DAYS),
+           static_cast<unsigned long>(scheduler.dueCountWithinDays(7)));
+  renderer.drawText(UI_10_FONT_ID, left, y, line);
+
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }

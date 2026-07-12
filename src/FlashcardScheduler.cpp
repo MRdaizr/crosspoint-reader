@@ -9,7 +9,7 @@
 
 namespace {
 constexpr uint32_t MAGIC = 0x31525346;  // FSR1
-constexpr uint16_t VERSION = 2;
+constexpr uint16_t VERSION = 3;
 constexpr uint16_t DEFAULT_EASE = 2500;
 constexpr uint16_t MIN_EASE = 1300;
 constexpr uint32_t MINUTE = 60;
@@ -23,11 +23,15 @@ struct Header {
   char dailyDate[11];
   uint16_t newCardsToday;
   uint16_t reviewsToday;
+  uint16_t completedToday;
+  char lastStudyDate[11];
+  uint16_t currentStreak;
+  uint16_t maxStreak;
+  uint32_t totalReviews;
 };
 #pragma pack(pop)
 
-std::string today() {
-  const time_t now = time(nullptr);
+std::string dateFor(const time_t now) {
   if (now < FlashcardScheduler::VALID_EPOCH) return {};
   struct tm local {};
   localtime_r(&now, &local);
@@ -35,6 +39,7 @@ std::string today() {
   snprintf(value, sizeof(value), "%04d-%02d-%02d", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday);
   return value;
 }
+std::string today() { return dateFor(time(nullptr)); }
 }  // namespace
 
 uint64_t FlashcardScheduler::cardId(const std::string& word, const std::string& phonetic, const std::string& definition) {
@@ -63,7 +68,7 @@ bool FlashcardScheduler::load(const std::string& deckPath) {
   char filename[48];
   snprintf(filename, sizeof(filename), "/.crosspoint/flashcards/%08lx.srs", static_cast<unsigned long>(deckHash));
   statePath = filename;
-  records.clear(); dailyDate = today(); newCardsToday = 0; reviewsToday = 0; loaded = true;
+  records.clear(); dailyDate = today(); newCardsToday = 0; reviewsToday = 0; completedToday = 0; loaded = true;
   Storage.mkdir("/.crosspoint/flashcards");
   HalFile file;
   if (!Storage.openFileForRead("SRS", statePath, file)) return true;
@@ -76,6 +81,11 @@ bool FlashcardScheduler::load(const std::string& deckPath) {
   dailyDate = header.dailyDate;
   newCardsToday = header.newCardsToday;
   reviewsToday = header.reviewsToday;
+  completedToday = header.completedToday;
+  lastStudyDate = header.lastStudyDate;
+  currentStreak = header.currentStreak;
+  maxStreak = header.maxStreak;
+  totalReviews = header.totalReviews;
   records.resize(header.count);
   if (!records.empty() && file.read(records.data(), records.size() * sizeof(FlashcardSrsRecord)) !=
                               static_cast<int>(records.size() * sizeof(FlashcardSrsRecord))) {
@@ -84,7 +94,7 @@ bool FlashcardScheduler::load(const std::string& deckPath) {
   }
   file.close();
   std::sort(records.begin(), records.end(), [](const auto& a, const auto& b) { return a.cardId < b.cardId; });
-  if (dailyDate != today()) { dailyDate = today(); newCardsToday = 0; reviewsToday = 0; save(); }
+  if (dailyDate != today()) { dailyDate = today(); newCardsToday = 0; reviewsToday = 0; completedToday = 0; save(); }
   return true;
 }
 
@@ -94,8 +104,10 @@ bool FlashcardScheduler::save() const {
   Storage.remove(temp.c_str());
   HalFile file;
   if (!Storage.openFileForWrite("SRS", temp, file)) return false;
-  Header header{MAGIC, VERSION, static_cast<uint16_t>(records.size()), {}, newCardsToday, reviewsToday};
+  Header header{MAGIC, VERSION, static_cast<uint16_t>(records.size()), {}, newCardsToday, reviewsToday, completedToday,
+                {}, currentStreak, maxStreak, totalReviews};
   snprintf(header.dailyDate, sizeof(header.dailyDate), "%s", dailyDate.c_str());
+  snprintf(header.lastStudyDate, sizeof(header.lastStudyDate), "%s", lastStudyDate.c_str());
   const bool ok = file.write(&header, sizeof(header)) == sizeof(header) &&
                   (records.empty() || file.write(records.data(), records.size() * sizeof(FlashcardSrsRecord)) ==
                                       records.size() * sizeof(FlashcardSrsRecord));
@@ -106,11 +118,11 @@ bool FlashcardScheduler::save() const {
 }
 
 uint16_t FlashcardScheduler::newCardsRemaining() {
-  if (dailyDate != today()) { dailyDate = today(); newCardsToday = 0; reviewsToday = 0; save(); }
+  if (dailyDate != today()) { dailyDate = today(); newCardsToday = 0; reviewsToday = 0; completedToday = 0; save(); }
   return newCardsToday >= DAILY_NEW_LIMIT ? 0 : DAILY_NEW_LIMIT - newCardsToday;
 }
 uint16_t FlashcardScheduler::reviewCardsRemaining() {
-  if (dailyDate != today()) { dailyDate = today(); newCardsToday = 0; reviewsToday = 0; save(); }
+  if (dailyDate != today()) { dailyDate = today(); newCardsToday = 0; reviewsToday = 0; completedToday = 0; save(); }
   return reviewsToday >= DAILY_REVIEW_LIMIT ? 0 : DAILY_REVIEW_LIMIT - reviewsToday;
 }
 const FlashcardSrsRecord* FlashcardScheduler::get(uint64_t cardId) const { return find(cardId); }
@@ -147,7 +159,22 @@ bool FlashcardScheduler::grade(uint64_t id, FlashcardGrade grade) {
     r->dueAt = now + static_cast<uint32_t>(r->intervalDays) * DAY; ++r->repetitions;
   }
   if (state == FlashcardSrsState::REVIEW) ++reviewsToday;
+  ++completedToday;
+  ++totalReviews;
+  const std::string currentDate = today();
+  if (lastStudyDate != currentDate) {
+    currentStreak = !lastStudyDate.empty() && lastStudyDate == dateFor(time(nullptr) - DAY) ? currentStreak + 1 : 1;
+    lastStudyDate = currentDate;
+    maxStreak = std::max(maxStreak, currentStreak);
+  }
   return save();
 }
 uint32_t FlashcardScheduler::learnedCount() const { return static_cast<uint32_t>(records.size()); }
 uint32_t FlashcardScheduler::dueReviewCount() const { const time_t now=time(nullptr); uint32_t count=0; for (const auto& r:records) if(r.state==static_cast<uint8_t>(FlashcardSrsState::REVIEW)&&r.dueAt<=now) ++count; return count; }
+uint32_t FlashcardScheduler::dueCountWithinDays(const uint8_t days) const {
+  const time_t now = time(nullptr);
+  const time_t end = now + static_cast<time_t>(days) * DAY;
+  uint32_t count = 0;
+  for (const auto& record : records) if (record.dueAt >= now && record.dueAt < end) ++count;
+  return count;
+}
