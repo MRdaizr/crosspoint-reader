@@ -34,5 +34,6 @@ class PomodoroActivity final : public Activity {
   void onEnter() override;
   void loop() override;
   bool preventAutoSleep() override { return true; }
+  bool allowPowerSaving() override { return true; }
   void render(RenderLock&&) override;
 };

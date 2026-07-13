@@ -17,5 +17,6 @@ class ReadingStatsActivity final : public Activity {
 
   void onEnter() override;
   void loop() override;
+  bool allowPowerSaving() override { return true; }
   void render(RenderLock&&) override;
 };

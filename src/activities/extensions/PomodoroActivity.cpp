@@ -165,8 +165,10 @@ void PomodoroActivity::loop() {
     remainingMs = 0;
     completeCurrentPhase();
   } else {
+    const unsigned long previousMinutes = (remainingMs + 59999UL) / 60000UL;
     remainingMs -= elapsed;
-    requestUpdate();
+    const unsigned long currentMinutes = (remainingMs + 59999UL) / 60000UL;
+    if (currentMinutes != previousMinutes) requestUpdate();
   }
 }
 
@@ -196,9 +198,8 @@ void PomodoroActivity::renderTimer() {
   const auto pageHeight = renderer.getScreenHeight();
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_POMODORO));
 
-  const unsigned long totalSeconds = (remainingMs + 999) / 1000;
-  BigClock::drawTime(renderer, pageWidth, pageHeight, static_cast<int>(totalSeconds / 60),
-                     static_cast<int>(totalSeconds % 60));
+  const unsigned long remainingMinutes = (remainingMs + 59999UL) / 60000UL;
+  BigClock::drawTime(renderer, pageWidth, pageHeight, static_cast<int>(remainingMinutes), 0);
   renderer.drawCenteredText(UI_10_FONT_ID, BigClock::top(pageHeight) + BigClock::DIGIT_HEIGHT + 32,
                             phaseLabel());
   renderer.drawCenteredText(UI_10_FONT_ID, BigClock::top(pageHeight) + BigClock::DIGIT_HEIGHT + 56,

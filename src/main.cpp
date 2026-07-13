@@ -513,12 +513,18 @@ void loop() {
     }
   }
 
-  // Check for any user activity (button press or release) or active background work
+  // User activity restores normal frequency and resets the normal auto-sleep timer.
+  // Activities that prevent auto-sleep only refresh the latter: they can still allow
+  // CPU frequency scaling while their static screen remains visible.
   static unsigned long lastActivityTime = millis();
-  if (gpio.wasAnyPressed() || gpio.wasAnyReleased() || halTiltSensor.hadActivity() ||
-      activityManager.preventAutoSleep()) {
-    lastActivityTime = millis();         // Reset inactivity timer
-    powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
+  static unsigned long lastUserActivityTime = millis();
+  const bool userActivity = gpio.wasAnyPressed() || gpio.wasAnyReleased() || halTiltSensor.hadActivity();
+  if (userActivity) {
+    lastActivityTime = millis();
+    lastUserActivityTime = lastActivityTime;
+    powerManager.setPowerSaving(false);
+  } else if (activityManager.preventAutoSleep()) {
+    lastActivityTime = millis();
   }
 
   static bool screenshotButtonsReleased = true;
@@ -590,11 +596,15 @@ void loop() {
     }
   }
 
+  const bool skipLoopDelay = activityManager.skipLoopDelay();
+  const bool canSavePower = activityManager.allowPowerSaving() && !skipLoopDelay &&
+                            millis() - lastUserActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS;
+  powerManager.setPowerSaving(canSavePower);
+
   // Add delay at the end of the loop to prevent tight spinning
   // When an activity requests skip loop delay (e.g., webserver running), use yield() for faster response
   // Otherwise, use longer delay to save power
-  if (activityManager.skipLoopDelay()) {
-    powerManager.setPowerSaving(false);  // Make sure we're at full performance when skipLoopDelay is requested
+  if (skipLoopDelay) {
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
     // Keep the CPU at normal frequency while awake. Deep sleep remains the

@@ -43,6 +43,9 @@ class Activity {
 
   virtual bool skipLoopDelay() { return false; }
   virtual bool preventAutoSleep() { return false; }
+  // Allow the main loop to reduce CPU frequency after a short period without user input.
+  // This is independent from preventAutoSleep(): an activity can stay visible without preventing frequency scaling.
+  virtual bool allowPowerSaving() { return false; }
   virtual bool isReaderActivity() const { return false; }
   virtual ScreenshotInfo getScreenshotInfo() const { return {}; }
 

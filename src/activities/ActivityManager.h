@@ -101,6 +101,7 @@ class ActivityManager {
   void popActivity();
 
   bool preventAutoSleep() const;
+  bool allowPowerSaving() const;
   bool isReaderActivity() const;
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;

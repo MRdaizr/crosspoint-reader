@@ -29,7 +29,8 @@ class NtpClockActivity final : public Activity {
   void onEnter() override;
   void onExit() override;
   void loop() override;
-  bool skipLoopDelay() override { return true; }
+  bool skipLoopDelay() override { return state != State::DISPLAYING; }
   bool preventAutoSleep() override { return true; }
+  bool allowPowerSaving() override { return state == State::DISPLAYING; }
   void render(RenderLock&&) override;
 };
