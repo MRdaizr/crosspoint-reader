@@ -7,7 +7,6 @@
 #include "NtpClockActivity.h"
 #include "PomodoroActivity.h"
 #include "ReadingStatsActivity.h"
-#include "ShushanGameActivity.h"
 #include "TodoActivity.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
@@ -15,14 +14,12 @@
 #include "util/DynamicFont.h"
 
 namespace {
-constexpr int MENU_ITEMS = 6;
+constexpr int MENU_ITEMS = 5;
 const StrId menuLabels[MENU_ITEMS] = {StrId::STR_FLASHCARDS, StrId::STR_READING_STATS, StrId::STR_POMODORO,
-                                      StrId::STR_NTP_CLOCK, StrId::STR_TODOS, StrId::STR_SHUSHAN_GAME};
+                                      StrId::STR_NTP_CLOCK, StrId::STR_TODOS};
 const StrId menuDescs[MENU_ITEMS] = {StrId::STR_FLASHCARDS_DESC, StrId::STR_READING_STATS_DESC,
-                                     StrId::STR_POMODORO_DESC, StrId::STR_NTP_CLOCK_DESC, StrId::STR_TODOS_DESC,
-                                     StrId::STR_SHUSHAN_GAME_DESC};
-const UIIcon menuIcons[MENU_ITEMS] = {UIIcon::Book, UIIcon::Recent, UIIcon::Settings, UIIcon::Recent, UIIcon::File,
-                                     UIIcon::Book};
+                                     StrId::STR_POMODORO_DESC, StrId::STR_NTP_CLOCK_DESC, StrId::STR_TODOS_DESC};
+const UIIcon menuIcons[MENU_ITEMS] = {UIIcon::Book, UIIcon::Recent, UIIcon::Settings, UIIcon::Recent, UIIcon::File};
 }  // namespace
 
 void ExtensionsMenuActivity::onEnter() {
@@ -53,9 +50,6 @@ void ExtensionsMenuActivity::loop() {
         break;
       case 4:
         startActivityForResult(std::make_unique<TodoActivity>(renderer, mappedInput), nullptr);
-        break;
-      case 5:
-        startActivityForResult(std::make_unique<ShushanGameActivity>(renderer, mappedInput), nullptr);
         break;
       default:
         break;

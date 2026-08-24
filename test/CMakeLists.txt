@@ -22,14 +22,6 @@ set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 set(BUILD_GMOCK OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-FetchContent_Declare(
-  ArduinoJson
-  GIT_REPOSITORY https://github.com/bblanchon/ArduinoJson.git
-  GIT_TAG v7.4.2
-  GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(ArduinoJson)
-
 set(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 
 add_library(crosspoint_test_common INTERFACE)
@@ -51,4 +43,3 @@ add_subdirectory(release_json_parser)
 add_subdirectory(differential_rounding)
 add_subdirectory(hyphenation_eval)
 add_subdirectory(utf8_compose)
-add_subdirectory(shushan_game)
