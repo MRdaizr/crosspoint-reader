@@ -256,6 +256,36 @@ int BaseTheme::getListPageItems(int contentHeight, bool hasSubtitle) const {
   return contentHeight / rowHeight;
 }
 
+int BaseTheme::measureProgressBarHeight(const GfxRenderer& renderer, const int barHeight,
+                                        const bool showPercentage) const {
+  if (barHeight <= 0) return 0;
+  return barHeight + (showPercentage ? 15 + renderer.getLineHeight(UI_10_FONT_ID) : 0);
+}
+
+int BaseTheme::getListRowStep(const bool hasSubtitle) const {
+  return hasSubtitle ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
+}
+
+void BaseTheme::drawSideScrollBar(const GfxRenderer& renderer, const Rect rect, const int itemCount,
+                                  const int pageStartIndex, const int pageItems) const {
+  if (itemCount <= pageItems || pageItems <= 0 || rect.height <= 0) return;
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int totalPages = 1 + (itemCount - 1) / pageItems;
+  const int currentPage = std::clamp(pageStartIndex / pageItems, 0, totalPages - 1);
+  const int barHeight = std::max(1, static_cast<int>((static_cast<int64_t>(rect.height) * pageItems) / itemCount));
+  const int barY = rect.y + static_cast<int>(
+                                     (static_cast<int64_t>(rect.height - barHeight) * currentPage) /
+                                     std::max(1, totalPages - 1));
+  const int barX = rect.x + rect.width - metrics.scrollBarRightOffset;
+  renderer.drawLine(barX, rect.y, barX, rect.y + rect.height, true);
+  renderer.fillRect(barX - metrics.scrollBarWidth, barY, metrics.scrollBarWidth, barHeight, true);
+}
+
+bool BaseTheme::drawSelectionBackground(const GfxRenderer& renderer, const Rect rect) const {
+  renderer.fillRect(rect.x, rect.y, rect.width, rect.height, true);
+  return false;
+}
+
 ListRowLayout BaseTheme::getListRowLayout(const GfxRenderer& renderer, int contentHeight, int titleFontId,
                                           bool hasSubtitle) const {
   const int rowHeight = hasSubtitle ? BaseMetrics::values.listWithSubtitleRowHeight : BaseMetrics::values.listRowHeight;
@@ -341,9 +371,11 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     if (rowSubtitle != nullptr) {
       std::string subtitleText = rowSubtitle(i);
       if (!subtitleText.empty()) {
-        auto subtitle = renderer.truncatedText(SMALL_FONT_ID, subtitleText.c_str(), rowTextWidth);
-        renderer.drawText(SMALL_FONT_ID, rect.x + BaseMetrics::values.contentSidePadding, itemY + 22, subtitle.c_str(),
-                          i != selectedIndex);
+        const int subtitleFont = DynamicFont::fontForCjkText(renderer, subtitleText.c_str(), SMALL_FONT_ID);
+        DynamicFont::prewarmIfSdFont(renderer, subtitleFont, subtitleText);
+        auto subtitle = renderer.truncatedText(subtitleFont, subtitleText.c_str(), rowTextWidth);
+        renderer.drawText(subtitleFont, rect.x + BaseMetrics::values.contentSidePadding, itemY + 22,
+                          subtitle.c_str(), i != selectedIndex);
       }
     }
 

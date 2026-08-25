@@ -77,6 +77,10 @@ class Page {
   std::vector<FootnoteEntry> footnotes;
   static constexpr uint16_t MAX_FOOTNOTES_PER_PAGE = 16;
 
+  // Zero-based visible Unicode-codepoint offset at which this page starts.
+  // This lives in Section's side LUT rather than in the serialized page body.
+  uint32_t visibleTextOffset = 0;
+
   void addFootnote(const char* number, const char* href) {
     if (footnotes.size() >= MAX_FOOTNOTES_PER_PAGE) return;  // Cap per-page footnotes
     FootnoteEntry entry;

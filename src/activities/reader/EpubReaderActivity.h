@@ -3,6 +3,7 @@
 #include <Epub/FootnoteEntry.h>
 #include <Epub/Section.h>
 
+#include <cstdint>
 #include <optional>
 #include <atomic>
 
@@ -28,6 +29,9 @@ class EpubReaderActivity final : public Activity {
   int pagesUntilFullRefresh = 0;
   int cachedSpineIndex = 0;
   int cachedChapterTotalPageCount = 0;
+  char wereadBookId_[64] = {};
+  std::optional<uint32_t> cachedVisibleTextOffset;
+  bool clearInitialProgressAfterSave_ = false;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
   unsigned long readingSessionStartMs = 0UL;
@@ -80,13 +84,17 @@ class EpubReaderActivity final : public Activity {
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
   void advanceNextChapterPreload();
   void clearNextChapterPreload();
-  bool saveProgress(int spineIndex, int currentPage, int pageCount);
+  bool saveProgress(int spineIndex, int currentPage, int pageCount,
+                    std::optional<uint32_t> visibleTextOffset = std::nullopt);
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
+  bool jumpToFraction(float fraction);
   void jumpToPercent(int percent);
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   // Returns true if sync acted (launched, or surfaced a save error); false if it was a no-op
   // because no KOReader credentials are stored.
   bool launchKOReaderSync();
+  bool launchWeReadSync();
+  void applyCachedVisibleTextOffset();
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void pageTurn(bool isForwardTurn);

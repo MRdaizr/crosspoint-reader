@@ -346,7 +346,9 @@ void RoundedRaffTheme::drawList(const GfxRenderer& renderer, Rect rect, int item
   const int titleFont = titleFontId != 0 ? titleFontId : this->titleFontId();
   const auto titleStyle = titleFontId != 0 ? EpdFontFamily::REGULAR : EpdFontFamily::BOLD;
   const int titleLineHeight = renderer.getLineHeight(titleFont);
-  const int subtitleFont = subtitleFontId();
+  // A CJK subtitle must use the selected SD-card font as well. The built-in
+  // SMALL_FONT_ID only contains the Latin UI glyphs.
+  const int subtitleFont = renderer.isSdCardFont(titleFont) ? titleFont : subtitleFontId();
   const int subtitleLineHeight = renderer.getLineHeight(subtitleFont);
   constexpr int subtitleTopPadding = 10;
   constexpr int subtitleBottomPadding = 10;
@@ -400,10 +402,14 @@ void RoundedRaffTheme::drawList(const GfxRenderer& renderer, Rect rect, int item
       } else {
         const int titleY = rowY + subtitleTopPadding;
         const int subtitleY = titleY + titleLineHeight + subtitleInterLineGap;
+        // Keep Latin subtitles in the built-in small font; only CJK text uses
+        // the selected SD-card font.
+        const int rowSubtitleFont = DynamicFont::fontForCjkText(renderer, subtitleRaw.c_str(), subtitleFontId());
+        DynamicFont::prewarmIfSdFont(renderer, rowSubtitleFont, subtitleRaw);
         auto subtitle =
-            renderer.truncatedText(subtitleFont, subtitleRaw.c_str(), textAreaWidth, EpdFontFamily::REGULAR);
+            renderer.truncatedText(rowSubtitleFont, subtitleRaw.c_str(), textAreaWidth, EpdFontFamily::REGULAR);
         renderer.drawText(titleFont, rowX + kInteractiveInsetX, titleY, title.c_str(), !isSelected, titleStyle);
-        renderer.drawText(subtitleFont, rowX + kInteractiveInsetX, subtitleY, subtitle.c_str(), !isSelected,
+        renderer.drawText(rowSubtitleFont, rowX + kInteractiveInsetX, subtitleY, subtitle.c_str(), !isSelected,
                           EpdFontFamily::REGULAR);
       }
     } else {

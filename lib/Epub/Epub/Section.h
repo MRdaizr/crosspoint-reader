@@ -23,6 +23,7 @@ class Section {
     uint32_t fileOffset;
     uint16_t paragraphIndex;
     uint16_t listItemIndex;
+    uint32_t visibleTextOffset;
   };
   std::string buildFilePath;
   std::string buildHtmlPath;
@@ -40,7 +41,8 @@ class Section {
                               uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled,
                               bool embeddedStyle, uint8_t imageRendering, bool focusReadingEnabled);
   uint32_t onPageComplete(std::unique_ptr<Page> page);
-  uint32_t onIncrementalPageComplete(std::unique_ptr<Page> page, uint16_t paragraphIndex, uint16_t listItemIndex);
+  uint32_t onIncrementalPageComplete(std::unique_ptr<Page> page, uint16_t paragraphIndex, uint16_t listItemIndex,
+                                     uint32_t visibleTextOffset);
   bool finishIncrementalBuild();
   void discardIncrementalBuild();
   void preserveIncrementalBuild();
@@ -97,4 +99,10 @@ class Section {
 
   // Look up the synthetic paragraph index for the given rendered page.
   std::optional<uint16_t> getParagraphIndexForPage(uint16_t page) const;
+
+  // Exact zero-based visible Unicode-codepoint offset for a rendered page.
+  std::optional<uint32_t> getVisibleTextOffsetForPage(uint16_t page) const;
+
+  // Resolve an exact visible-text offset to the page containing it.
+  std::optional<uint16_t> getPageForVisibleTextOffset(uint32_t offset) const;
 };

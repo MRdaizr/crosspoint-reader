@@ -886,6 +886,39 @@ CrossPointPosition ProgressMapper::toCrossPoint(const std::shared_ptr<Epub>& epu
   return result;
 }
 
+CrossPointPosition ProgressMapper::fromSpineProgress(const std::shared_ptr<Epub>& epub, const int spineIndex,
+                                                      const float intraSpineProgress, GfxRenderer& renderer,
+                                                      const int currentSpineIndex,
+                                                      const int totalPagesInCurrentSpine) {
+  CrossPointPosition result{};
+  if (!epub || spineIndex < 0 || spineIndex >= epub->getSpineItemsCount()) return result;
+
+  result.spineIndex = spineIndex;
+  const float fraction = std::clamp(intraSpineProgress, 0.0f, 1.0f);
+  Section tempSection(epub, spineIndex, renderer);
+  if (const auto cachedCount = tempSection.getCachedPageCount()) {
+    result.totalPages = *cachedCount;
+  } else if (spineIndex == currentSpineIndex && totalPagesInCurrentSpine > 0) {
+    result.totalPages = totalPagesInCurrentSpine;
+  } else if (currentSpineIndex >= 0 && currentSpineIndex < epub->getSpineItemsCount() &&
+             totalPagesInCurrentSpine > 0) {
+    const size_t spineStart = spineIndex > 0 ? epub->getCumulativeSpineItemSize(spineIndex - 1) : 0;
+    const size_t spineEnd = epub->getCumulativeSpineItemSize(spineIndex);
+    const size_t currentStart = currentSpineIndex > 0 ? epub->getCumulativeSpineItemSize(currentSpineIndex - 1) : 0;
+    const size_t currentEnd = epub->getCumulativeSpineItemSize(currentSpineIndex);
+    const size_t currentSize = currentEnd > currentStart ? currentEnd - currentStart : 0;
+    const size_t spineSize = spineEnd > spineStart ? spineEnd - spineStart : 0;
+    if (currentSize > 0 && spineSize > 0) {
+      result.totalPages = std::max(1, static_cast<int>(
+                                           static_cast<float>(totalPagesInCurrentSpine) * spineSize / currentSize));
+    }
+  }
+  if (result.totalPages <= 0) result.totalPages = 1;
+  result.pageNumber = std::clamp(static_cast<int>(fraction * static_cast<float>(result.totalPages - 1) + 0.5f),
+                                 0, result.totalPages - 1);
+  return result;
+}
+
 std::string ProgressMapper::generateXPath(const std::shared_ptr<Epub>& epub, int spineIndex, float intra) {
   const std::string base = "/body/DocFragment[" + std::to_string(spineIndex + 1) + "]/body";
   if (intra <= 0.0f) return base;

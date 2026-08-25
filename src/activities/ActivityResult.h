@@ -50,6 +50,11 @@ struct ProgressChangeResult {
   int page = 0;
 };
 
+struct ChapterRangeResult {
+  uint32_t first = 0;
+  uint32_t last = 0;
+};
+
 enum class NetworkMode;
 
 struct NetworkModeResult {
@@ -66,7 +71,8 @@ struct FilePathResult {
 
 using ResultVariant =
     std::variant<std::monostate, WifiResult, KeyboardResult, MenuResult, ChapterResult, PercentResult, IntervalResult,
-                 PageResult, ProgressChangeResult, NetworkModeResult, FootnoteResult, FilePathResult, TxtMenuResult>;
+                 PageResult, ProgressChangeResult, ChapterRangeResult, NetworkModeResult, FootnoteResult,
+                 FilePathResult, TxtMenuResult>;
 
 struct ActivityResult {
   bool isCancelled = false;

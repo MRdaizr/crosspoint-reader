@@ -186,6 +186,7 @@ class BaseTheme {
   virtual ~BaseTheme() = default;
 
   // Component drawing methods
+  int measureProgressBarHeight(const GfxRenderer& renderer, int barHeight, bool showPercentage = true) const;
   void drawProgressBar(const GfxRenderer& renderer, Rect rect, size_t current, size_t total) const;
   void drawBatteryLeft(const GfxRenderer& renderer, Rect rect,
                        bool showPercentage = true) const;  // Left aligned (reader mode)
@@ -196,6 +197,9 @@ class BaseTheme {
                                const char* btn4) const;
   virtual void drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn) const;
   virtual int getListPageItems(int contentHeight, bool hasSubtitle) const;
+  virtual int getListRowStep(bool hasSubtitle) const;
+  void drawSideScrollBar(const GfxRenderer& renderer, Rect rect, int itemCount, int pageStartIndex,
+                         int pageItems) const;
   virtual ListRowLayout getListRowLayout(const GfxRenderer& renderer, int contentHeight, int titleFontId,
                                          bool hasSubtitle) const;
   virtual void drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
@@ -225,6 +229,7 @@ class BaseTheme {
   void drawHelpText(const GfxRenderer& renderer, Rect rect, const char* label) const;
   virtual void drawTextField(const GfxRenderer& renderer, Rect rect, const int textWidth, bool cursorMode = false,
                              int contentStartX = 0, int contentWidth = 0) const;
+  bool drawSelectionBackground(const GfxRenderer& renderer, Rect rect) const;
   virtual void drawKeyboardKey(const GfxRenderer& renderer, Rect rect, const char* label, const bool isSelected,
                                const char* secondaryLabel = nullptr, KeyboardKeyType keyType = KeyboardKeyType::Normal,
                                bool inactiveSelection = false) const;

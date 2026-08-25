@@ -17,6 +17,8 @@ struct CrossPointPosition {
   uint16_t liIndex = 0;            // Running <li> count at the matched XPath element
   bool hasLiIndex = false;         // True when target element is <li> and liIndex was resolved
   char xpathAnchorId[64] = {};     // First <a id> captured inside the matched XPath element
+  uint32_t visibleTextOffset = 0;  // Zero-based visible Unicode-codepoint offset
+  bool hasVisibleTextOffset = false;
 };
 
 /**
@@ -64,6 +66,13 @@ class ProgressMapper {
   static CrossPointPosition toCrossPoint(const std::shared_ptr<Epub>& epub, const SavedProgressPosition& savedPos,
                                          GfxRenderer& renderer, int currentSpineIndex = -1,
                                          int totalPagesInCurrentSpine = 0, int fallbackTotalPages = 0);
+
+  // Map a canonical chapter-local fraction to the current reader's page grid.
+  // Used by WeRead, whose chapter UID/offset is authoritative even when page
+  // counts differ from the EPUB's original pagination.
+  static CrossPointPosition fromSpineProgress(const std::shared_ptr<Epub>& epub, int spineIndex,
+                                              float intraSpineProgress, GfxRenderer& renderer,
+                                              int currentSpineIndex = -1, int totalPagesInCurrentSpine = 0);
 
  private:
   /**

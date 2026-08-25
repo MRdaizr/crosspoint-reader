@@ -3,10 +3,20 @@
 #include <Arduino.h>
 #include <Wire.h>
 
+#include <cstdint>
+#include <ctime>
+
 #include "HalGPIO.h"
 
 class HalClock;
 extern HalClock halClock;  // Singleton
+
+enum class ClockSyncState : uint8_t {
+  Idle,
+  Syncing,
+  Succeeded,
+  Failed,
+};
 
 class HalClock {
   bool _available = false;
@@ -14,6 +24,7 @@ class HalClock {
   mutable uint8_t _cachedMinute = 0;
   mutable bool _hasCachedTime = false;
   mutable unsigned long _lastPollMs = 0;
+  ClockSyncState _syncState = ClockSyncState::Idle;
 
   static constexpr unsigned long CLOCK_POLL_MS = 10000;  // 10 seconds
 
@@ -42,6 +53,14 @@ class HalClock {
   // Debouncing (skip if already synced once) is enforced by the caller, not here,
   // so the HAL stays free of any app-layer settings dependency.
   bool syncFromNTP();
+
+  // POSIX UTC clock helpers used by network services. The existing RTC/NTP
+  // implementation remains the source of truth for this hardware variant.
+  time_t nowUtc() const;
+  bool hasValidTime() const;
+  bool requestSync();
+  bool syncNow(uint32_t timeoutMs = 10000);
+  ClockSyncState syncState() const { return _syncState; }
 
  private:
   bool writeTimeToRTC(uint8_t hour, uint8_t minute, uint8_t second);

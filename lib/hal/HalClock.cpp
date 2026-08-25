@@ -9,6 +9,10 @@
 
 HalClock halClock;  // Singleton instance
 
+namespace {
+constexpr time_t MIN_TRUSTED_EPOCH = 1704016800;  // 2024-01-01 at UTC+14
+}
+
 // DS3231 register layout (BCD encoded):
 //   0x00: Seconds  (bits 6-4 = tens, bits 3-0 = ones)
 //   0x01: Minutes  (bits 6-4 = tens, bits 3-0 = ones)
@@ -150,29 +154,40 @@ bool HalClock::writeTimeToRTC(uint8_t hour, uint8_t minute, uint8_t second) {
 }
 
 bool HalClock::syncFromNTP() {
-  if (!_available) return false;
-
   if (WiFi.status() != WL_CONNECTED) {
     LOG_ERR("CLK", "WiFi not connected, cannot sync NTP");
     return false;
   }
 
   LOG_INF("CLK", "Starting NTP sync...");
-  configTzTime("UTC0", "pool.ntp.org", "time.nist.gov");
+  // System time is also used on X4, which does not have the X3 DS3231 RTC.
+  // Configure SNTP directly instead of using configTzTime(): the latter also
+  // changes the process-wide timezone and can affect the standby clock UI.
+  if (esp_sntp_enabled()) esp_sntp_stop();
+  esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+  esp_sntp_setservername(0, "ntp.aliyun.com");
+  esp_sntp_setservername(1, "pool.ntp.org");
+  esp_sntp_setservername(2, "time.nist.gov");
+  esp_sntp_init();
 
-  // Wait for SNTP sync to complete (up to 5 seconds)
-  constexpr int maxAttempts = 50;
+  // Wait for SNTP sync to complete (up to 15 seconds). A successful system
+  // clock sync is sufficient for network request signing; writing the RTC is
+  // an optional persistence improvement on X3.
+  constexpr int maxAttempts = 150;
   for (int i = 0; i < maxAttempts; i++) {
-    if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED) {
+    if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED && hasValidTime()) {
       time_t now = time(nullptr);
-      struct tm timeinfo;
+      struct tm timeinfo{};
       gmtime_r(&now, &timeinfo);
 
-      if (writeTimeToRTC(timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec)) {
+      if (_available && writeTimeToRTC(timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec)) {
         LOG_INF("CLK", "RTC set to %02d:%02d:%02d UTC", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-        return true;
+      } else if (_available) {
+        LOG_ERR("CLK", "System time synced, but RTC write failed");
+      } else {
+        LOG_INF("CLK", "System time synced (no RTC on this device)");
       }
-      return false;
+      return true;
     }
     delay(100);
   }
@@ -180,3 +195,19 @@ bool HalClock::syncFromNTP() {
   LOG_ERR("CLK", "NTP sync timed out");
   return false;
 }
+
+time_t HalClock::nowUtc() const {
+  const time_t now = time(nullptr);
+  return now >= MIN_TRUSTED_EPOCH ? now : 0;
+}
+
+bool HalClock::hasValidTime() const { return nowUtc() != 0; }
+
+bool HalClock::requestSync() {
+  _syncState = ClockSyncState::Syncing;
+  const bool ok = syncFromNTP();
+  _syncState = ok ? ClockSyncState::Succeeded : ClockSyncState::Failed;
+  return ok;
+}
+
+bool HalClock::syncNow(uint32_t /*timeoutMs*/) { return requestSync(); }

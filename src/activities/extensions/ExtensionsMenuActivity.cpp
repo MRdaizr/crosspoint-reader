@@ -8,18 +8,20 @@
 #include "PomodoroActivity.h"
 #include "ReadingStatsActivity.h"
 #include "TodoActivity.h"
+#include "activities/apps/weread/WeReadActivity.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/DynamicFont.h"
 
 namespace {
-constexpr int MENU_ITEMS = 5;
+constexpr int MENU_ITEMS = 6;
 const StrId menuLabels[MENU_ITEMS] = {StrId::STR_FLASHCARDS, StrId::STR_READING_STATS, StrId::STR_POMODORO,
-                                      StrId::STR_NTP_CLOCK, StrId::STR_TODOS};
+                                      StrId::STR_NTP_CLOCK, StrId::STR_TODOS, StrId::STR_WEREAD_TITLE};
 const StrId menuDescs[MENU_ITEMS] = {StrId::STR_FLASHCARDS_DESC, StrId::STR_READING_STATS_DESC,
-                                     StrId::STR_POMODORO_DESC, StrId::STR_NTP_CLOCK_DESC, StrId::STR_TODOS_DESC};
-const UIIcon menuIcons[MENU_ITEMS] = {UIIcon::Book, UIIcon::Recent, UIIcon::Settings, UIIcon::Recent, UIIcon::File};
+                                     StrId::STR_POMODORO_DESC, StrId::STR_NTP_CLOCK_DESC, StrId::STR_TODOS_DESC,
+                                     StrId::STR_WEREAD_DESC};
+const UIIcon menuIcons[MENU_ITEMS] = {UIIcon::Book, UIIcon::Recent, UIIcon::Settings, UIIcon::Recent, UIIcon::File,
+                                      UIIcon::Book};
 }  // namespace
 
 void ExtensionsMenuActivity::onEnter() {
@@ -51,6 +53,9 @@ void ExtensionsMenuActivity::loop() {
       case 4:
         startActivityForResult(std::make_unique<TodoActivity>(renderer, mappedInput), nullptr);
         break;
+      case 5:
+        startActivityForResult(std::make_unique<WeReadActivity>(renderer, mappedInput), nullptr);
+        break;
       default:
         break;
     }
@@ -78,20 +83,10 @@ void ExtensionsMenuActivity::render(RenderLock&&) {
   const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
   const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
 
-  std::string menuText;
-  for (int i = 0; i < MENU_ITEMS; ++i) {
-    menuText += I18N.get(menuLabels[i]);
-    menuText += '\n';
-    menuText += I18N.get(menuDescs[i]);
-    menuText += '\n';
-  }
-  const int menuFontId = DynamicFont::fontForCjkText(renderer, menuText.c_str(), UI_10_FONT_ID);
-  DynamicFont::prewarmIfSdFont(renderer, menuFontId, menuText);
-
   GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, MENU_ITEMS, selectedIndex,
                [](int index) { return std::string(I18N.get(menuLabels[index])); },
                [](int index) { return std::string(I18N.get(menuDescs[index])); },
-               [](int index) { return menuIcons[index]; }, nullptr, false, nullptr, menuFontId);
+               [](int index) { return menuIcons[index]; });
 
   const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

@@ -315,8 +315,10 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
     if (rowSubtitle != nullptr) {
       // Draw subtitle
       std::string subtitleText = rowSubtitle(i);
-      auto subtitle = renderer.truncatedText(SMALL_FONT_ID, subtitleText.c_str(), rowTextWidth);
-      renderer.drawText(SMALL_FONT_ID, textX, itemY + 30, subtitle.c_str(), true);
+      const int subtitleFont = DynamicFont::fontForCjkText(renderer, subtitleText.c_str(), SMALL_FONT_ID);
+      DynamicFont::prewarmIfSdFont(renderer, subtitleFont, subtitleText);
+      auto subtitle = renderer.truncatedText(subtitleFont, subtitleText.c_str(), rowTextWidth);
+      renderer.drawText(subtitleFont, textX, itemY + 30, subtitle.c_str(), true);
     }
 
     // Draw value

@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <iterator>
 #include <new>
+#include <strings.h>
 
 #include "Epub.h"
 #include "Epub/Page.h"
@@ -75,6 +76,11 @@ const char* getAttribute(const XML_Char** atts, const char* attrName) {
 // as a navigation anchor exhausts the heap on memory-constrained devices.
 // Block-level, sectioning, and structural elements are always considered navigable.
 bool isNonNavigableInlineElement(const char* name) { return strcmp(name, "span") == 0; }
+
+bool isNonVisibleTextTag(const char* name) {
+  return strcasecmp(name, "head") == 0 || strcasecmp(name, "style") == 0 || strcasecmp(name, "script") == 0 ||
+         strcasecmp(name, "title") == 0 || strcasecmp(name, "rp") == 0;
+}
 
 bool isInternalEpubLink(const char* href) {
   if (!href || href[0] == '\0') return false;
@@ -171,7 +177,8 @@ void ChapterHtmlSlimParser::flushPendingAnchor() {
 }
 
 void ChapterHtmlSlimParser::completeCurrentPage(const uint16_t paragraphIndex, const uint16_t listItemIndex) {
-  completePageFn(std::move(currentPage), paragraphIndex, listItemIndex);
+  const uint32_t pageVisibleOffset = currentPage ? currentPage->visibleTextOffset : visibleTextOffset;
+  completePageFn(std::move(currentPage), paragraphIndex, listItemIndex, pageVisibleOffset);
   completedPageCount++;
 
   if (maxPagesToBuild > 0 && completedPageCount >= maxPagesToBuild) {
@@ -208,7 +215,7 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
 
   // flush the buffer
   partWordBuffer[partWordBufferIndex] = '\0';
-  currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues);
+  currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, partWordVisibleOffset);
   partWordBufferIndex = 0;
   nextWordContinues = false;
 }
@@ -292,6 +299,9 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
     LOG_ERR("EHP", "Failed to create PageHorizontalRule");
     return;
   }
+  if (currentPage->elements.empty()) {
+    currentPage->visibleTextOffset = visibleTextOffset;
+  }
   currentPage->elements.push_back(pageRule);
   currentPageNextY = static_cast<int16_t>(currentPageNextY + ruleThickness + bottomSpacing);
 
@@ -303,6 +313,19 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
 
 void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char* name, const XML_Char** atts) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+
+  if (strcasecmp(name, "body") == 0) {
+    self->insideBody = true;
+  }
+  if (self->insideBody && (self->nonVisibleTextDepth > 0 || isNonVisibleTextTag(name))) {
+    self->nonVisibleTextDepth++;
+  }
+
+  if (isNonVisibleTextTag(name)) {
+    self->skipUntilDepth = self->depth;
+    self->depth += 1;
+    return;
+  }
 
   // Middle of skip
   if (self->skipUntilDepth < self->depth) {
@@ -446,7 +469,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     headerStyle.underline = false;
     self->inlineStyleStack.push_back(headerStyle);
     self->updateEffectiveInlineStyle();
+    self->syntheticCharacterData = true;
     self->characterData(userData, headerText.c_str(), static_cast<int>(headerText.length()));
+    self->syntheticCharacterData = false;
     if (self->partWordBufferIndex > 0) {
       self->flushPartWordBuffer();
     }
@@ -689,6 +714,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                   LOG_ERR("EHP", "Failed to create PageImage");
                   return;
                 }
+                if (self->currentPage->elements.empty()) {
+                  self->currentPage->visibleTextOffset = self->visibleTextOffset;
+                }
                 self->currentPage->elements.push_back(pageImage);
                 self->currentPageNextY += displayHeight + imageMarginBottom;
 
@@ -858,7 +886,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->updateEffectiveInlineStyle();
 
       if (strcmp(name, "li") == 0) {
-        self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR);
+        self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR, false, false,
+                                       self->visibleTextOffset);
       }
     }
   } else if (matches(name, UNDERLINE_TAGS, std::size(UNDERLINE_TAGS))) {
@@ -991,6 +1020,19 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
 
+  const bool countVisibleOffsets = self->insideBody && self->nonVisibleTextDepth == 0 && !self->syntheticCharacterData;
+  const uint32_t callbackVisibleOffset = self->visibleTextOffset;
+  if (countVisibleOffsets) {
+    const unsigned char* ptr = reinterpret_cast<const unsigned char*>(s);
+    const unsigned char* end = ptr + len;
+    while (ptr < end) {
+      const unsigned char* before = ptr;
+      utf8NextCodepoint(&ptr);
+      if (ptr == before) ++ptr;
+      self->visibleTextOffset++;
+    }
+  }
+
   // Skip content of nested table
   if (self->tableDepth > 1) {
     return;
@@ -1029,7 +1071,12 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
     self->currentFootnote.number[self->currentFootnoteLinkTextLen] = '\0';
   }
 
+  uint32_t nextCodepointOffset = callbackVisibleOffset;
   for (int i = 0; i < len; i++) {
+    const uint32_t codepointOffset = nextCodepointOffset;
+    if (countVisibleOffsets && (static_cast<uint8_t>(s[i]) & 0xC0) != 0x80) {
+      nextCodepointOffset++;
+    }
     if (isWhitespace(s[i])) {
       // Currently looking at whitespace, if there's anything in the partWordBuffer, flush it
       if (self->partWordBufferIndex > 0) {
@@ -1067,6 +1114,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       self->partWordBuffer[0] = ' ';
       self->partWordBuffer[1] = '\0';
       self->partWordBufferIndex = 1;
+      self->partWordVisibleOffset = codepointOffset;
       self->nextWordContinues = true;  // Attach space to previous word (no break).
       self->flushPartWordBuffer();
 
@@ -1086,6 +1134,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
       self->partWordBuffer[0] = ' ';
       self->partWordBuffer[1] = '\0';
       self->partWordBufferIndex = 1;
+      self->partWordVisibleOffset = codepointOffset;
       self->nextWordContinues = true;
       self->flushPartWordBuffer();
 
@@ -1107,6 +1156,10 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
         i += 2;    // Skip the next two bytes
         continue;  // Move to the next iteration
       }
+    }
+
+    if (self->partWordBufferIndex == 0) {
+      self->partWordVisibleOffset = codepointOffset;
     }
 
     // If we're about to run out of space, then cut the word off and start a new one.
@@ -1150,7 +1203,10 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
                                         : self->viewportWidth;
     self->currentTextBlock->layoutAndExtractLines(
         self->renderer, self->fontId, effectiveWidth,
-        [self](const std::shared_ptr<TextBlock>& textBlock) { self->addLineToPage(textBlock); }, false);
+        [self](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) {
+          self->addLineToPage(textBlock, offset);
+        },
+        false);
   }
 }
 
@@ -1172,6 +1228,10 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+
+  if (self->nonVisibleTextDepth > 0) {
+    self->nonVisibleTextDepth--;
+  }
 
   // Check if any style state will change after we decrement depth
   // If so, we MUST flush the partWordBuffer with the CURRENT style first
@@ -1233,6 +1293,10 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   // Leaving skip
   if (self->skipUntilDepth == self->depth) {
     self->skipUntilDepth = INT_MAX;
+  }
+
+  if (strcasecmp(name, "body") == 0) {
+    self->insideBody = false;
   }
 
   if (self->tableDepth == 1 && (strcmp(name, "td") == 0 || strcmp(name, "th") == 0)) {
@@ -1456,12 +1520,16 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
   }
 }
 
-void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line) {
+void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const uint32_t visibleTextOffset) {
   const int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
 
   if (!currentPage) {
     currentPage.reset(new Page());
     currentPageNextY = 0;
+  }
+
+  if (currentPage->elements.empty()) {
+    currentPage->visibleTextOffset = visibleTextOffset;
   }
 
   if (currentPageNextY + lineHeight > viewportHeight) {
@@ -1514,7 +1582,7 @@ void ChapterHtmlSlimParser::makePages() {
 
   currentTextBlock->layoutAndExtractLines(
       renderer, fontId, effectiveWidth,
-      [this](const std::shared_ptr<TextBlock>& textBlock) { addLineToPage(textBlock); });
+      [this](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) { addLineToPage(textBlock, offset); });
 
   // Fallback: transfer any remaining pending footnotes to current page.
   // Normally addLineToPage handles this via word-index tracking, but this catches
