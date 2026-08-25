@@ -119,14 +119,16 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
 
 }  // namespace
 
-void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
+void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) { (void)renderChecked(renderer, x, y); }
+
+bool ImageBlock::renderChecked(GfxRenderer& renderer, const int x, const int y) {
   // The font-prewarm scan pass only accumulates glyphs; an image contributes
   // none, and its DirectPixelWriter output bypasses the renderer's scan-mode
   // suppression, so it would otherwise do a full (discarded) cache render every
   // page view. Skip it here. The image still draws in the real BW/grayscale
   // passes; on first view this just moves the one-time decode to the BW pass.
   FontCacheManager* fcm = renderer.getFontCacheManager();
-  if (fcm && fcm->isScanning()) return;
+  if (fcm && fcm->isScanning()) return true;
 
   LOG_DBG("IMG", "Rendering image at %d,%d: %s (%dx%d)", x, y, imagePath.c_str(), width, height);
 
@@ -137,7 +139,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   if (x < 0 || y < 0 || x + width > screenWidth || y + height > screenHeight) {
     LOG_ERR("IMG", "Invalid render position: (%d,%d) size (%dx%d) screen (%dx%d)", x, y, width, height, screenWidth,
             screenHeight);
-    return;
+    return false;
   }
 
   // Tiled grayscale (#2190): skip the whole image when it doesn't touch the
@@ -147,13 +149,13 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   // is orientation-aware and returns true when no strip is active, so the BW
   // pass and non-tiled controllers render the image exactly as before.
   if (!renderer.glyphIntersectsStrip(x, y, x + width - 1, y + height - 1)) {
-    return;
+    return true;
   }
 
   // Try to render from cache first
   std::string cachePath = getCachePath(imagePath);
   if (renderFromCache(renderer, cachePath, x, y, width, height)) {
-    return;  // Successfully rendered from cache
+    return true;  // Successfully rendered from cache
   }
 
   // No cache - need to decode the image
@@ -161,14 +163,14 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   HalFile file;
   if (!Storage.openFileForRead("IMG", imagePath, file)) {
     LOG_ERR("IMG", "Image file not found: %s", imagePath.c_str());
-    return;
+    return false;
   }
   size_t fileSize = file.size();
   file.close();
 
   if (fileSize == 0) {
     LOG_ERR("IMG", "Image file is empty: %s", imagePath.c_str());
-    return;
+    return false;
   }
 
   LOG_DBG("IMG", "Decoding and caching: %s", imagePath.c_str());
@@ -187,7 +189,7 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(imagePath);
   if (!decoder) {
     LOG_ERR("IMG", "No decoder found for image: %s", imagePath.c_str());
-    return;
+    return false;
   }
 
   LOG_DBG("IMG", "Using %s decoder", decoder->getFormatName());
@@ -195,10 +197,11 @@ void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) {
   bool success = decoder->decodeToFramebuffer(imagePath, renderer, config);
   if (!success) {
     LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
-    return;
+    return false;
   }
 
   LOG_DBG("IMG", "Decode successful");
+  return true;
 }
 
 bool ImageBlock::serialize(HalFile& file) {

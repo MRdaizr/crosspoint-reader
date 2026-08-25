@@ -6,6 +6,7 @@
 #include <I18n.h>
 #include <WiFi.h>
 #include <esp_task_wdt.h>
+#include <Memory.h>
 
 #include <cstddef>
 
@@ -14,6 +15,7 @@
 #include "SilentRestart.h"
 #include "WifiSelectionActivity.h"
 #include "activities/network/CalibreConnectActivity.h"
+#include "activities/network/airpage/AirPageActivity.h"
 #include "activities/settings/NutstoreSyncActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -118,6 +120,8 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
     modeName = "Create Hotspot";
   } else if (mode == NetworkMode::NUTSTORE_SYNC) {
     modeName = "Nutstore Sync";
+  } else if (mode == NetworkMode::AIRPAGE) {
+    modeName = "AirPage";
   }
   LOG_DBG("WEBACT", "Network mode selected: %s", modeName);
 
@@ -155,6 +159,27 @@ void CrossPointWebServerActivity::onNetworkModeSelected(const NetworkMode mode) 
                                    }
                                  });
         });
+    return;
+  }
+
+  if (mode == NetworkMode::AIRPAGE) {
+    auto airPage = makeUniqueNoThrow<AirPageActivity>(renderer, mappedInput);
+    if (!airPage) {
+      LOG_ERR("WEBACT", "OOM: AirPageActivity (%u bytes)", static_cast<unsigned>(sizeof(AirPageActivity)));
+      onGoHome();
+      return;
+    }
+    startActivityForResult(std::move(airPage), [this](const ActivityResult&) {
+      state = WebServerActivityState::MODE_SELECTION;
+      startActivityForResult(std::make_unique<NetworkModeSelectionActivity>(renderer, mappedInput),
+                             [this](const ActivityResult& result) {
+                               if (result.isCancelled) {
+                                 onGoHome();
+                               } else {
+                                 onNetworkModeSelected(std::get<NetworkModeResult>(result.data).mode);
+                               }
+                             });
+    });
     return;
   }
 
