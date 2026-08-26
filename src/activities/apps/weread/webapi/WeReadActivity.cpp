@@ -168,6 +168,15 @@ int dynamicListTitleFontId(GfxRenderer& renderer, const std::string& visibleText
   return renderer.isSdCardFont(fontId) ? fontId : 0;
 }
 
+uint32_t hashText(const std::string& text) {
+  uint32_t hash = 2166136261u;
+  for (const unsigned char byte : text) {
+    hash ^= byte;
+    hash *= 16777619u;
+  }
+  return hash;
+}
+
 WeReadShelfGridLayout shelfGridLayout(GfxRenderer& renderer, const Rect& content, const int sidePadding,
                                       const int spacing) {
   WeReadShelfGridLayout layout;
@@ -482,7 +491,11 @@ void WeReadActivity::onEnter() {
   mainTabs_.push_back({tr(STR_WEREAD_TAB_SHELF), true});
   mainTabs_.push_back({tr(STR_WEREAD_TAB_MANAGE), false});
   resetShelfCoverLoading();
-  detailSelected_ = 0;
+  detailSelected_.store(0);
+  detailFrameSelection_.store(-1);
+  detailFrameValid_.store(false);
+  detailSelectionOnlyPending_.store(false);
+  detailSelectionGeneration_.store(0);
   introPage_ = 0;
   introPageCount_ = 1;
   detail_ = {};
@@ -491,6 +504,9 @@ void WeReadActivity::onEnter() {
   detailOptionsKnown_ = false;
   detailIntroTruncated_ = false;
   introPagesTruncated_ = false;
+  introPreviewPrewarmHash_ = 0;
+  introPreviewPrewarmLength_ = 0;
+  introPreviewPrewarmFontId_ = 0;
   downloadChapterScope_ = WeReadClient::DownloadOptions::ChapterScope::WholeBook;
   optionPopupClosing_ = false;
   wifiSessionActive_ = false;
@@ -753,7 +769,12 @@ WeReadClient::Operation::Event WeReadActivity::stepOperation() {
   // Rendering owns a second 8KB task and large display buffers. Serialize it
   // with each synchronous protocol step so TLS never competes with a refresh.
   RenderLock renderBarrier(*this);
-  if (auto* fontCache = renderer.getFontCacheManager()) fontCache->clearCache();
+  if (auto* fontCache = renderer.getFontCacheManager()) {
+    fontCache->clearCache();
+    introPreviewPrewarmHash_ = 0;
+    introPreviewPrewarmLength_ = 0;
+    introPreviewPrewarmFontId_ = 0;
+  }
   // Cover conversion claims JPEGDEC from the lent 48KB framebuffer.
   struct WorkContext {
     WeReadActivity* activity;
@@ -977,7 +998,7 @@ void WeReadActivity::advanceJob() {
 }
 
 void WeReadActivity::loadSelectedDetail(const bool preserveUi) {
-  const int previousSelection = detailSelected_;
+  const int previousSelection = detailSelected_.load();
   const auto previousImagePolicy = detailImagePolicy_;
   detail_ = {};
   introPage_ = 0;
@@ -985,6 +1006,13 @@ void WeReadActivity::loadSelectedDetail(const bool preserveUi) {
   introPageOffsets_[0] = 0;
   introPageOffsets_[1] = 0;
   introFontId_ = UI_10_FONT_ID;
+  introPreviewPrewarmHash_ = 0;
+  introPreviewPrewarmLength_ = 0;
+  introPreviewPrewarmFontId_ = 0;
+  detailFrameSelection_.store(-1);
+  detailFrameValid_.store(false);
+  detailSelectionOnlyPending_.store(false);
+  detailSelectionGeneration_.store(0);
   introPagesTruncated_ = false;
   memcpy(detail_.title, pendingBook_.title, sizeof(detail_.title));
   detail_.title[sizeof(detail_.title) - 1] = '\0';
@@ -1004,8 +1032,8 @@ void WeReadActivity::loadSelectedDetail(const bool preserveUi) {
   detailImagePolicy_ = preserveUi ? previousImagePolicy : detailSavedImagePolicy_;
   if (detail_.introLength > 0) buildIntroductionPages();
   const bool cached = Storage.exists(WeReadStore::finalBookPath(pendingBook_).c_str());
-  detailSelected_ =
-      preserveUi ? previousSelection : static_cast<int>(cached ? DetailAction::Read : DetailAction::Cache);
+  detailSelected_.store(
+      preserveUi ? previousSelection : static_cast<int>(cached ? DetailAction::Read : DetailAction::Cache));
 }
 
 void WeReadActivity::openSelectedDetail(const WeReadStore::ShelfRecord& book) {
@@ -1061,16 +1089,26 @@ bool WeReadActivity::detailActionEnabled(const DetailAction action) const {
 }
 
 void WeReadActivity::moveDetailSelection(const int direction) {
+  int selection = detailSelected_.load();
   for (int i = 0; i < kDetailActionCount; ++i) {
-    detailSelected_ = direction > 0 ? ButtonNavigator::nextIndex(detailSelected_, kDetailActionCount)
-                                    : ButtonNavigator::previousIndex(detailSelected_, kDetailActionCount);
-    if (detailActionEnabled(static_cast<DetailAction>(detailSelected_))) return;
+    selection = direction > 0 ? ButtonNavigator::nextIndex(selection, kDetailActionCount)
+                              : ButtonNavigator::previousIndex(selection, kDetailActionCount);
+    if (detailActionEnabled(static_cast<DetailAction>(selection))) {
+      detailSelected_.store(selection);
+      return;
+    }
   }
+  detailSelected_.store(selection);
 }
 
 void WeReadActivity::activateDetailSelection() {
-  const auto action = static_cast<DetailAction>(detailSelected_);
+  const auto action = static_cast<DetailAction>(detailSelected_.load());
   if (!detailActionEnabled(action)) return;
+  detailSelectionOnlyPending_.store(false);
+  // Every activation either leaves the detail page or changes something that
+  // must be rendered again. Do not let a queued notification reuse the old
+  // detail framebuffer as if it were still the current screen.
+  detailFrameValid_.store(false);
   switch (action) {
     case DetailAction::Introduction:
       buildIntroductionPages();
@@ -1157,6 +1195,7 @@ void WeReadActivity::failChapterRangeSelection(const WeReadClient::Error error) 
 void WeReadActivity::cancelChapterRangeSelection() {
   operation_.reset();
   downloadChapterScope_ = WeReadClient::DownloadOptions::ChapterScope::WholeBook;
+  detailFrameValid_.store(false);
   state_.store(State::Detail);
   requestUpdate();
 }
@@ -1204,6 +1243,8 @@ void WeReadActivity::selectChapterRange() {
 void WeReadActivity::handleDetailInput() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     if (state_.load() == State::DetailCoverLoading) operation_.reset();
+    detailSelectionOnlyPending_.store(false);
+    detailFrameValid_.store(false);
     mainTab_.store(MainTab::Shelf);
     mainFocus_.store(MainFocus::Content);
     state_.store(State::Home);
@@ -1212,12 +1253,22 @@ void WeReadActivity::handleDetailInput() {
   }
 
   buttonNavigator_.onNext([this] {
+    const int previousSelection = detailSelected_.load();
     moveDetailSelection(1);
-    requestUpdate();
+    if (previousSelection != detailSelected_.load()) {
+      detailSelectionGeneration_.fetch_add(1);
+      detailSelectionOnlyPending_.store(true);
+      requestUpdate();
+    }
   });
   buttonNavigator_.onPrevious([this] {
+    const int previousSelection = detailSelected_.load();
     moveDetailSelection(-1);
-    requestUpdate();
+    if (previousSelection != detailSelected_.load()) {
+      detailSelectionGeneration_.fetch_add(1);
+      detailSelectionOnlyPending_.store(true);
+      requestUpdate();
+    }
   });
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     activateDetailSelection();
@@ -1255,6 +1306,9 @@ void WeReadActivity::buildIntroductionPages() {
   introPageOffsets_[1] = detail_.introLength;
   introPreviewLineCount_ = 0;
   introFontId_ = UI_10_FONT_ID;
+  introPreviewPrewarmHash_ = 0;
+  introPreviewPrewarmLength_ = 0;
+  introPreviewPrewarmFontId_ = 0;
   if (!detail_.introLength) return;
 
   HalFile file;
@@ -1689,10 +1743,12 @@ void WeReadActivity::handleErrorInput() {
   if (error_ == WeReadClient::Error::WholeBookOnly) {
     if (confirm) {
       operation_.reset();
+      detailFrameValid_.store(false);
       state_.store(State::Detail);
       showCacheScopePopup();
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       operation_.reset();
+      detailFrameValid_.store(false);
       state_.store(State::Detail);
       requestUpdate();
     }
@@ -1867,6 +1923,11 @@ const char* WeReadActivity::errorMessage() const {
 }
 
 bool WeReadActivity::drawDetailIntroduction(const Rect& bounds, const bool selected) {
+  // Keep the introduction text in a stable black-on-white rendering. The
+  // selection state is shown by a small marker in the gap below the preview,
+  // so moving between Introduction and the action list does not require
+  // redrawing every SD-card-font glyph.
+  (void)selected;
   // The SD font can be loaded or reloaded after the detail page was opened
   // (for example after a font refresh). Re-resolve it here and rebuild page
   // offsets before drawing so measurement and rendering stay in sync.
@@ -1881,9 +1942,8 @@ bool WeReadActivity::drawDetailIntroduction(const Rect& bounds, const bool selec
   const int titleY = bounds.y;
   const int textY = titleY + lineHeight + 4;
   const int maxLines = std::max(0, (bounds.y + bounds.height - textY) / lineHeight);
-  const bool black = !selected;
+  constexpr bool black = true;
 
-  if (selected) renderer.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
   renderer.drawText(UI_10_FONT_ID, textX, titleY, tr(STR_WEREAD_INTRO), black, EpdFontFamily::BOLD);
 
   if (maxLines == 0) return detail_.introLength > 0;
@@ -1927,7 +1987,15 @@ bool WeReadActivity::drawDetailIntroduction(const Rect& bounds, const bool selec
         // Load all visible glyph bitmaps in one batch. Drawing the lines one by
         // one without this prewarm would repeatedly hit the SD-card overflow
         // path and largely recreate the original delay.
-        DynamicFont::prewarmIfSdFont(renderer, bodyFontId, previewText);
+        const uint32_t previewLength = static_cast<uint32_t>(previewText.size());
+        const uint32_t previewHash = hashText(previewText);
+        if (!introPreviewPrewarmFontId_ || introPreviewPrewarmFontId_ != bodyFontId ||
+            introPreviewPrewarmLength_ != previewLength || introPreviewPrewarmHash_ != previewHash) {
+          DynamicFont::prewarmIfSdFont(renderer, bodyFontId, previewText);
+          introPreviewPrewarmFontId_ = bodyFontId;
+          introPreviewPrewarmLength_ = previewLength;
+          introPreviewPrewarmHash_ = previewHash;
+        }
         int y = textY;
         for (int lineIndex = 0; lineIndex < visibleLines; ++lineIndex) {
           const std::string& sourceLine = previewLines[lineIndex];
@@ -2121,7 +2189,99 @@ void WeReadActivity::drawShelfGrid(const Rect& content, const int selectedIndex,
   GUI.drawSideScrollBar(renderer, content, count, pageStart, layout.itemsPerPage);
 }
 
-void WeReadActivity::drawBookDetail(const Rect& content, const bool coverLoading) {
+void WeReadActivity::drawDetailActions(const Rect& actions, const int selectedIndex, const bool cached,
+                                       const bool policyChanged) {
+  GUI.drawList(
+      renderer, actions, kDetailListActionCount,
+      selectedIndex == static_cast<int>(DetailAction::Introduction) ? -1 : selectedIndex - 1,
+      [cached, policyChanged](const int index) {
+        switch (static_cast<DetailAction>(index + 1)) {
+          case DetailAction::Introduction:
+            return std::string();
+          case DetailAction::Read:
+            return std::string(I18N.get(cached ? StrId::STR_CONTINUE_READING : StrId::STR_WEREAD_ONLINE_READING));
+          case DetailAction::Cache:
+            if (!cached) return std::string(tr(STR_WEREAD_CACHE_BOOK));
+            return std::string(
+                I18N.get(policyChanged ? StrId::STR_WEREAD_UPDATE_CACHE : StrId::STR_WEREAD_RECACHE_BOOK));
+          case DetailAction::Browse:
+            return std::string(tr(STR_WEREAD_BROWSE_ENTRY));
+          case DetailAction::Images:
+            return std::string(tr(STR_WEREAD_CACHE_IMAGES));
+        }
+        return std::string();
+      },
+      nullptr, nullptr,
+      [this, cached](const int index) {
+        switch (static_cast<DetailAction>(index + 1)) {
+          case DetailAction::Introduction:
+          case DetailAction::Browse:
+          case DetailAction::Cache:
+            return std::string();
+          case DetailAction::Read:
+            return cached ? std::string() : std::string(tr(STR_WEREAD_FUTURE_SUPPORT));
+          case DetailAction::Images:
+            return std::string(I18N.get(detailImagePolicy_ == WeReadStore::ImagePolicy::Embed
+                                            ? StrId::STR_WEREAD_OPTION_ON
+                                            : StrId::STR_WEREAD_OPTION_OFF));
+        }
+        return std::string();
+      },
+      false,
+      [cached](const int index) { return static_cast<DetailAction>(index + 1) == DetailAction::Read && !cached; });
+}
+
+Rect WeReadActivity::detailSelectionMarkerBounds(const Rect& content) const {
+  const Rect actions = detailActionsBounds(content);
+  const Rect introduction = detailIntroductionBounds(content);
+  const int gapTop = introduction.y + introduction.height;
+  const int gapHeight = std::max(1, actions.y - gapTop);
+  const int markerHeight = std::min(4, gapHeight);
+  return Rect{introduction.x, gapTop + (gapHeight - markerHeight) / 2,
+              std::max(1, std::min(64, introduction.width)), markerHeight};
+}
+
+void WeReadActivity::drawDetailSelectionMarker(const Rect& content, const bool selected) {
+  const Rect marker = detailSelectionMarkerBounds(content);
+  renderer.fillRect(marker.x, marker.y, marker.width, marker.height, selected);
+}
+
+bool WeReadActivity::renderDetailSelectionOnly(const Rect& content) {
+  if (state_.load() != State::Detail || !detailSelectionOnlyPending_.load() || !detailFrameValid_.load()) {
+    return false;
+  }
+
+  const int previousSelection = detailFrameSelection_.load();
+  const int selectedIndex = detailSelected_.load();
+  if (previousSelection == selectedIndex) {
+    detailSelectionOnlyPending_.store(false);
+    return true;
+  }
+  const uint32_t selectionGeneration = detailSelectionGeneration_.load();
+
+  // The framebuffer already contains the complete detail page. Repaint only
+  // the action list, then submit the complete framebuffer. The X4 windowed
+  // controller path can leave a rotated/ghosted region when the logical page
+  // is in portrait orientation; a full-buffer commit preserves the same
+  // panel refresh time while avoiding that coordinate-dependent artifact.
+  const Rect actions = detailActionsBounds(content);
+  renderer.fillRect(actions.x, actions.y, actions.width, actions.height, false);
+  const bool cached = detailActionEnabled(DetailAction::Read);
+  const bool policyChanged = cached && detailOptionsKnown_ && detailImagePolicy_ != detailSavedImagePolicy_;
+  drawDetailActions(actions, selectedIndex, cached, policyChanged);
+  const bool introductionChanged = previousSelection == static_cast<int>(DetailAction::Introduction) ||
+                                   selectedIndex == static_cast<int>(DetailAction::Introduction);
+  if (introductionChanged) {
+    drawDetailSelectionMarker(content, selectedIndex == static_cast<int>(DetailAction::Introduction));
+  }
+  renderer.displayBuffer();
+  detailFrameSelection_.store(selectedIndex);
+  detailSelectionOnlyPending_.store(detailSelectionGeneration_.load() != selectionGeneration ||
+                                    detailSelected_.load() != selectedIndex);
+  return true;
+}
+
+void WeReadActivity::drawBookDetail(const Rect& content, const bool coverLoading, const int renderedSelection) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int side = metrics.contentSidePadding;
   const Rect cover{content.x + side, content.y, kDetailCoverWidth, kDetailCoverHeight};
@@ -2193,47 +2353,11 @@ void WeReadActivity::drawBookDetail(const Rect& content, const bool coverLoading
 
   const Rect actions = detailActionsBounds(content);
   const Rect introduction = detailIntroductionBounds(content);
+  const int selectedIndex = renderedSelection >= 0 ? renderedSelection : detailSelected_.load();
   detailIntroTruncated_ =
-      drawDetailIntroduction(introduction, detailSelected_ == static_cast<int>(DetailAction::Introduction));
-
-  GUI.drawList(
-      renderer, actions, kDetailListActionCount,
-      detailSelected_ == static_cast<int>(DetailAction::Introduction) ? -1 : detailSelected_ - 1,
-      [cached, policyChanged](const int index) {
-        switch (static_cast<DetailAction>(index + 1)) {
-          case DetailAction::Introduction:
-            return std::string();
-          case DetailAction::Read:
-            return std::string(I18N.get(cached ? StrId::STR_CONTINUE_READING : StrId::STR_WEREAD_ONLINE_READING));
-          case DetailAction::Cache:
-            if (!cached) return std::string(tr(STR_WEREAD_CACHE_BOOK));
-            return std::string(
-                I18N.get(policyChanged ? StrId::STR_WEREAD_UPDATE_CACHE : StrId::STR_WEREAD_RECACHE_BOOK));
-          case DetailAction::Browse:
-            return std::string(tr(STR_WEREAD_BROWSE_ENTRY));
-          case DetailAction::Images:
-            return std::string(tr(STR_WEREAD_CACHE_IMAGES));
-        }
-        return std::string();
-      },
-      nullptr, nullptr,
-      [this, cached](const int index) {
-        switch (static_cast<DetailAction>(index + 1)) {
-          case DetailAction::Introduction:
-          case DetailAction::Browse:
-          case DetailAction::Cache:
-            return std::string();
-          case DetailAction::Read:
-            return cached ? std::string() : std::string(tr(STR_WEREAD_FUTURE_SUPPORT));
-          case DetailAction::Images:
-            return std::string(I18N.get(detailImagePolicy_ == WeReadStore::ImagePolicy::Embed
-                                            ? StrId::STR_WEREAD_OPTION_ON
-                                            : StrId::STR_WEREAD_OPTION_OFF));
-        }
-        return std::string();
-      },
-      false,
-      [cached](const int index) { return static_cast<DetailAction>(index + 1) == DetailAction::Read && !cached; });
+      drawDetailIntroduction(introduction, selectedIndex == static_cast<int>(DetailAction::Introduction));
+  drawDetailSelectionMarker(content, selectedIndex == static_cast<int>(DetailAction::Introduction));
+  drawDetailActions(actions, selectedIndex, cached, policyChanged);
 }
 
 void WeReadActivity::drawIntroduction(const Rect& content) {
@@ -2300,7 +2424,12 @@ void WeReadActivity::drawIntroduction(const Rect& content) {
 void WeReadActivity::render(RenderLock&&) {
   downloadRenderPending_.store(false);
   stageRenderPending_.store(false);
-  if (optionPopup_.processRender(renderer, mappedInput)) return;
+  if (optionPopup_.processRender(renderer, mappedInput)) {
+    // OptionPopup clears and owns the framebuffer while it is visible. The
+    // underlying detail frame must be rebuilt when the popup closes.
+    detailFrameValid_.store(false);
+    return;
+  }
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int width = renderer.getScreenWidth();
   const State state = state_.load();
@@ -2309,6 +2438,20 @@ void WeReadActivity::render(RenderLock&&) {
   const int shelfSelection = shelfSelected_.load();
   const Rect content = state == State::Disclaimer ? disclaimerContentBounds()
                                                   : (state == State::Home ? mainContentBounds() : contentBounds());
+  if (renderDetailSelectionOnly(content)) return;
+  // ActivityManager notifications are counting notifications, so a second
+  // notification can remain after a 640 ms panel refresh. If nothing changed
+  // that needs painting, consume that notification without re-running the
+  // expensive cover/SD-font render.
+  if (state == State::Detail && state_.load() == State::Detail && detailFrameValid_.load()) return;
+  detailSelectionOnlyPending_.store(false);
+  // A full detail render can spend seconds loading the SD-card font. Mark the
+  // cached frame invalid for its whole lifetime, so a key pressed during that
+  // render cannot be mistaken for a frame that is already on the panel.
+  const bool fullDetailRender = state == State::Detail;
+  const int renderedDetailSelection = fullDetailRender ? detailSelected_.load() : -1;
+  const uint32_t detailRenderGeneration = detailSelectionGeneration_.load();
+  if (fullDetailRender) detailFrameValid_.store(false);
   const bool showingShelf = state == State::Home && mainTab == MainTab::Shelf;
   const int shelfItems = showingShelf && shelfCount_ > 0 ? shelfItemsPerPage() : 0;
   const int shelfFrameSelection = shelfFrameSelection_;
@@ -2379,7 +2522,7 @@ void WeReadActivity::render(RenderLock&&) {
       }
       break;
     case State::Detail:
-      drawBookDetail(content);
+      drawBookDetail(content, false, renderedDetailSelection);
       break;
     case State::DetailCoverLoading:
       drawBookDetail(content, true);
@@ -2632,6 +2775,18 @@ void WeReadActivity::render(RenderLock&&) {
     return;
   }
   renderer.displayBuffer();
+  if (state == State::Detail && state_.load() == State::Detail) {
+    // Commit the selection that was actually drawn, after the blocking panel
+    // transfer. Input may have changed detailSelected_ while the transfer was
+    // in progress; keep that newer selection pending for the next partial
+    // frame instead of declaring it already visible.
+    detailFrameSelection_.store(renderedDetailSelection);
+    detailFrameValid_.store(true);
+    detailSelectionOnlyPending_.store(detailSelectionGeneration_.load() != detailRenderGeneration ||
+                                      detailSelected_.load() != renderedDetailSelection);
+  } else {
+    detailFrameValid_.store(false);
+  }
 }
 
 bool WeReadActivity::preventAutoSleep() {

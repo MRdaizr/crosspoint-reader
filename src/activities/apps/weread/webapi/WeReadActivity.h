@@ -86,7 +86,11 @@ class WeReadActivity final : public Activity {
   int shelfCoverCursor_ = 0;
   ShelfNavigationGesture shelfNavigationGesture_ = ShelfNavigationGesture::Idle;
   uint32_t shelfLastPageTurnAt_ = 0;
-  int detailSelected_ = 0;
+  std::atomic<int> detailSelected_{0};
+  std::atomic<int> detailFrameSelection_{-1};
+  std::atomic<bool> detailFrameValid_{false};
+  std::atomic<bool> detailSelectionOnlyPending_{false};
+  std::atomic<uint32_t> detailSelectionGeneration_{0};
   int introPage_ = 0;
   int introPageCount_ = 1;
   uint32_t postProcessStartedAt_ = 0;
@@ -101,6 +105,9 @@ class WeReadActivity final : public Activity {
   uint16_t introPreviewLineWidths_[kMaxIntroPreviewLines] = {};
   int introPreviewLineCount_ = 0;
   int introFontId_ = 0;
+  uint32_t introPreviewPrewarmHash_ = 0;
+  uint32_t introPreviewPrewarmLength_ = 0;
+  int introPreviewPrewarmFontId_ = 0;
   WeReadStore::ImagePolicy detailImagePolicy_ = WeReadStore::ImagePolicy::Embed;
   WeReadStore::ImagePolicy detailSavedImagePolicy_ = WeReadStore::ImagePolicy::Embed;
   WeReadClient::DownloadOptions::ChapterScope downloadChapterScope_ =
@@ -154,9 +161,13 @@ class WeReadActivity final : public Activity {
   void handleIntroductionInput();
   void buildIntroductionPages();
   bool drawDetailIntroduction(const Rect& bounds, bool selected);
+  void drawDetailActions(const Rect& actions, int selectedIndex, bool cached, bool policyChanged);
+  Rect detailSelectionMarkerBounds(const Rect& content) const;
+  void drawDetailSelectionMarker(const Rect& content, bool selected);
+  bool renderDetailSelectionOnly(const Rect& content);
   void drawShelfGrid(const Rect& content, int selectedIndex, int frameSelection, bool contentFocused);
   void drawDisclaimer(const Rect& content);
-  void drawBookDetail(const Rect& content, bool coverLoading = false);
+  void drawBookDetail(const Rect& content, bool coverLoading = false, int selectedIndex = -1);
   void drawIntroduction(const Rect& content);
   void updateJobProgress();
   void advanceJob();
