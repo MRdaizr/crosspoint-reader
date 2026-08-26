@@ -173,7 +173,12 @@ void EpubReaderActivity::onEnter() {
   if (Storage.openFileForRead("ERS", epub->getCachePath() + "/progress.bin", f)) {
     uint8_t data[10] = {};
     int dataSize = f.read(data, sizeof(data));
-    if (dataSize == 4 || dataSize == 6) {
+    // Current progress records may include the visible text offset (10 bytes).
+    // The first six bytes are still the same spine/page/page-count payload, so
+    // parse them for all supported record sizes. Previously a 10-byte record
+    // was recognized only for its offset, leaving the resume chapter/page at
+    // their defaults.
+    if (dataSize == 4 || dataSize == 6 || dataSize == 10) {
       hasSavedProgress = true;
       currentSpineIndex = data[0] + (data[1] << 8);
       nextPageNumber = data[2] + (data[3] << 8);
@@ -187,7 +192,7 @@ void EpubReaderActivity::onEnter() {
       cachedSpineIndex = currentSpineIndex;
       LOG_DBG("ERS", "Loaded cache: %d, %d", currentSpineIndex, nextPageNumber);
     }
-    if (dataSize == 6) {
+    if (dataSize == 6 || dataSize == 10) {
       cachedChapterTotalPageCount = data[4] + (data[5] << 8);
     }
     if (dataSize == 10) {
@@ -242,11 +247,32 @@ void EpubReaderActivity::onExit() {
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
 
-  // Leaving mid-footnote loses the in-RAM return stack on deep sleep; persist the
-  // pre-footnote position so the book reopens at the link origin, not the footnote.
-  if (footnoteDepth > 0 && epub) {
-    const SavedPosition& origin = savedPositions[0];
-    saveProgress(origin.spineIndex, origin.pageNumber, 0);
+  if (epub) {
+    // Leaving mid-footnote loses the in-RAM return stack on deep sleep; persist
+    // the pre-footnote position so the book reopens at the link origin, not the
+    // footnote.
+    if (footnoteDepth > 0) {
+      const SavedPosition& origin = savedPositions[0];
+      if (!saveProgress(origin.spineIndex, origin.pageNumber, 0)) {
+        LOG_ERR("ERS", "Failed to save progress before leaving footnote");
+      }
+    } else if (section && !section->isBuilding() && section->pageCount > 0 &&
+               section->currentPage >= 0 && section->currentPage < section->pageCount) {
+      // A page turn changes section->currentPage before the render task writes
+      // progress. Save the in-memory page here as well, so a quick Back or
+      // sleep cannot discard the latest completed navigation.
+      if (!saveProgress(currentSpineIndex, section->currentPage, section->pageCount)) {
+        LOG_ERR("ERS", "Failed to save progress before leaving reader");
+      }
+    } else if (!section && currentSpineIndex >= 0 && currentSpineIndex < epub->getSpineItemsCount() &&
+               !pendingPageJump.has_value()) {
+      // Crossing into the next chapter releases the old Section immediately.
+      // Preserve that transition if the user exits before the new chapter is
+      // rendered; do not persist the UINT16_MAX previous-chapter sentinel.
+      if (!saveProgress(currentSpineIndex, nextPageNumber, 0)) {
+        LOG_ERR("ERS", "Failed to save chapter transition before leaving reader");
+      }
+    }
   }
 
   if (epub && readingSessionStartMs != 0UL) {
@@ -1401,6 +1427,12 @@ bool EpubReaderActivity::saveProgress(const int spineIndex, const int currentPag
       currentPage == section->currentPage && currentPage >= 0 && currentPage < section->pageCount) {
     visibleTextOffset = section->getVisibleTextOffsetForPage(static_cast<uint16_t>(currentPage));
   }
+  // A zero visible-text offset can belong to both the first page and a later
+  // page that starts with non-text content. Persist the page-only format for
+  // later pages so reopening cannot ambiguously resolve it to page zero.
+  if (visibleTextOffset.has_value() && *visibleTextOffset == 0 && currentPage > 0) {
+    visibleTextOffset.reset();
+  }
   const bool saved = EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, visibleTextOffset);
   if (saved && clearInitialProgressAfterSave_ && WeReadStore::clearInitialProgress(wereadBookId_)) {
     clearInitialProgressAfterSave_ = false;
@@ -1411,6 +1443,15 @@ bool EpubReaderActivity::saveProgress(const int spineIndex, const int currentPag
 void EpubReaderActivity::applyCachedVisibleTextOffset() {
   if (!cachedVisibleTextOffset.has_value() || !section || currentSpineIndex != cachedSpineIndex ||
       section->isBuilding()) {
+    return;
+  }
+  // Offset zero is valid for the first page, but it is ambiguous for later
+  // pages (for example a page beginning with an image can also have no text
+  // offset). In that case the persisted page number is the stronger resume
+  // signal. Do not let the offset lookup move page 1+ back to page 0.
+  if (*cachedVisibleTextOffset == 0 && section->currentPage > 0) {
+    LOG_DBG("ERS", "Keeping cached page %d; visible offset 0 is ambiguous", section->currentPage);
+    cachedVisibleTextOffset.reset();
     return;
   }
   if (const auto page = section->getPageForVisibleTextOffset(*cachedVisibleTextOffset)) {
