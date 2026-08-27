@@ -26,6 +26,7 @@ class PomodoroActivity final : public Activity {
   void renderTimer();
   void renderCompletion();
   void renderStats();
+  void drawStatsFooter() const;
 
  public:
   explicit PomodoroActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)

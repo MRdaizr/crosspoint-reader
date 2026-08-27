@@ -63,8 +63,6 @@ class TxtReaderActivity final : public Activity {
   size_t lastCheckpointPageCount = 0;
   unsigned long lastIndexBuildTick = 0UL;
   unsigned long lastIndexProgressRefreshMs = 0UL;
-  unsigned long readingSessionStartMs = 0UL;
-
   // Cached settings for cache validation (different fonts/margins require re-indexing)
   int cachedFontId = 0;
   uint8_t cachedScreenMargin = 0;

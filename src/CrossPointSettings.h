@@ -175,6 +175,14 @@ class CrossPointSettings {
     QUICK_RESUME_SLEEP_SCREEN_COUNT
   };
 
+  enum DAILY_GOAL_TARGET {
+    DAILY_GOAL_15_MIN = 0,
+    DAILY_GOAL_30_MIN = 1,
+    DAILY_GOAL_45_MIN = 2,
+    DAILY_GOAL_60_MIN = 3,
+    DAILY_GOAL_TARGET_COUNT
+  };
+
   // Sleep screen settings
   uint8_t sleepScreen = DARK;
   // Sleep screen cover mode settings
@@ -269,6 +277,10 @@ class CrossPointSettings {
   uint8_t language = 0;
   // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.
   uint8_t quickResumeSleepScreen = QUICK_RESUME_NEVER;
+  // Reading Analytics settings.
+  uint8_t dailyGoalTarget = DAILY_GOAL_30_MIN;
+  uint8_t achievementsEnabled = 1;
+  uint8_t achievementPopups = 0;
 
   ~CrossPointSettings() = default;
 
@@ -307,6 +319,7 @@ class CrossPointSettings {
   float getReaderLineCompression() const;
   unsigned long getSleepTimeoutMs() const;
   int getRefreshFrequency() const;
+  uint64_t getDailyGoalMs() const;
 };
 
 // Helper macro to access settings

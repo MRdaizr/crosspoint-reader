@@ -14,6 +14,7 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "AchievementsStore.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
@@ -24,6 +25,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/ScreenshotUtil.h"
+#include "util/AchievementPopupUtils.h"
 
 namespace {
 // Most pages in a CJK TXT are below 1 KiB. Start there and only expand when a
@@ -103,7 +105,7 @@ void TxtReaderActivity::onEnter() {
   APP_STATE.openEpubPath = filePath;
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(filePath, fileName, "", "");
-  readingSessionStartMs = millis();
+  READING_STATS.beginSession(txt->getPath(), txt->getTitle());
 
   // Trigger first update
   requestUpdate();
@@ -126,9 +128,10 @@ void TxtReaderActivity::onExit() {
   pageOffsets.clear();
   currentPageLines.clear();
   clearPageLayouts();
-  if (txt && readingSessionStartMs != 0UL) {
-    READING_STATS.addSession(txt->getPath(), txt->getTitle(), (millis() - readingSessionStartMs) / 1000UL);
-    readingSessionStartMs = 0UL;
+  if (txt) {
+    READING_STATS.endSession();
+    ACHIEVEMENTS.recordSessionEnded(READING_STATS.getLastSessionSnapshot());
+    showPendingAchievementPopups(renderer);
   }
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
@@ -136,6 +139,14 @@ void TxtReaderActivity::onExit() {
 }
 
 void TxtReaderActivity::loop() {
+  READING_STATS.noteActivity();
+  if (txt) {
+    const int pageCount = displayedTotalPages();
+    const int page = displayedPage();
+    const int progress = pageCount > 0 ? std::min(99, (page + 1) * 100 / pageCount) : 0;
+    READING_STATS.updateProgress(static_cast<uint8_t>(progress), false);
+  }
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     const int page = displayedPage();
     const int pageCount = displayedTotalPages();
@@ -945,6 +956,11 @@ void TxtReaderActivity::render(RenderLock&&) {
   preparedPageLines.clear();
 
   if (!pageIndexComplete) savePartialPageIndexCache();
+  const int page = displayedPage();
+  const int pageCount = displayedTotalPages();
+  const bool completed = nextOffset >= txt->getFileSize();
+  const int progress = completed ? 100 : (pageCount > 0 ? std::min(99, (page + 1) * 100 / pageCount) : 0);
+  READING_STATS.updateProgress(static_cast<uint8_t>(progress), completed, {}, static_cast<uint8_t>(progress));
   saveProgress();
 
   if (pendingScreenshot) {

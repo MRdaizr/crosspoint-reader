@@ -6,20 +6,19 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <ctime>
+
+#include "util/TimeUtils.h"
 
 namespace {
 constexpr char STATS_FILE_JSON[] = "/.crosspoint/pomodoro_stats.json";
-constexpr time_t VALID_EPOCH = 1700000000;  // 2023-11-14
-constexpr size_t MAX_DAILY_ENTRIES = 7;
+// Keep one year of daily focus time so the statistics view can render the
+// same recent-30-day and annual charts as reading statistics.
+constexpr size_t MAX_DAILY_ENTRIES = 366;
 
 bool currentDate(char (&date)[11]) {
-  const time_t now = time(nullptr);
-  if (now < VALID_EPOCH) return false;
-
-  struct tm localTime {};
-  localtime_r(&now, &localTime);
-  snprintf(date, sizeof(date), "%04d-%02d-%02d", localTime.tm_year + 1900, localTime.tm_mon + 1, localTime.tm_mday);
+  const std::string today = TimeUtils::formatDate(TimeUtils::getCurrentValidTimestamp());
+  if (today.empty()) return false;
+  snprintf(date, sizeof(date), "%s", today.c_str());
   return true;
 }
 
@@ -29,15 +28,17 @@ void sortNewestFirst(std::vector<PomodoroDailyEntry>& entries) {
 }
 
 void discardExpiredEntries(std::vector<PomodoroDailyEntry>& entries) {
-  const time_t now = time(nullptr);
-  if (now < VALID_EPOCH) return;
+  const uint32_t todayOrdinal = TimeUtils::getLocalDayOrdinal(TimeUtils::getCurrentValidTimestamp());
+  if (!todayOrdinal) return;
 
-  const time_t earliest = now - static_cast<time_t>(MAX_DAILY_ENTRIES - 1) * 24 * 60 * 60;
-  struct tm localTime {};
-  localtime_r(&earliest, &localTime);
-  char earliestDate[11];
-  snprintf(earliestDate, sizeof(earliestDate), "%04d-%02d-%02d", localTime.tm_year + 1900, localTime.tm_mon + 1,
-           localTime.tm_mday);
+  int year = 0;
+  unsigned month = 0;
+  unsigned day = 0;
+  TimeUtils::getDateFromDayOrdinal(todayOrdinal >= MAX_DAILY_ENTRIES - 1
+                                       ? todayOrdinal - static_cast<uint32_t>(MAX_DAILY_ENTRIES - 1)
+                                       : 0,
+                                   year, month, day);
+  const std::string earliestDate = TimeUtils::formatDateParts(year, month, day);
   entries.erase(std::remove_if(entries.begin(), entries.end(), [&earliestDate](const PomodoroDailyEntry& entry) {
                   return entry.date < earliestDate;
                 }),

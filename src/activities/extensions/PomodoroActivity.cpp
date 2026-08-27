@@ -5,6 +5,7 @@
 #include <I18n.h>
 #include <HalDisplay.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <ctime>
 
@@ -13,8 +14,11 @@
 #include "PomodoroStatsStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/TimeUtils.h"
 
 namespace {
+
+constexpr uint32_t DAILY_FOCUS_GOAL_SECONDS = 4UL * 25UL * 60UL;
 
 std::string formatDuration(const uint32_t seconds) {
   const uint32_t minutes = (seconds + 30U) / 60U;
@@ -29,16 +33,79 @@ std::string formatDuration(const uint32_t seconds) {
 }
 
 const PomodoroDailyEntry* findToday(const std::vector<PomodoroDailyEntry>& entries) {
-  const time_t now = time(nullptr);
-  struct tm localTime {};
-  localtime_r(&now, &localTime);
-  char today[11];
-  snprintf(today, sizeof(today), "%04d-%02d-%02d", localTime.tm_year + 1900, localTime.tm_mon + 1,
-           localTime.tm_mday);
+  const std::string today = TimeUtils::formatDate(TimeUtils::getCurrentValidTimestamp());
+  if (today.empty()) return nullptr;
   for (const auto& entry : entries) {
     if (entry.date == today) return &entry;
   }
   return nullptr;
+}
+
+uint32_t ordinalForDate(const std::string& date) {
+  int year = 0;
+  unsigned month = 0;
+  unsigned day = 0;
+  if (date.size() != 10 || sscanf(date.c_str(), "%d-%u-%u", &year, &month, &day) != 3) return 0;
+  return TimeUtils::getDayOrdinalForDate(year, month, day);
+}
+
+uint32_t focusSecondsForDay(const std::vector<PomodoroDailyEntry>& entries, const uint32_t ordinal) {
+  for (const auto& entry : entries) {
+    if (ordinalForDate(entry.date) == ordinal) return entry.focusSeconds;
+  }
+  return 0;
+}
+
+uint32_t completedFocusesForDay(const std::vector<PomodoroDailyEntry>& entries, const uint32_t ordinal) {
+  for (const auto& entry : entries) {
+    if (ordinalForDate(entry.date) == ordinal) return entry.completedFocuses;
+  }
+  return 0;
+}
+
+uint32_t currentStreak(const std::vector<PomodoroDailyEntry>& entries, const uint32_t todayOrdinal) {
+  if (!todayOrdinal) return 0;
+  uint32_t streak = 0;
+  for (uint32_t ordinal = todayOrdinal;; --ordinal) {
+    if (!completedFocusesForDay(entries, ordinal)) break;
+    ++streak;
+    if (!ordinal) break;
+  }
+  return streak;
+}
+
+uint32_t bestStreak(const std::vector<PomodoroDailyEntry>& entries) {
+  std::vector<uint32_t> ordinals;
+  ordinals.reserve(entries.size());
+  for (const auto& entry : entries) {
+    if (entry.completedFocuses) ordinals.push_back(ordinalForDate(entry.date));
+  }
+  std::sort(ordinals.begin(), ordinals.end());
+  ordinals.erase(std::unique(ordinals.begin(), ordinals.end()), ordinals.end());
+
+  uint32_t best = 0;
+  uint32_t run = 0;
+  uint32_t previous = 0;
+  for (const uint32_t ordinal : ordinals) {
+    run = run && ordinal == previous + 1 ? run + 1 : 1;
+    best = std::max(best, run);
+    previous = ordinal;
+  }
+  return best;
+}
+
+void drawMetric(const GfxRenderer& renderer, const int x, const int y, const int width, const char* label,
+                const std::string& value) {
+  renderer.drawText(UI_10_FONT_ID, x, y, label, true, EpdFontFamily::BOLD);
+  const int valueWidth = renderer.getTextWidth(UI_10_FONT_ID, value.c_str());
+  renderer.drawText(UI_10_FONT_ID, x + width - valueWidth, y, value.c_str());
+}
+
+void drawProgressBar(const GfxRenderer& renderer, const int x, const int y, const int width, const int height,
+                     const uint64_t value, const uint64_t maximum) {
+  renderer.drawRect(x, y, width, height);
+  const int fill = maximum == 0 ? 0 : static_cast<int>(std::min<uint64_t>(width - 2, (value * (width - 2)) / maximum));
+  if (fill > 0) renderer.fillRect(x + 1, y + 1, fill, height - 2);
 }
 
 }  // namespace
@@ -223,45 +290,91 @@ void PomodoroActivity::renderCompletion() {
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
+void PomodoroActivity::drawStatsFooter() const {
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+}
+
 void PomodoroActivity::renderStats() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int pageWidth = renderer.getScreenWidth();
   GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_POMODORO_STATS));
 
   const auto& entries = POMODORO_STATS.getRecentDailyEntries();
-  const int left = metrics.contentSidePadding;
-  int y = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing + 8;
-  char line[64];
   const bool hasValidDate = POMODORO_STATS.hasValidDate();
-  if (hasValidDate) {
-    const PomodoroDailyEntry* today = findToday(entries);
-    snprintf(line, sizeof(line), "%s: %lu  %s", tr(STR_POMODORO_TODAY),
-             static_cast<unsigned long>(today ? today->completedFocuses : 0),
-             formatDuration(today ? today->focusSeconds : 0).c_str());
-    renderer.drawText(UI_12_FONT_ID, left, y, line, true, EpdFontFamily::BOLD);
-  } else {
-    renderer.drawText(UI_10_FONT_ID, left, y, tr(STR_POMODORO_TIME_UNCALIBRATED));
-  }
-  y += 34;
-  snprintf(line, sizeof(line), "%s: %lu  %s", tr(STR_POMODORO_TOTAL),
-           static_cast<unsigned long>(POMODORO_STATS.getTotalCompletedFocuses()),
-           formatDuration(POMODORO_STATS.getTotalFocusSeconds()).c_str());
-  renderer.drawText(UI_10_FONT_ID, left, y, line, true, EpdFontFamily::BOLD);
-  y += 38;
+  const int x = metrics.contentSidePadding;
+  const int width = pageWidth - x * 2;
+  const int top = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
+  const uint32_t totalSeconds = POMODORO_STATS.getTotalFocusSeconds();
+
+  drawMetric(renderer, x, top, width, tr(STR_READING_TOTAL), formatDuration(totalSeconds));
+
   if (!hasValidDate) {
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    renderer.drawText(UI_10_FONT_ID, x, top + 32, tr(STR_POMODORO_TIME_UNCALIBRATED));
+    drawStatsFooter();
     return;
   }
-  renderer.drawText(UI_10_FONT_ID, left, y, tr(STR_POMODORO_LAST_SEVEN_DAYS), true, EpdFontFamily::BOLD);
-  y += 24;
-  for (const auto& entry : entries) {
-    snprintf(line, sizeof(line), "%s   %lu  %s", entry.date.c_str(), static_cast<unsigned long>(entry.completedFocuses),
-             formatDuration(entry.focusSeconds).c_str());
-    renderer.drawText(UI_10_FONT_ID, left, y, line);
-    y += 23;
+
+  const PomodoroDailyEntry* today = findToday(entries);
+  const uint32_t todayOrdinal = TimeUtils::getLocalDayOrdinal(TimeUtils::getCurrentValidTimestamp());
+  const uint32_t todaySeconds = today ? today->focusSeconds : 0;
+  drawMetric(renderer, x, top + 28, width, tr(STR_TODAY_GOAL),
+             formatDuration(todaySeconds) + " / " + formatDuration(DAILY_FOCUS_GOAL_SECONDS));
+  drawProgressBar(renderer, x, top + 52, width, 13, todaySeconds, DAILY_FOCUS_GOAL_SECONDS);
+  drawMetric(renderer, x, top + 82, width / 2 - 8, tr(STR_CURRENT_STREAK),
+             std::to_string(currentStreak(entries, todayOrdinal)) + "d");
+  drawMetric(renderer, x + width / 2, top + 82, width / 2, tr(STR_BEST_STREAK),
+             std::to_string(bestStreak(entries)) + "d");
+
+  renderer.drawText(UI_10_FONT_ID, x, top + 150, tr(STR_LAST_7_DAYS), true, EpdFontFamily::BOLD);
+  const int chartX = x;
+  const int chartY = top + 170;
+  const int barWidth = std::max(8, (width - 12) / 7);
+  uint32_t maxSeconds = 1;
+  const uint32_t firstRecentDay = todayOrdinal >= 6 ? todayOrdinal - 6 : 0;
+  for (int i = 0; i < 7; ++i) {
+    const uint32_t ordinal = firstRecentDay + static_cast<uint32_t>(i);
+    maxSeconds = std::max(maxSeconds, focusSecondsForDay(entries, ordinal));
+  }
+  for (int i = 0; i < 7; ++i) {
+    const uint32_t ordinal = firstRecentDay + static_cast<uint32_t>(i);
+    const int height = static_cast<int>(focusSecondsForDay(entries, ordinal) * 75ULL / maxSeconds);
+    renderer.fillRect(chartX + i * barWidth, chartY + 75 - height, barWidth - 3, std::max(2, height));
   }
 
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  uint32_t recentSeconds = 0;
+  const uint32_t firstThirtyDay = todayOrdinal >= 29 ? todayOrdinal - 29 : 0;
+  for (const auto& entry : entries) {
+    const uint32_t ordinal = ordinalForDate(entry.date);
+    if (ordinal >= firstThirtyDay && ordinal <= todayOrdinal) recentSeconds += entry.focusSeconds;
+  }
+  drawMetric(renderer, x, chartY + 90, width, tr(STR_RECENT_30_DAYS), formatDuration(recentSeconds));
+
+  renderer.drawText(UI_10_FONT_ID, x, chartY + 124, tr(STR_ANNUAL_BY_MONTH), true, EpdFontFamily::BOLD);
+  int referenceYear = 0;
+  unsigned referenceMonth = 0;
+  unsigned referenceDay = 0;
+  TimeUtils::getDateFromDayOrdinal(todayOrdinal, referenceYear, referenceMonth, referenceDay);
+  uint32_t monthly[12] = {};
+  for (const auto& entry : entries) {
+    int year = 0;
+    unsigned month = 0;
+    unsigned day = 0;
+    const uint32_t ordinal = ordinalForDate(entry.date);
+    if (!ordinal || !TimeUtils::getDateFromDayOrdinal(ordinal, year, month, day)) continue;
+    if (year == referenceYear && month >= 1 && month <= 12) monthly[month - 1] += entry.focusSeconds;
+  }
+  uint32_t annualMax = 1;
+  for (const auto value : monthly) annualMax = std::max(annualMax, value);
+  const int monthBarWidth = std::max(8, (width - 11) / 12);
+  for (int month = 0; month < 12; ++month) {
+    const int barHeight = static_cast<int>(monthly[month] * 45ULL / annualMax);
+    const int barX = x + month * monthBarWidth;
+    renderer.fillRect(barX, chartY + 174 - barHeight, monthBarWidth - 2, std::max(2, barHeight));
+    char label[4];
+    snprintf(label, sizeof(label), "%02d", month + 1);
+    renderer.drawText(SMALL_FONT_ID, barX, chartY + 180, label);
+  }
+
+  drawStatsFooter();
 }

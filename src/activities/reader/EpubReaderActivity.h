@@ -34,7 +34,6 @@ class EpubReaderActivity final : public Activity {
   bool clearInitialProgressAfterSave_ = false;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
-  unsigned long readingSessionStartMs = 0UL;
   // Signals that the next render should reposition within the newly loaded section
   // based on a cross-book percentage jump.
   bool pendingPercentJump = false;

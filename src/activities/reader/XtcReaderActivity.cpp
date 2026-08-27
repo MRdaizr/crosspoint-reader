@@ -16,6 +16,7 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "AchievementsStore.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
@@ -24,6 +25,7 @@
 #include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/AchievementPopupUtils.h"
 
 void XtcReaderActivity::onEnter() {
   Activity::onEnter();
@@ -41,7 +43,8 @@ void XtcReaderActivity::onEnter() {
   APP_STATE.openEpubPath = xtc->getPath();
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(xtc->getPath(), xtc->getTitle(), xtc->getAuthor(), xtc->getThumbBmpPath());
-  readingSessionStartMs = millis();
+  READING_STATS.beginSession(xtc->getPath(), xtc->getTitle(), xtc->getAuthor(), xtc->getThumbBmpPath(),
+                             xtc->getPageCount() ? xtc->calculateProgress(currentPage) : 0);
 
   // Trigger first update
   requestUpdate();
@@ -50,9 +53,10 @@ void XtcReaderActivity::onEnter() {
 void XtcReaderActivity::onExit() {
   Activity::onExit();
 
-  if (xtc && readingSessionStartMs != 0UL) {
-    READING_STATS.addSession(xtc->getPath(), xtc->getTitle(), (millis() - readingSessionStartMs) / 1000UL);
-    readingSessionStartMs = 0UL;
+  if (xtc) {
+    READING_STATS.endSession();
+    ACHIEVEMENTS.recordSessionEnded(READING_STATS.getLastSessionSnapshot());
+    showPendingAchievementPopups(renderer);
   }
   APP_STATE.readerActivityLoadCount = 0;
   APP_STATE.saveToFile();
@@ -60,6 +64,12 @@ void XtcReaderActivity::onExit() {
 }
 
 void XtcReaderActivity::loop() {
+  READING_STATS.noteActivity();
+  if (xtc) {
+    const bool completed = xtc->getPageCount() > 0 && currentPage + 1 >= xtc->getPageCount();
+    READING_STATS.updateProgress(completed ? 100 : xtc->calculateProgress(currentPage), completed);
+  }
+
   // Enter chapter selection activity
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (xtc && xtc->hasChapters() && !xtc->getChapters().empty()) {

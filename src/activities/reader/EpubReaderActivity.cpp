@@ -21,6 +21,7 @@
 #include "BookmarkEntry.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "AchievementsStore.h"
 #include "EpubReaderBookmarksActivity.h"
 #include "EpubReaderChapterSelectionActivity.h"
 #include "EpubReaderFootnotesActivity.h"
@@ -39,6 +40,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookmarkUtil.h"
+#include "util/AchievementPopupUtils.h"
 #include "util/ScreenshotUtil.h"
 
 namespace {
@@ -145,6 +147,7 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
 
   // Keep the book in recents (crossink behavior): repoint the entry to its new
   // location instead of dropping it. updatePath persists on success.
+  READING_STATS.updateBookPath(srcPath, dstPath);
   RECENT_BOOKS.updatePath(srcPath, dstPath, oldCachePath, newCachePath);
   if (APP_STATE.openEpubPath == srcPath) {
     APP_STATE.openEpubPath = dstPath;
@@ -230,7 +233,7 @@ void EpubReaderActivity::onEnter() {
   APP_STATE.openEpubPath = epub->getPath();
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
-  readingSessionStartMs = millis();
+  READING_STATS.beginSession(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
 
   loadCachedBookmarks();
 
@@ -275,9 +278,10 @@ void EpubReaderActivity::onExit() {
     }
   }
 
-  if (epub && readingSessionStartMs != 0UL) {
-    READING_STATS.addSession(epub->getPath(), epub->getTitle(), (millis() - readingSessionStartMs) / 1000UL);
-    readingSessionStartMs = 0UL;
+  if (epub) {
+    READING_STATS.endSession();
+    ACHIEVEMENTS.recordSessionEnded(READING_STATS.getLastSessionSnapshot());
+    showPendingAchievementPopups(renderer);
   }
 
   section.reset();
@@ -299,6 +303,8 @@ void EpubReaderActivity::loop() {
     finish();
     return;
   }
+
+  READING_STATS.noteActivity();
 
   // End-of-Book screen reached (currentSpineIndex == spine count) means the book is
   // finished. Two independent finished-book features key off this same condition.
@@ -993,6 +999,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
   // Show end of book screen
   if (currentSpineIndex == epub->getSpineItemsCount()) {
+    READING_STATS.updateProgress(100, true);
     renderer.clearScreen();
     renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_END_OF_BOOK), true, EpdFontFamily::BOLD);
     renderer.displayBuffer();
@@ -1432,6 +1439,16 @@ bool EpubReaderActivity::saveProgress(const int spineIndex, const int currentPag
   // later pages so reopening cannot ambiguously resolve it to page zero.
   if (visibleTextOffset.has_value() && *visibleTextOffset == 0 && currentPage > 0) {
     visibleTextOffset.reset();
+  }
+  if (epub && pageCount > 0 && currentPage >= 0) {
+    const float chapterProgress = std::clamp(static_cast<float>(currentPage + 1) / static_cast<float>(pageCount), 0.0f, 1.0f);
+    const uint8_t bookProgress = static_cast<uint8_t>(
+        std::clamp(epub->calculateProgress(spineIndex, chapterProgress) * 100.0f, 0.0f, 100.0f));
+    std::string chapterTitle;
+    const int tocIndex = epub->getTocIndexForSpineIndex(spineIndex);
+    if (tocIndex >= 0) chapterTitle = epub->getTocItem(tocIndex).title;
+    READING_STATS.updateProgress(bookProgress, bookProgress >= 100, chapterTitle,
+                                 static_cast<uint8_t>(chapterProgress * 100.0f));
   }
   const bool saved = EpubReaderUtils::saveProgress(*epub, spineIndex, currentPage, pageCount, visibleTextOffset);
   if (saved && clearInitialProgressAfterSave_ && WeReadStore::clearInitialProgress(wereadBookId_)) {

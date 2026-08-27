@@ -7,6 +7,7 @@
 #include "NtpClockActivity.h"
 #include "PomodoroActivity.h"
 #include "ReadingStatsActivity.h"
+#include "TimerActivity.h"
 #include "TodoActivity.h"
 #include "activities/apps/weread/WeReadActivity.h"
 #include "MappedInputManager.h"
@@ -14,14 +15,14 @@
 #include "fontIds.h"
 
 namespace {
-constexpr int MENU_ITEMS = 6;
+constexpr int MENU_ITEMS = 7;
 const StrId menuLabels[MENU_ITEMS] = {StrId::STR_FLASHCARDS, StrId::STR_READING_STATS, StrId::STR_POMODORO,
-                                      StrId::STR_NTP_CLOCK, StrId::STR_TODOS, StrId::STR_WEREAD_TITLE};
+                                      StrId::STR_TIMER, StrId::STR_NTP_CLOCK, StrId::STR_TODOS, StrId::STR_WEREAD_TITLE};
 const StrId menuDescs[MENU_ITEMS] = {StrId::STR_FLASHCARDS_DESC, StrId::STR_READING_STATS_DESC,
-                                     StrId::STR_POMODORO_DESC, StrId::STR_NTP_CLOCK_DESC, StrId::STR_TODOS_DESC,
-                                     StrId::STR_WEREAD_DESC};
-const UIIcon menuIcons[MENU_ITEMS] = {UIIcon::Book, UIIcon::Recent, UIIcon::Settings, UIIcon::Recent, UIIcon::File,
-                                      UIIcon::Book};
+                                     StrId::STR_POMODORO_DESC, StrId::STR_TIMER_DESC, StrId::STR_NTP_CLOCK_DESC,
+                                     StrId::STR_TODOS_DESC, StrId::STR_WEREAD_DESC};
+const UIIcon menuIcons[MENU_ITEMS] = {UIIcon::Book, UIIcon::Recent, UIIcon::Settings, UIIcon::Settings,
+                                      UIIcon::Recent, UIIcon::File, UIIcon::Book};
 }  // namespace
 
 void ExtensionsMenuActivity::onEnter() {
@@ -48,12 +49,15 @@ void ExtensionsMenuActivity::loop() {
         startActivityForResult(std::make_unique<PomodoroActivity>(renderer, mappedInput), nullptr);
         break;
       case 3:
-        startActivityForResult(std::make_unique<NtpClockActivity>(renderer, mappedInput), nullptr);
+        startActivityForResult(std::make_unique<TimerActivity>(renderer, mappedInput), nullptr);
         break;
       case 4:
-        startActivityForResult(std::make_unique<TodoActivity>(renderer, mappedInput), nullptr);
+        startActivityForResult(std::make_unique<NtpClockActivity>(renderer, mappedInput), nullptr);
         break;
       case 5:
+        startActivityForResult(std::make_unique<TodoActivity>(renderer, mappedInput), nullptr);
+        break;
+      case 6:
         startActivityForResult(std::make_unique<WeReadActivity>(renderer, mappedInput), nullptr);
         break;
       default:

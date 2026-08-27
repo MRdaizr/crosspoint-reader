@@ -6,6 +6,7 @@
 #include <Logging.h>
 
 #include "MappedInputManager.h"
+#include "AchievementsStore.h"
 #include "PomodoroStatsStore.h"
 #include "ReadingStatsStore.h"
 #include "components/UITheme.h"
@@ -119,8 +120,11 @@ void ClearCacheActivity::clearCache() {
   if (cacheType == ClearCacheType::ReadingStats) {
     const bool existed = Storage.exists("/.crosspoint/reading_stats.json");
     READING_STATS.clear();
-    clearedCount = existed ? 1 : 0;
-    failedCount = existed && Storage.exists("/.crosspoint/reading_stats.json") ? 1 : 0;
+    const bool achievementFileExisted = Storage.exists("/.crosspoint/achievements.json");
+    ACHIEVEMENTS.clear();
+    clearedCount = (existed ? 1 : 0) + (achievementFileExisted ? 1 : 0);
+    failedCount = (existed && Storage.exists("/.crosspoint/reading_stats.json") ? 1 : 0) +
+                  (achievementFileExisted && Storage.exists("/.crosspoint/achievements.json") ? 1 : 0);
     state = failedCount == 0 ? SUCCESS : FAILED;
     requestUpdate();
     return;

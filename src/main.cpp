@@ -20,11 +20,14 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
+#include "AchievementsStore.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
+#include "ReadingStatsStore.h"
 #include "SdCardFontSystem.h"
+#include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
@@ -33,6 +36,7 @@
 #include "images/LoadingIcon.h"
 #include "util/ButtonNavigator.h"
 #include "util/ScreenshotUtil.h"
+#include "util/TimeUtils.h"
 
 GfxRenderer renderer(display);
 MappedInputManager mappedInputManager(gpio, renderer);
@@ -41,6 +45,72 @@ FontDecompressor fontDecompressor;
 SdCardFontSystem sdFontSystem;
 FontCacheManager fontCacheManager(renderer.getFontMap(), renderer.getSdCardFonts());
 static unsigned long allowSleepAt = 0;
+
+namespace {
+enum class BootClockSyncState : uint8_t { Idle, Connecting, Syncing, Finished };
+
+BootClockSyncState bootClockSyncState = BootClockSyncState::Idle;
+unsigned long bootClockSyncStartedAt = 0;
+bool bootClockSyncOwnsWifi = false;
+
+constexpr unsigned long BOOT_CLOCK_SYNC_TIMEOUT_MS = 12000UL;
+
+void startBootClockSync() {
+  // A valid RTC/system clock already gives reading statistics a usable date.
+  // Avoid waking Wi-Fi on X3 when the RTC survived the reboot.
+  if (TimeUtils::isClockValid()) {
+    bootClockSyncState = BootClockSyncState::Finished;
+    return;
+  }
+
+  const std::string& lastSsid = WIFI_STORE.getLastConnectedSsid();
+  const WifiCredential* credential = WIFI_STORE.findCredential(lastSsid);
+  if (lastSsid.empty() || !credential) {
+    LOG_DBG("CLK", "Boot clock sync skipped: no saved WiFi network");
+    bootClockSyncState = BootClockSyncState::Finished;
+    return;
+  }
+
+  bootClockSyncOwnsWifi = WiFi.status() != WL_CONNECTED;
+  if (bootClockSyncOwnsWifi) {
+    WiFi.persistent(false);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(credential->ssid.c_str(), credential->password.c_str());
+  }
+
+  bootClockSyncStartedAt = millis();
+  bootClockSyncState = BootClockSyncState::Connecting;
+  LOG_DBG("CLK", "Starting silent boot clock sync via saved WiFi");
+}
+
+void serviceBootClockSync() {
+  if (bootClockSyncState != BootClockSyncState::Connecting) return;
+
+  if (WiFi.status() == WL_CONNECTED) {
+    bootClockSyncState = BootClockSyncState::Syncing;
+    LOG_INF("CLK", "Running silent boot NTP sync");
+    const bool synced = halClock.syncFromNTP();
+    LOG_INF("CLK", "Silent boot NTP sync %s", synced ? "succeeded" : "failed");
+    if (bootClockSyncOwnsWifi) {
+      WiFi.disconnect(false);
+      WiFi.mode(WIFI_OFF);
+      bootClockSyncOwnsWifi = false;
+    }
+    bootClockSyncState = BootClockSyncState::Finished;
+    return;
+  }
+
+  if (millis() - bootClockSyncStartedAt >= BOOT_CLOCK_SYNC_TIMEOUT_MS) {
+    LOG_DBG("CLK", "Silent boot clock sync skipped: WiFi connection timed out");
+    if (bootClockSyncOwnsWifi) {
+      WiFi.disconnect(false);
+      WiFi.mode(WIFI_OFF);
+      bootClockSyncOwnsWifi = false;
+    }
+    bootClockSyncState = BootClockSyncState::Finished;
+  }
+}
+}  // namespace
 
 // Fonts
 EpdFont notoserif14RegularFont(&notoserif_14_regular);
@@ -244,6 +314,9 @@ void enterDeepSleep(bool fromTimeout = false) {
        SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
   APP_STATE.showBootScreen = !isQuickResumeSleep;
 
+  READING_STATS.noteActivity();
+  READING_STATS.saveToFile();
+  ACHIEVEMENTS.saveToFile();
   APP_STATE.saveToFile();
 
   // Commit to sleeping before goToSleep() runs the outgoing activity's onExit():
@@ -345,13 +418,17 @@ void setup() {
   HalSystem::checkPanic();
 
   SETTINGS.loadFromFile();
+  WIFI_STORE.loadFromFile();
   APP_STATE.loadFromFile();
+  READING_STATS.loadFromFile();
+  ACHIEVEMENTS.loadFromFile();
   RECENT_BOOKS.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
+  startBootClockSync();
 
   const auto wakeupReason = gpio.getWakeupReason();
   switch (wakeupReason) {
@@ -486,6 +563,7 @@ void loop() {
   static unsigned long lastMemPrint = 0;
 
   gpio.update();
+  serviceBootClockSync();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
   renderer.setFadingFix(SETTINGS.fadingFix);
@@ -587,6 +665,13 @@ void loop() {
   const unsigned long activityStartTime = millis();
   activityManager.loop();
   const unsigned long activityDuration = millis() - activityStartTime;
+
+  if (activityManager.isCurrentActivityReader()) {
+    READING_STATS.tickActiveSession();
+    if (READING_STATS.shouldSaveCheckpoint()) READING_STATS.saveToFile();
+  } else {
+    READING_STATS.resumeSession();
+  }
 
   const unsigned long loopDuration = millis() - loopStartTime;
   if (loopDuration > maxLoopDuration) {
