@@ -90,13 +90,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 25
+### Version 29
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
 
-Version 25 includes:
+Version 29 includes:
 
 - cache-busting fields for paragraph alignment, hyphenation, embedded CSS,
   image rendering mode, and Focus Reading
@@ -104,7 +104,12 @@ Version 25 includes:
 - anchor-to-page map for fragment and footnote navigation
 - paragraph and list-item LUTs used by KOReader sync page refinement
 - optional per-word Focus Reading split metadata
-- per-page footnote entries
+- per-page footnote entries with 256-byte href fields
+- CJK token continuation and source-space semantics used by the current parser
+
+The section cache is intentionally invalidated when these semantics change. A
+section written with Version 28 (or any earlier version) is rejected and
+rebuilt; no attempt is made to reinterpret its serialized page payload.
 
 ImHex pattern:
 
@@ -113,10 +118,10 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 25
+#define EXPECTED_VERSION 29
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
-#define FOOTNOTE_HREF_LEN 96
+#define FOOTNOTE_HREF_LEN 256
 
 struct String {
     u32 length [[hidden, comment("String byte length")]];
@@ -171,6 +176,10 @@ struct BlockStyle {
     bool isRtl;
     bool directionDefined;
 };
+
+// The parser's transient <br> marker (fromBrElement) is not serialized; it is
+// consumed while constructing the following text block before the Page payload
+// is written.
 
 struct TextBlock {
     u16 wordCount;
@@ -306,3 +315,13 @@ if (parsedSize != fileSize) {
     std::warning(std::format("Unparsed data detected: {} bytes remaining at offset 0x{:X}", fileSize - parsedSize, parsedSize));
 }
 ```
+
+## `css_rules.cache`
+
+The CSS rule cache starts with a one-byte format version. The current version is
+8 (previously 7). A version mismatch, truncated payload, invalid enum/length
+field, or rule count above the parser limit invalidates the cache and causes CSS
+to be parsed again. The parser also bounds total selector bytes and unique style
+bodies before adding entries. If the heap is temporarily too fragmented to hydrate the cache,
+loading is deferred and retried after transient rendering allocations are
+released.

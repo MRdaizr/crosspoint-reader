@@ -33,7 +33,13 @@
 class CssParser {
  public:
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
-  static constexpr uint8_t CSS_CACHE_VERSION = 7;
+  static constexpr uint8_t CSS_CACHE_VERSION = 8;
+
+  enum class CacheLoadResult : uint8_t {
+    Complete,
+    LowMemory,
+    Invalid,
+  };
 
   explicit CssParser(std::string cachePath) : cachePath(std::move(cachePath)) {}
   ~CssParser() = default;
@@ -80,7 +86,11 @@ class CssParser {
   /**
    * Clear all loaded rules
    */
-  void clear() { rulesBySelector_.clear(); }
+  void clear() {
+    rulesBySelector_.clear();
+    selectorPoolBytes_ = 0;
+    uniqueStyleCount_ = 0;
+  }
 
   /**
    * Check if CSS rules cache file exists
@@ -101,9 +111,10 @@ class CssParser {
   /**
    * Load CSS rules from a cache file.
    * Clears any existing rules before loading.
-   * @return true if cache was loaded successfully
+   * @return Complete when loaded, LowMemory when loading should be retried,
+   *         otherwise Invalid
    */
-  bool loadFromCache();
+  CacheLoadResult loadFromCache();
 
  private:
   // Lookup key for a multi-piece selector. The pieces are hashed and compared
@@ -139,6 +150,11 @@ class CssParser {
 
   // Storage: maps selector -> style properties. Hash/equal are case-insensitive.
   std::unordered_map<std::string, CssStyle, SvHash, SvEqual> rulesBySelector_;
+  // Accounting limits for the map-backed parser. They mirror the bounded
+  // selector/style pools used by the upstream implementation without changing
+  // X4's lookup architecture.
+  size_t selectorPoolBytes_ = 0;
+  size_t uniqueStyleCount_ = 0;
 
   std::string cachePath;
 

@@ -56,6 +56,7 @@ class ChapterHtmlSlimParser {
   uint32_t visibleTextOffset = 0;
   uint32_t partWordVisibleOffset = 0;
   bool nextWordContinues = false;  // true when next flushed word attaches to previous (inline element boundary)
+  bool listItemBulletOnly = false;
   std::unique_ptr<ParsedText> currentTextBlock = nullptr;
   std::unique_ptr<Page> currentPage = nullptr;
   int16_t currentPageNextY = 0;

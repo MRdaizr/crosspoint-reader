@@ -116,7 +116,11 @@ void Page::renderImages(GfxRenderer& renderer, const int fontId, const int xOffs
 }
 
 bool Page::serialize(HalFile& file) const {
-  const uint16_t count = elements.size();
+  if (elements.size() > MAX_ELEMENTS_PER_PAGE || elements.size() > UINT16_MAX) {
+    LOG_ERR("PGE", "Too many page elements to serialize: %u", static_cast<unsigned>(elements.size()));
+    return false;
+  }
+  const uint16_t count = static_cast<uint16_t>(elements.size());
   serialization::writePod(file, count);
 
   for (const auto& el : elements) {
@@ -129,7 +133,7 @@ bool Page::serialize(HalFile& file) const {
   }
 
   // Serialize footnotes (clamp to MAX_FOOTNOTES_PER_PAGE to match addFootnote/deserialize limits)
-  const uint16_t fnCount = std::min<uint16_t>(footnotes.size(), MAX_FOOTNOTES_PER_PAGE);
+  const uint16_t fnCount = static_cast<uint16_t>(std::min<size_t>(footnotes.size(), MAX_FOOTNOTES_PER_PAGE));
   serialization::writePod(file, fnCount);
   for (uint16_t i = 0; i < fnCount; i++) {
     const auto& fn = footnotes[i];
@@ -144,14 +148,28 @@ bool Page::serialize(HalFile& file) const {
 }
 
 std::unique_ptr<Page> Page::deserialize(HalFile& file) {
-  auto page = std::unique_ptr<Page>(new Page());
+  auto page = std::unique_ptr<Page>(new (std::nothrow) Page());
+  if (!page) {
+    LOG_ERR("PGE", "Deserialization failed: could not allocate Page");
+    return nullptr;
+  }
 
-  uint16_t count;
-  serialization::readPod(file, count);
+  uint16_t count = 0;
+  if (file.read(&count, sizeof(count)) != sizeof(count)) {
+    LOG_ERR("PGE", "Deserialization failed: missing page element count");
+    return nullptr;
+  }
+  if (count > MAX_ELEMENTS_PER_PAGE) {
+    LOG_ERR("PGE", "Deserialization failed: invalid page element count %u", count);
+    return nullptr;
+  }
 
   for (uint16_t i = 0; i < count; i++) {
-    uint8_t tag;
-    serialization::readPod(file, tag);
+    uint8_t tag = 0;
+    if (file.read(&tag, sizeof(tag)) != sizeof(tag)) {
+      LOG_ERR("PGE", "Deserialization failed: missing element tag %u", i);
+      return nullptr;
+    }
 
     if (tag == TAG_PageLine) {
       auto pl = PageLine::deserialize(file);
@@ -172,8 +190,11 @@ std::unique_ptr<Page> Page::deserialize(HalFile& file) {
   }
 
   // Deserialize footnotes
-  uint16_t fnCount;
-  serialization::readPod(file, fnCount);
+  uint16_t fnCount = 0;
+  if (file.read(&fnCount, sizeof(fnCount)) != sizeof(fnCount)) {
+    LOG_ERR("PGE", "Deserialization failed: missing footnote count");
+    return nullptr;
+  }
   if (fnCount > MAX_FOOTNOTES_PER_PAGE) {
     LOG_ERR("PGE", "Invalid footnote count %u", fnCount);
     return nullptr;

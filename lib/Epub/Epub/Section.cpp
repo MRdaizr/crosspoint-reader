@@ -18,7 +18,9 @@
 
 namespace {
 // v28: adds a visible-text offset LUT for exact cross-reader resumes.
-constexpr uint8_t SECTION_FILE_VERSION = 28;
+// v29: expands footnote href storage and invalidates updated CJK token spacing
+//      and continuation semantics.
+constexpr uint8_t SECTION_FILE_VERSION = 29;
 constexpr size_t MIN_INCREMENTAL_FREE_HEAP = 48 * 1024;
 constexpr size_t MIN_INCREMENTAL_MAX_ALLOC = 32 * 1024;
 constexpr uint16_t INCREMENTAL_PARSE_BUFFER_SIZE = 256;
@@ -391,7 +393,16 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   if (embeddedStyle) {
     cssParser = epub->getCssParser();
     if (cssParser) {
-      if (!cssParser->loadFromCache()) {
+      const auto cacheResult = cssParser->loadFromCache();
+      if (cacheResult == CssParser::CacheLoadResult::LowMemory) {
+        LOG_ERR("SCT", "Insufficient heap to load CSS cache; section build deferred");
+        cssParser->clear();
+        file.close();
+        Storage.remove(filePath.c_str());
+        Storage.remove(tmpHtmlPath.c_str());
+        return false;
+      }
+      if (cacheResult != CssParser::CacheLoadResult::Complete) {
         LOG_ERR("SCT", "Failed to load CSS from cache");
       }
     }
@@ -557,8 +568,19 @@ bool Section::resumeIncrementalBuild(
   const std::string imageBasePath = epub->getCachePath() + "/img_" + std::to_string(spineIndex) + "_";
   if (embeddedStyle) {
     buildCssParser = epub->getCssParser();
-    if (buildCssParser && !buildCssParser->loadFromCache()) {
-      LOG_ERR("SCT", "Failed to load CSS from cache for resumed build");
+    if (buildCssParser) {
+      const auto cacheResult = buildCssParser->loadFromCache();
+      if (cacheResult == CssParser::CacheLoadResult::LowMemory) {
+        LOG_ERR("SCT", "Insufficient heap to load CSS cache for resumed build; retry later");
+        buildCssParser->clear();
+        // The open .building file and checkpoint must not survive this retry
+        // path: otherwise the next resume can keep replaying a partial build.
+        discardIncrementalBuild();
+        return false;
+      }
+      if (cacheResult != CssParser::CacheLoadResult::Complete) {
+        LOG_ERR("SCT", "Failed to load CSS from cache for resumed build");
+      }
     }
   }
 
@@ -654,8 +676,17 @@ bool Section::beginIncrementalBuild(
 
   if (embeddedStyle) {
     buildCssParser = epub->getCssParser();
-    if (buildCssParser && !buildCssParser->loadFromCache()) {
-      LOG_ERR("SCT", "Failed to load CSS from cache for incremental build");
+    if (buildCssParser) {
+      const auto cacheResult = buildCssParser->loadFromCache();
+      if (cacheResult == CssParser::CacheLoadResult::LowMemory) {
+        LOG_ERR("SCT", "Insufficient heap to load CSS cache for incremental build; retry later");
+        buildCssParser->clear();
+        discardIncrementalBuild();
+        return false;
+      }
+      if (cacheResult != CssParser::CacheLoadResult::Complete) {
+        LOG_ERR("SCT", "Failed to load CSS from cache for incremental build");
+      }
     }
   }
 
@@ -763,8 +794,17 @@ std::unique_ptr<Page> Section::buildPagePreview(const int fontId, const float li
   CssParser* cssParser = nullptr;
   if (embeddedStyle) {
     cssParser = epub->getCssParser();
-    if (cssParser && !cssParser->loadFromCache()) {
-      LOG_ERR("SCT", "Failed to load CSS from cache");
+    if (cssParser) {
+      const auto cacheResult = cssParser->loadFromCache();
+      if (cacheResult == CssParser::CacheLoadResult::LowMemory) {
+        LOG_ERR("SCT", "Insufficient heap to load CSS cache for preview; retry later");
+        cssParser->clear();
+        Storage.remove(tmpHtmlPath.c_str());
+        return nullptr;
+      }
+      if (cacheResult != CssParser::CacheLoadResult::Complete) {
+        LOG_ERR("SCT", "Failed to load CSS from cache");
+      }
     }
   }
 

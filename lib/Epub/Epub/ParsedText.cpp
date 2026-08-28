@@ -301,7 +301,32 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
     effectiveNoSpaceBefore = true;
   }
 
+  // CJK-heavy paragraphs can expand one source word into hundreds of tokens.
+  // Reserve all lock-step vectors in one growth step so CSS/style boundaries do
+  // not repeatedly allocate and copy large contiguous arrays on the C3 heap.
+  const auto ensureTokenCapacity = [&](const size_t additionalTokens) {
+    if (additionalTokens == 0) return;
+    const size_t requiredSize = words.size() + additionalTokens;
+    if (words.capacity() >= requiredSize) return;
+
+    size_t newCapacity = words.capacity() < 16 ? 16 : words.capacity();
+    while (newCapacity < requiredSize) {
+      if (newCapacity > std::numeric_limits<size_t>::max() / 2) {
+        newCapacity = requiredSize;
+        break;
+      }
+      newCapacity *= 2;
+    }
+    words.reserve(newCapacity);
+    wordStyles.reserve(newCapacity);
+    wordContinues.reserve(newCapacity);
+    wordNoSpaceBefore.reserve(newCapacity);
+    wordIsFocusSuffix.reserve(newCapacity);
+    wordVisibleOffsets.reserve(newCapacity);
+  };
+
   if (auto breakOffsets = cjkCharacterBreakByteOffsets(word); !breakOffsets.empty()) {
+    ensureTokenCapacity(breakOffsets.size() + 1);
     bool firstToken = true;
     size_t tokenStart = 0;
     for (const size_t breakOffset : breakOffsets) {

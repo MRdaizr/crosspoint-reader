@@ -76,6 +76,7 @@ class Page {
   std::vector<std::shared_ptr<PageElement>> elements;
   std::vector<FootnoteEntry> footnotes;
   static constexpr uint16_t MAX_FOOTNOTES_PER_PAGE = 16;
+  static constexpr uint16_t MAX_ELEMENTS_PER_PAGE = 4096;
 
   // Zero-based visible Unicode-codepoint offset at which this page starts.
   // This lives in Section's side LUT rather than in the serialized page body.

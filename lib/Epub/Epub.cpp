@@ -334,6 +334,7 @@ void Epub::parseCssFiles() const {
   }
 
   // No cache yet - parse CSS files
+  bool memoryDeferred = false;
   for (const auto& cssPath : cssFiles) {
     LOG_DBG("EBP", "Parsing CSS file: %s", cssPath.c_str());
 
@@ -342,6 +343,7 @@ void Epub::parseCssFiles() const {
     if (freeHeap < MIN_HEAP_FOR_CSS_PARSING) {
       LOG_ERR("EBP", "Insufficient heap for CSS parsing (%u bytes free, need %zu), skipping: %s", freeHeap,
               MIN_HEAP_FOR_CSS_PARSING, cssPath.c_str());
+      memoryDeferred = true;
       continue;
     }
 
@@ -384,6 +386,15 @@ void Epub::parseCssFiles() const {
     Storage.remove(tmpCssPath.c_str());
   }
 
+  if (memoryDeferred) {
+    // Do not replace a missing/old cache with a partial empty file. Leaving the
+    // cache absent makes the next EPUB open retry once transient allocations
+    // (font/image buffers) have been released.
+    LOG_INF("EBP", "CSS parse deferred due to low memory; cache will be retried later");
+    cssParser->clear();
+    return;
+  }
+
   // Save to cache for next time
   if (!cssParser->saveToCache()) {
     LOG_ERR("EBP", "Failed to save CSS rules to cache");
@@ -405,8 +416,13 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   // Try to load existing cache first
   if (bookMetadataCache->load()) {
     if (!skipLoadingCss) {
-      // Rebuild CSS cache when missing or when cache version changed (loadFromCache removes stale file)
-      if (!cssParser->hasCache() || !cssParser->loadFromCache()) {
+      // Rebuild CSS cache when missing or invalid. If heap is temporarily low,
+      // keep the cache and let the next section/build attempt retry hydration.
+      const auto cacheResult = cssParser->hasCache() ? cssParser->loadFromCache()
+                                                     : CssParser::CacheLoadResult::Invalid;
+      if (cacheResult == CssParser::CacheLoadResult::LowMemory) {
+        LOG_DBG("EBP", "CSS cache hydration deferred due to low memory");
+      } else if (cacheResult != CssParser::CacheLoadResult::Complete) {
         LOG_DBG("EBP", "CSS rules cache missing or stale, attempting to parse CSS files");
         cssParser->deleteCache();
 
