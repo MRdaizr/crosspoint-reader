@@ -4,6 +4,7 @@
 
 #include <HalStorage.h>
 
+#include <array>
 #include <climits>
 #include <cstdint>
 #include <functional>
@@ -86,6 +87,8 @@ class ChapterHtmlSlimParser {
     bool hasStrikethrough = false, strikethrough = false;
     bool hasDirection = false;
     CssTextDirection direction = CssTextDirection::Ltr;
+    bool hasTextAlign = false;
+    CssTextAlign textAlign = CssTextAlign::Left;
     bool hasSup = false, sup = false;
     bool hasSub = false, sub = false;
   };
@@ -98,11 +101,22 @@ class ChapterHtmlSlimParser {
   bool effectiveStrikethrough = false;
   bool effectiveDirectionDefined = false;
   CssTextDirection effectiveDirection = CssTextDirection::Ltr;
+  bool effectiveTextAlignDefined = false;
+  CssTextAlign effectiveTextAlign = CssTextAlign::Left;
   bool effectiveSup = false;
   bool effectiveSub = false;
+  static constexpr size_t MAX_GRID_TABLE_COLUMNS = 4;
+  static constexpr size_t MAX_GRID_TABLE_CELL_WORDS = 32;
+  static constexpr size_t MAX_GRID_TABLE_CELL_BYTES = 512;
   int tableDepth = 0;
-  int tableRowIndex = 0;
-  int tableColIndex = 0;
+  bool insideTableCell = false;
+  bool tableRowStacked = false;
+  bool tableRowRtl = false;
+  uint16_t tableRowsSpannedRemaining = 0;
+  size_t tableCellTextBytes = 0;
+  std::vector<std::unique_ptr<ParsedText>> tableRowCells;
+  std::array<std::vector<std::shared_ptr<TextBlock>>, MAX_GRID_TABLE_COLUMNS> tableCellLines;
+  std::vector<uint32_t> tableLineVisibleOffsets;
 
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
   int completedPageCount = 0;
@@ -124,9 +138,14 @@ class ChapterHtmlSlimParser {
   void startNewTextBlock(const BlockStyle& blockStyle);
   void flushPendingAnchor();
   void flushPartWordBuffer();
+  void fallbackTableRowToStacked();
+  void closeTableCell();
+  void finishTableRow();
+  void addTableRowSeparator();
   void makePages();
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css);
+  void pushTableTextStyleEntry(const CssStyle& cssStyle);
   static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);
   void emitHorizontalRule(const BlockStyle& blockStyle);
   void completeCurrentPage(uint16_t paragraphIndex, uint16_t listItemIndex);
