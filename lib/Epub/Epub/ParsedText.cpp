@@ -2,6 +2,7 @@
 
 #include <BidiUtils.h>
 #include <GfxRenderer.h>
+#include <Logging.h>
 #include <Utf8.h>
 
 #include <algorithm>
@@ -307,9 +308,12 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
   const auto ensureTokenCapacity = [&](const size_t additionalTokens) {
     if (additionalTokens == 0) return;
     const size_t requiredSize = words.size() + additionalTokens;
-    if (words.capacity() >= requiredSize) return;
+    // words is a deque and intentionally has no capacity() API. Use the
+    // first lock-step vector as the growth sentinel; all metadata vectors are
+    // reserved together below.
+    if (wordStyles.capacity() >= requiredSize) return;
 
-    size_t newCapacity = words.capacity() < 16 ? 16 : words.capacity();
+    size_t newCapacity = wordStyles.capacity() < 16 ? 16 : wordStyles.capacity();
     while (newCapacity < requiredSize) {
       if (newCapacity > std::numeric_limits<size_t>::max() / 2) {
         newCapacity = requiredSize;
@@ -317,7 +321,6 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
       }
       newCapacity *= 2;
     }
-    words.reserve(newCapacity);
     wordStyles.reserve(newCapacity);
     wordContinues.reserve(newCapacity);
     wordNoSpaceBefore.reserve(newCapacity);
@@ -367,30 +370,9 @@ void ParsedText::addWord(std::string word, const EpdFontFamily::Style fontStyle,
 
   // --- FOCUS READING LOGIC BELOW ---
 
-  // Pre-reserve capacity to prevent mid-word heap reallocations.
-  size_t maxPossibleNewTokens = word.length();
-  size_t requiredSize = words.size() + maxPossibleNewTokens;
-
-  if (words.capacity() < requiredSize) {
-    // Emulate standard geometric growth (doubling) to ensure we don't reallocate on every word.
-    size_t newCapacity = words.capacity() * 2;
-
-    // Ensure the doubled capacity is actually enough for this specific word
-    if (newCapacity < requiredSize) {
-      newCapacity = requiredSize;
-    }
-    // Set a sensible minimum starting size so the first few words don't trigger tiny reallocations
-    if (newCapacity < 16) {
-      newCapacity = 16;
-    }
-
-    words.reserve(newCapacity);
-    wordStyles.reserve(newCapacity);
-    wordContinues.reserve(newCapacity);
-    wordNoSpaceBefore.reserve(newCapacity);
-    wordIsFocusSuffix.reserve(newCapacity);
-    wordVisibleOffsets.reserve(newCapacity);
-  }
+  // Focus splitting can produce one token per byte/codepoint. Reserve the
+  // lock-step metadata vectors once; the deque itself grows in fixed blocks.
+  ensureTokenCapacity(word.length());
 
   // Lambda helper to process and push individual sub-segments of the string
   // Use std::string_view to avoid heap allocations when slicing
@@ -1191,9 +1173,13 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
   }
 
   if (!lineHasFocusSplit) {
-    processLine(std::make_shared<TextBlock>(std::move(lineWords), std::move(lineXPos), std::move(lineWordStyles),
-                                            std::vector<uint8_t>{}, std::vector<uint16_t>{}, blockStyle),
-                wordVisibleOffsets[lastBreakAt]);
+    auto block = std::make_shared<TextBlock>(lineWords, lineXPos, lineWordStyles, std::vector<uint8_t>{},
+                                             std::vector<uint16_t>{}, blockStyle);
+    if (!block->valid()) {
+      LOG_ERR("PTX", "Dropping line because TextBlock arena allocation failed");
+      return;
+    }
+    processLine(std::move(block), wordVisibleOffsets[lastBreakAt]);
     return;
   }
 
@@ -1238,7 +1224,10 @@ void ParsedText::extractLine(const size_t breakIndex, const int pageWidth, const
     }
   }
 
-  processLine(std::make_shared<TextBlock>(std::move(outWords), std::move(outXPos), std::move(outStyles),
-                                          std::move(outBoundaries), std::move(outSuffixX), blockStyle),
-              wordVisibleOffsets[lastBreakAt]);
+  auto block = std::make_shared<TextBlock>(outWords, outXPos, outStyles, outBoundaries, outSuffixX, blockStyle);
+  if (!block->valid()) {
+    LOG_ERR("PTX", "Dropping focus line because TextBlock arena allocation failed");
+    return;
+  }
+  processLine(std::move(block), wordVisibleOffsets[lastBreakAt]);
 }

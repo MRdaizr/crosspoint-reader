@@ -90,13 +90,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 29
+### Version 30
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
 
-Version 29 includes:
+Version 30 includes:
 
 - cache-busting fields for paragraph alignment, hyphenation, embedded CSS,
   image rendering mode, and Focus Reading
@@ -104,12 +104,14 @@ Version 29 includes:
 - anchor-to-page map for fragment and footnote navigation
 - paragraph and list-item LUTs used by KOReader sync page refinement
 - optional per-word Focus Reading split metadata
+- a single-arena `TextBlock` line payload (word offsets, positions, styles,
+  optional focus metadata, and NUL-terminated text) to reduce heap fragmentation
 - per-page footnote entries with 256-byte href fields
 - CJK token continuation and source-space semantics used by the current parser
 
 The section cache is intentionally invalidated when these semantics change. A
-section written with Version 28 (or any earlier version) is rejected and
-rebuilt; no attempt is made to reinterpret its serialized page payload.
+section written with Version 29 (or any earlier version) is rejected and rebuilt;
+no attempt is made to reinterpret its serialized page payload.
 
 ImHex pattern:
 
@@ -118,7 +120,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 29
+#define EXPECTED_VERSION 30
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256
@@ -319,7 +321,8 @@ if (parsedSize != fileSize) {
 ## `css_rules.cache`
 
 The CSS rule cache starts with a one-byte format version. The current version is
-9 (previously 8 and 7). Version 9 adds a one-byte status flag after the version:
+10 (previously 9, 8 and 7). Version 10 keeps the one-byte status flag after the
+version and changes rule storage to a bounded flat selector/index/style payload:
 bit 0 marks a partial cache produced when CSS parsing hit a bounded memory or
 input limit. A partial cache can be used for the current open, but the source
 stylesheets are retried on the next open instead of treating the reduced rule
@@ -328,17 +331,16 @@ enum/length field, trailing data, or a rule count above the parser limit
 invalidates the cache and causes CSS to be parsed again.
 
 Writers build the cache in `css_rules.cache.tmp` and promote it atomically,
-keeping the previous cache until the replacement is complete. An empty partial
-cache is never written, so a transient low-memory failure does not erase a
-usable cache. The parser also bounds total selector bytes and unique style
-bodies before adding entries. If the heap is temporarily too fragmented to
-hydrate the cache, loading is deferred and retried after transient rendering
-allocations are released.
+keeping the previous cache until the replacement is complete. The parser bounds
+the selector index, selector byte pool, and deduplicated style pool before
+adding entries. If the heap is temporarily too fragmented to hydrate the
+cache, loading is deferred and retried after transient rendering allocations
+are released.
 
 ImHex header pattern:
 
 ```c++
-u8 version; // EXPECTED_VERSION = 9
+u8 version; // EXPECTED_VERSION = 10
 u8 flags;   // bit 0 = partial parse; all other bits are reserved and must be 0
 u16 ruleCount;
 ```

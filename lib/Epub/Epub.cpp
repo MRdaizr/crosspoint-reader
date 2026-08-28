@@ -440,7 +440,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
   // Try to load existing cache first
   if (bookMetadataCache->load()) {
     if (!skipLoadingCss) {
-      // Inspect the lightweight status header before hydrating the rule map.
+      // Inspect the lightweight status header before hydrating the rule table.
       // Partial caches are usable for this session but must still retry their
       // source stylesheets; low-memory hydration leaves the cache untouched.
       const auto cacheStatus = cssParser->inspectCache();
@@ -488,7 +488,7 @@ bool Epub::load(const bool buildIfMissing, const bool skipLoadingCss) {
         }
       }
     }
-    // The rule map is only needed while building section pages. Keeping it
+    // The rule table is only needed while building section pages. Keeping it
     // resident after a warm open pins tens of KB for the entire reading
     // session, especially when the first page is already cached.
     cssParser->clear();

@@ -20,7 +20,8 @@ namespace {
 // v28: adds a visible-text offset LUT for exact cross-reader resumes.
 // v29: expands footnote href storage and invalidates updated CJK token spacing
 //      and continuation semantics.
-constexpr uint8_t SECTION_FILE_VERSION = 29;
+// v30: stores each TextBlock in a single arena and changes its line payload.
+constexpr uint8_t SECTION_FILE_VERSION = 30;
 constexpr size_t MIN_INCREMENTAL_FREE_HEAP = 48 * 1024;
 constexpr size_t MIN_INCREMENTAL_MAX_ALLOC = 32 * 1024;
 constexpr uint16_t INCREMENTAL_PARSE_BUFFER_SIZE = 256;
@@ -886,10 +887,10 @@ std::string Section::getTextFromSectionFile() {
       if (el->getTag() == TAG_PageLine) {
         const auto& line = static_cast<const PageLine&>(*el);
         if (line.getBlock()) {
-          const auto& words = line.getBlock()->getWords();
-          for (const auto& w : words) {
+          const TextBlock& block = *line.getBlock();
+          for (size_t i = 0; i < block.wordCount(); ++i) {
             if (!fullText.empty()) fullText += " ";
-            fullText += w;
+            fullText.append(block.wordText(i), block.wordTextLen(i));
           }
         }
       }

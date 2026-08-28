@@ -39,6 +39,10 @@ std::unique_ptr<PageLine> PageLine::deserialize(HalFile& file) {
   serialization::readPod(file, yPos);
 
   auto tb = TextBlock::deserialize(file);
+  if (!tb) {
+    LOG_ERR("PGE", "Deserialization failed: invalid TextBlock");
+    return nullptr;
+  }
   return std::unique_ptr<PageLine>(new PageLine(std::move(tb), xPos, yPos));
 }
 
@@ -62,6 +66,10 @@ std::unique_ptr<PageImage> PageImage::deserialize(HalFile& file) {
   serialization::readPod(file, yPos);
 
   auto ib = ImageBlock::deserialize(file);
+  if (!ib) {
+    LOG_ERR("PGE", "Deserialization failed: invalid ImageBlock");
+    return nullptr;
+  }
   return std::unique_ptr<PageImage>(new PageImage(std::move(ib), xPos, yPos));
 }
 
@@ -173,9 +181,11 @@ std::unique_ptr<Page> Page::deserialize(HalFile& file) {
 
     if (tag == TAG_PageLine) {
       auto pl = PageLine::deserialize(file);
+      if (!pl) return nullptr;
       page->elements.push_back(std::move(pl));
     } else if (tag == TAG_PageImage) {
       auto pi = PageImage::deserialize(file);
+      if (!pi) return nullptr;
       page->elements.push_back(std::move(pi));
     } else if (tag == TAG_PageHorizontalRule) {
       auto rule = PageHorizontalRule::deserialize(file);

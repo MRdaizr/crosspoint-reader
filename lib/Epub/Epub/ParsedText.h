@@ -3,6 +3,7 @@
 #include <EpdFontFamily.h>
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -14,7 +15,10 @@
 class GfxRenderer;
 
 class ParsedText {
-  std::vector<std::string> words;
+  // deque avoids a large contiguous allocation when a CJK paragraph expands
+  // into hundreds of tokens. The parallel metadata vectors remain contiguous
+  // because they are passed to layout/render code as indexed arrays.
+  std::deque<std::string> words;
   std::vector<EpdFontFamily::Style> wordStyles;
   std::vector<bool> wordContinues;      // true = word attaches to previous with no break
   std::vector<bool> wordNoSpaceBefore;  // true = may break before token, but no synthetic space when joined
