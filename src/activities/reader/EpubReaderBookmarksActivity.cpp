@@ -107,9 +107,30 @@ void EpubReaderBookmarksActivity::loop() {
     if (bookmarks.empty()) {
       return;
     }
-    auto bookmark = bookmarks.at(selectorIndex);
-    CrossPointPosition pos = ProgressMapper::toCrossPoint(epub, {bookmark.xpath, bookmark.percentage}, renderer);
-    setResult(ProgressChangeResult{pos.spineIndex, pos.pageNumber});
+    const auto& bookmark = bookmarks.at(selectorIndex);
+    ProgressChangeResult result{};
+    result.xpath = bookmark.xpath;
+    result.percentage = bookmark.percentage;
+    result.hasSavedProgress = true;
+    result.hasVisibleTextOffset = bookmark.hasVisibleTextOffset;
+    result.visibleTextOffset = bookmark.visibleTextOffset;
+
+    // Preserve the old page hint for fast opening and for pre-offset bookmark
+    // files, but let the reader re-resolve the exact visible offset after any
+    // re-pagination.
+    result.spineIndex = bookmark.computedSpineIndex;
+    if (bookmark.computedChapterPageCount > 0 &&
+        bookmark.computedChapterProgress < bookmark.computedChapterPageCount &&
+        bookmark.computedSpineIndex < epub->getSpineItemsCount()) {
+      result.page = bookmark.computedChapterProgress;
+      result.totalPages = bookmark.computedChapterPageCount;
+    } else {
+      const CrossPointPosition pos =
+          ProgressMapper::toCrossPoint(epub, {bookmark.xpath, bookmark.percentage}, renderer);
+      result.spineIndex = pos.spineIndex;
+      result.page = pos.pageNumber;
+    }
+    setResult(std::move(result));
     finish();
     return;
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {

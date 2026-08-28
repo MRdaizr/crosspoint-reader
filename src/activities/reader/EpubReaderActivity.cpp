@@ -667,16 +667,59 @@ void EpubReaderActivity::jumpToPercent(int percent) {
 void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action) {
   auto progressChangeResultHandler = [this](const ActivityResult& result) {
     loadCachedBookmarks();
-    if (!result.isCancelled) {
-      const auto& sync = std::get<ProgressChangeResult>(result.data);
-      if (currentSpineIndex != sync.spineIndex || (section && section->currentPage != sync.page)) {
-        RenderLock lock(*this);
-        clearDeferredReposition();
+    if (result.isCancelled) {
+      openReaderMenu();
+      return;
+    }
+
+    const auto& sync = std::get<ProgressChangeResult>(result.data);
+
+    // A bookmark's visible-text offset identifies the same content even when
+    // changed fonts, margins or orientation produce a different page grid.
+    if (sync.hasVisibleTextOffset && sync.spineIndex >= 0 && sync.spineIndex < epub->getSpineItemsCount()) {
+      RenderLock lock(*this);
+      clearDeferredReposition();
+      if (section && currentSpineIndex == sync.spineIndex) {
+        const auto page = section->getPageForVisibleTextOffset(sync.visibleTextOffset);
+        section->currentPage = page.value_or(std::max(0, sync.page));
+      } else {
         currentSpineIndex = sync.spineIndex;
-        nextPageNumber = sync.page;
+        cachedSpineIndex = sync.spineIndex;
+        cachedVisibleTextOffset = sync.visibleTextOffset;
+        cachedChapterTotalPageCount = sync.totalPages;
+        nextPageNumber = std::max(0, sync.page);
         section.reset();
       }
+      requestUpdate();
+      return;
     }
+
+    int targetSpineIndex = sync.spineIndex;
+    int targetPage = sync.page;
+    const int activeTotalPages = section ? section->pageCount : 0;
+    const bool cachedPageMatchesActiveSection = section && sync.totalPages > 0 &&
+                                                currentSpineIndex == sync.spineIndex && sync.page >= 0 &&
+                                                sync.page < sync.totalPages && activeTotalPages == sync.totalPages;
+    if (!cachedPageMatchesActiveSection && sync.hasSavedProgress) {
+      const int totalPages = section ? section->pageCount : cachedChapterTotalPageCount;
+      const CrossPointPosition fallback =
+          ProgressMapper::toCrossPoint(epub, {sync.xpath, sync.percentage}, renderer, currentSpineIndex, totalPages);
+      targetSpineIndex = fallback.spineIndex;
+      targetPage = fallback.pageNumber;
+    }
+
+    RenderLock lock(*this);
+    clearDeferredReposition();
+    if (currentSpineIndex != targetSpineIndex) {
+      currentSpineIndex = targetSpineIndex;
+      nextPageNumber = std::max(0, targetPage);
+      section.reset();
+    } else if (section && section->currentPage != targetPage) {
+      section->currentPage = std::max(0, targetPage);
+    } else if (!section) {
+      nextPageNumber = std::max(0, targetPage);
+    }
+    requestUpdate();
   };
 
   switch (action) {
@@ -1889,7 +1932,8 @@ void EpubReaderActivity::addBookmark() {
     currentPage = section->currentPage;
   }
 
-  SavedProgressPosition progress = ProgressMapper::toSavedProgress(epub, getCurrentPosition());
+  const CrossPointPosition currentPosition = getCurrentPosition();
+  SavedProgressPosition progress = ProgressMapper::toSavedProgress(epub, currentPosition);
   const ProgressRange pageRange = getPageProgressRange(epub, currentSpineIndex, currentPage, pageCount);
 
   const size_t bookmarkCountBeforeToggle = cachedBookmarks.size();
@@ -1914,6 +1958,8 @@ void EpubReaderActivity::addBookmark() {
     entry.computedSpineIndex = currentSpineIndex;
     entry.computedChapterPageCount = pageCount;
     entry.computedChapterProgress = currentPage;
+    entry.hasVisibleTextOffset = currentPosition.hasVisibleTextOffset;
+    entry.visibleTextOffset = currentPosition.visibleTextOffset;
     cachedBookmarks.insert(cachedBookmarks.begin(), entry);
     bookmarkRemoved = false;
     currentPageBookmarked = true;

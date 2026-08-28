@@ -6,10 +6,12 @@ All POD fields are written in the ESP32 little-endian representation used by
 
 ## `book.bin`
 
-### Version 7
+### Version 10
 
 `book.bin` stores EPUB metadata plus lookup tables for spine and TOC entries.
-The current firmware writes this version from `BookMetadataCache`.
+The current firmware writes this version from `BookMetadataCache`. Version 10
+also rejects ambiguous EPUB guide `type="text"` references and uses buffered
+metadata I/O; older caches are rebuilt automatically.
 
 ImHex pattern:
 
@@ -18,7 +20,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 7
+#define EXPECTED_VERSION 10
 #define MAX_STRING_LENGTH 65535
 
 struct String {

@@ -137,8 +137,9 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
       LOG_ERR("COF", "Couldn't open temp items file for reading. This is probably going to be a fatal error.");
     }
 
-    // Sort item index for binary search if we have enough items
-    if (self->itemIndex.size() >= LARGE_SPINE_THRESHOLD) {
+    // Always sort the manifest index: even medium books otherwise rescan the
+    // temporary item file for every spine itemref.
+    if (!self->itemIndex.empty()) {
       std::sort(self->itemIndex.begin(), self->itemIndex.end(), [](const ItemIndexEntry& a, const ItemIndexEntry& b) {
         return a.idHash < b.idHash || (a.idHash == b.idHash && a.idLen < b.idLen);
       });
@@ -319,9 +320,13 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
       }
     }
     if (!guideHref.empty()) {
-      if (type == "text" || (type == "start" && !self->textReferenceHref.empty())) {
+      // `text` is ambiguous in EPUB 2 guides (often present on every
+      // chapter). Only an explicit `start` reference identifies the initial
+      // reading position.
+      if (type == "start" && !self->hasExplicitStartReference) {
         LOG_DBG("COF", "Found %s reference in guide: %s", type.c_str(), guideHref.c_str());
         self->textReferenceHref = guideHref;
+        self->hasExplicitStartReference = true;
       } else if ((type == "cover" || type == "cover-page") && self->guideCoverPageHref.empty()) {
         LOG_DBG("COF", "Found cover reference in guide: %s", guideHref.c_str());
         self->guideCoverPageHref = guideHref;

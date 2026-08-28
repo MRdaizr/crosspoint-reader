@@ -1,10 +1,13 @@
 #pragma once
 
+#include <BufferedFile.h>
 #include <HalStorage.h>
 
 #include <algorithm>
 #include <deque>
+#include <memory>
 #include <string>
+#include <vector>
 
 class BookMetadataCache {
  public:
@@ -54,6 +57,14 @@ class BookMetadataCache {
   // Temp file handles during build
   HalFile spineFile;
   HalFile tocFile;
+
+  // Buffered writes avoid SD sector-cache thrashing while OPF/TOC entries are
+  // streamed alongside ZIP reads. Allocation failure falls back to direct I/O.
+  std::unique_ptr<serialization::BufferedFileWriter> passOut;
+
+  // Cumulative spine sizes are queried for progress and percentage jumps on
+  // almost every page. Keep the compact 4-byte values in RAM after load().
+  std::vector<uint32_t> cumulativeSizes;
 
   // Index for fast href→spineIndex lookup (used only for large EPUBs)
   struct SpineHrefIndexEntry {
@@ -106,6 +117,7 @@ class BookMetadataCache {
   bool load();
   SpineEntry getSpineEntry(int index);
   TocEntry getTocEntry(int index);
+  uint32_t getCumulativeSize(int index) const;
   int getSpineCount() const { return spineCount; }
   int getTocCount() const { return tocCount; }
   bool isLoaded() const { return loaded; }
