@@ -546,16 +546,18 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                                                                      IMAGE_EXTRACTION_CHUNK_SIZE);
               cachedImageFile.flush();
               cachedImageFile.close();
-              // flush() has committed the data. Yield instead of adding a fixed
-              // 50ms stall for every image in the chapter.
-              yield();
             }
 
             if (extractSuccess) {
               // Get image dimensions
               ImageDimensions dims = {0, 0};
               ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cachedImagePath);
-              if (decoder && decoder->getDimensions(cachedImagePath, dims)) {
+              bool gotDimensions = false;
+              for (int attempt = 0; attempt < 3 && !gotDimensions; ++attempt) {
+                if (attempt > 0) delay(50);
+                gotDimensions = decoder && decoder->getDimensions(cachedImagePath, dims);
+              }
+              if (gotDimensions) {
                 LOG_DBG("EHP", "Image dimensions: %dx%d", dims.width, dims.height);
 
                 int displayWidth = 0;
@@ -1298,6 +1300,9 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
   if (strcasecmp(name, "body") == 0) {
     self->insideBody = false;
   }
+  if (strcasecmp(name, "html") == 0) {
+    self->htmlEnded_ = true;
+  }
 
   if (self->tableDepth == 1 && (strcmp(name, "td") == 0 || strcmp(name, "th") == 0)) {
     self->nextWordContinues = false;
@@ -1368,6 +1373,8 @@ bool ChapterHtmlSlimParser::beginParsing() {
   if (parseStarted) {
     return !parseFinished;
   }
+
+  htmlEnded_ = false;
 
   // Initialize block style stack with a root entry representing "no ancestor block elements".
   // The user's paragraph alignment is set as the default so child elements without explicit
@@ -1449,7 +1456,7 @@ ChapterHtmlSlimParser::ParseResult ChapterHtmlSlimParser::parseNextChunk(const u
       return ParseResult::Failed;
     }
 
-    const bool done = inputFile.available() == 0;
+    bool done = inputFile.available() == 0;
 
     if (XML_ParseBuffer(parser, static_cast<int>(len), done) == XML_STATUS_ERROR) {
       if (stoppedAfterPageLimit && XML_GetErrorCode(parser) == XML_ERROR_ABORTED) {
@@ -1461,12 +1468,21 @@ ChapterHtmlSlimParser::ParseResult ChapterHtmlSlimParser::parseNextChunk(const u
         currentTextBlock.reset();
         return ParseResult::Complete;
       }
-      LOG_ERR("EHP", "Parse error at line %lu:\n%s", XML_GetCurrentLineNumber(parser),
-              XML_ErrorString(XML_GetErrorCode(parser)));
-      activeParser = nullptr;
-      destroyXmlParser(parser);
-      inputFile.close();
-      return ParseResult::Failed;
+      if (htmlEnded_) {
+        // Some EPUBs append non-XML bytes after the closing HTML tag. The
+        // document has already been parsed successfully; finalize the pages
+        // built so far and ignore only the trailing bytes.
+        LOG_DBG("EHP", "Ignoring trailing data after </html>: %s",
+                XML_ErrorString(XML_GetErrorCode(parser)));
+        done = true;
+      } else {
+        LOG_ERR("EHP", "Parse error at line %lu:\n%s", XML_GetCurrentLineNumber(parser),
+                XML_ErrorString(XML_GetErrorCode(parser)));
+        activeParser = nullptr;
+        destroyXmlParser(parser);
+        inputFile.close();
+        return ParseResult::Failed;
+      }
     }
     if (progressFn && totalBytes > 0) {
       const uint32_t readBytes = totalBytes - inputFile.available();

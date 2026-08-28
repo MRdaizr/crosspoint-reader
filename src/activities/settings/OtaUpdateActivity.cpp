@@ -152,6 +152,9 @@ void OtaUpdateActivity::loop() {
       LOG_DBG("OTA", "New update available, starting download...");
       {
         RenderLock lock(*this);
+        // Re-check under the activity lock so a queued touch/button event
+        // cannot start a second install after the first one changed state.
+        if (state != WAITING_CONFIRMATION) return;
         state = UPDATE_IN_PROGRESS;
       }
       requestUpdateAndWait();

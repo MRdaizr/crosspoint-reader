@@ -43,6 +43,7 @@ class ChapterHtmlSlimParser {
   int depth = 0;
   int skipUntilDepth = INT_MAX;
   bool insideBody = false;
+  bool htmlEnded_ = false;
   bool syntheticCharacterData = false;
   uint16_t nonVisibleTextDepth = 0;
   int boldUntilDepth = INT_MAX;

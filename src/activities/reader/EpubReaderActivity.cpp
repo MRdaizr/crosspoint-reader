@@ -504,6 +504,7 @@ void EpubReaderActivity::loop() {
   if (longPress && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP) {
     {
       RenderLock lock(*this);
+      clearDeferredReposition();
       if (!nextTriggered && section && section->currentPage > 0) {
         section->currentPage = 0;
         pageRenderRequested = true;
@@ -585,6 +586,7 @@ bool EpubReaderActivity::jumpToFraction(const float fraction) {
 
   {
     RenderLock lock(*this);
+    clearDeferredReposition();
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = 0;
     pendingPercentJump = true;
@@ -648,6 +650,7 @@ void EpubReaderActivity::jumpToPercent(int percent) {
   // Reset state so render() reloads and repositions on the target spine.
   {
     RenderLock lock(*this);
+    clearDeferredReposition();
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = 0;
     pendingPercentJump = true;
@@ -662,6 +665,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       const auto& sync = std::get<ProgressChangeResult>(result.data);
       if (currentSpineIndex != sync.spineIndex || (section && section->currentPage != sync.page)) {
         RenderLock lock(*this);
+        clearDeferredReposition();
         currentSpineIndex = sync.spineIndex;
         nextPageNumber = sync.page;
         section.reset();
@@ -680,6 +684,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
               const auto& chapterResult = std::get<ChapterResult>(result.data);
               RenderLock lock(*this);
 
+              clearDeferredReposition();
               currentSpineIndex = chapterResult.spineIndex;
 
               // If anchor is not empty, it will be used later to calculate the page number.
@@ -943,6 +948,8 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
 }
 
 void EpubReaderActivity::applyPageTurnLocked(const bool isForwardTurn) {
+  clearDeferredReposition();
+
   if (!section) {
     return;
   }
@@ -986,6 +993,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (!pendingSyncSaveError) return;
     pendingSyncSaveError = false;
     GUI.drawPopup(renderer, tr(STR_SAVE_PROGRESS_FAILED));
+  };
+
+  // A corrupt/invalid EPUB can leave the indexing popup on screen forever if
+  // the section build fails. Surface a clear error and stop auto paging.
+  const auto showBuildError = [this]() {
+    renderer.clearScreen();
+    GUI.drawPopup(renderer, tr(STR_INDEX_FAILED));
+    automaticPageTurnActive = false;
   };
 
   // edge case handling for sub-zero spine index
@@ -1048,7 +1063,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (buildResult == Section::BuildResult::Failed) {
       LOG_ERR("ERS", "Incremental section build failed");
       section.reset();
-      showPendingSyncSaveError();
+      showBuildError();
       return;
     }
     if (buildResult == Section::BuildResult::PausedLowMemory) {
@@ -1192,7 +1207,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
             LOG_ERR("ERS", "Failed to persist page data to SD after preview");
             updatePreloadProgress(100);
             section.reset();
-            showPendingSyncSaveError();
+            showBuildError();
             return;
           }
           updatePreloadProgress(100);
@@ -1246,7 +1261,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         LOG_ERR("ERS", "Failed to persist page data to SD");
         updatePreloadProgress(100);
         section.reset();
-        showPendingSyncSaveError();
+        showBuildError();
         return;
       }
       updatePreloadProgress(100);
@@ -1333,14 +1348,24 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     auto p = section->loadPageFromSectionFile();
     if (!p) {
       LOG_ERR("ERS", "Failed to load page from SD - clearing section cache");
+      automaticPageTurnActive = false;
+      const bool giveUp = ++pageLoadRetryCount > MAX_PAGE_LOAD_RETRIES;
       section->clearCache();
       section.reset();
+      if (giveUp) {
+        LOG_ERR("ERS", "Page load retry limit reached, aborting");
+        pageLoadRetryCount = 0;
+        renderer.clearScreen();
+        renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_PAGE_LOAD_ERROR), true, EpdFontFamily::BOLD);
+        renderer.displayBuffer();
+        showPendingSyncSaveError();
+        return;
+      }
       requestUpdate();  // Try again after clearing cache
-                        // TODO: prevent infinite loop if the page keeps failing to load for some reason
-      automaticPageTurnActive = false;
       showPendingSyncSaveError();
       return;
     }
+    pageLoadRetryCount = 0;
 
     // Collect footnotes from the loaded page
     currentPageFootnotes = std::move(p->footnotes);
@@ -1350,7 +1375,14 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
   }
   silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
-  saveProgress(currentSpineIndex, section->currentPage, section->pageCount);
+  if (currentSpineIndex != lastSavedSpineIndex || section->currentPage != lastSavedPage ||
+      section->pageCount != lastSavedPageCount) {
+    if (saveProgress(currentSpineIndex, section->currentPage, section->pageCount)) {
+      lastSavedSpineIndex = currentSpineIndex;
+      lastSavedPage = section->currentPage;
+      lastSavedPageCount = section->pageCount;
+    }
+  }
   pageRenderRequested = false;
 
   showPendingSyncSaveError();
@@ -1478,6 +1510,11 @@ void EpubReaderActivity::applyCachedVisibleTextOffset() {
     cachedVisibleTextOffset.reset();
     pageRenderRequested = true;
   }
+}
+
+void EpubReaderActivity::clearDeferredReposition() {
+  cachedChapterTotalPageCount = 0;
+  cachedVisibleTextOffset.reset();
 }
 
 void EpubReaderActivity::beginPreloadProgress() {
@@ -1787,6 +1824,7 @@ void EpubReaderActivity::navigateToHref(const std::string& hrefStr, const bool s
 
   {
     RenderLock lock(*this);
+    clearDeferredReposition();
     pendingAnchor = std::move(anchor);
     currentSpineIndex = targetSpineIndex;
     nextPageNumber = 0;
@@ -1804,6 +1842,7 @@ void EpubReaderActivity::restoreSavedPosition() {
 
   {
     RenderLock lock(*this);
+    clearDeferredReposition();
     currentSpineIndex = pos.spineIndex;
     nextPageNumber = pos.pageNumber;
     section.reset();

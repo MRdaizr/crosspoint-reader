@@ -31,6 +31,9 @@ class EpubReaderActivity final : public Activity {
   int cachedChapterTotalPageCount = 0;
   char wereadBookId_[64] = {};
   std::optional<uint32_t> cachedVisibleTextOffset;
+  int lastSavedSpineIndex = -1;
+  int lastSavedPage = -1;
+  int lastSavedPageCount = -1;
   bool clearInitialProgressAfterSave_ = false;
   unsigned long lastPageTurnTime = 0UL;
   unsigned long pageTurnDuration = 0UL;
@@ -41,6 +44,10 @@ class EpubReaderActivity final : public Activity {
   float pendingSpineProgress = 0.0f;
   bool pendingScreenshot = false;
   bool pendingSyncSaveError = false;
+  // Consecutive page-load failures. Rebuilding can recover a transiently
+  // corrupt cache, but a persistent failure must not loop forever.
+  uint8_t pageLoadRetryCount = 0;
+  static constexpr uint8_t MAX_PAGE_LOAD_RETRIES = 3;
   bool pageRenderRequested = true;
   bool pendingForwardPageTurn = false;
   // Input runs on the main task while cache construction runs on the render
@@ -94,6 +101,10 @@ class EpubReaderActivity final : public Activity {
   bool launchKOReaderSync();
   bool launchWeReadSync();
   void applyCachedVisibleTextOffset();
+  // Session-start resume/reflow state is authoritative only until the first
+  // landing page. Explicit navigation must clear it so a background build
+  // cannot move the reader back to the old position.
+  void clearDeferredReposition();
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
   void pageTurn(bool isForwardTurn);

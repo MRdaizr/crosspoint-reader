@@ -67,6 +67,10 @@ class SdCardFont {
   // when font/size/family/glyph-table state changes.
   void clearPersistentCache();
 
+  // Release all rebuildable resident data before heap-critical Wi-Fi/server
+  // startup while keeping the font loaded and available for on-demand misses.
+  void releaseResidentCaches();
+
   // Returns pointer to the managed EpdFont for a given style.
   // Returns nullptr if the style is not present.
   EpdFont* getEpdFont(uint8_t style = 0);

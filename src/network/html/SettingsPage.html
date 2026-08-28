@@ -598,8 +598,6 @@
     btn.textContent = 'Save Settings';
   }
 
-  loadSettings();
-
   // --- Nutstore WebDAV Sync ---
   async function loadNutstoreConfig() {
     const container = document.getElementById('nutstore-container');
@@ -671,8 +669,6 @@
       showMessage(status.textContent, true);
     }
   }
-
-  loadNutstoreConfig();
 
   // --- Wi-Fi Network Management ---
   // Renders an editable list of saved Wi-Fi networks using /api/wifi endpoints.
@@ -901,8 +897,15 @@
     }
   }
 
-  loadWifiNetworks();
-  loadOpdsServers();
+  // Load each section sequentially because the device web server handles one
+  // client response at a time. This also includes Nutstore, which otherwise
+  // competes with the Wi-Fi/OPDS requests during page startup.
+  (async () => {
+    await loadSettings();
+    await loadNutstoreConfig();
+    await loadWifiNetworks();
+    await loadOpdsServers();
+  })();
 </script>
 </body>
 </html>
