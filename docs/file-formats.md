@@ -319,9 +319,26 @@ if (parsedSize != fileSize) {
 ## `css_rules.cache`
 
 The CSS rule cache starts with a one-byte format version. The current version is
-8 (previously 7). A version mismatch, truncated payload, invalid enum/length
-field, or rule count above the parser limit invalidates the cache and causes CSS
-to be parsed again. The parser also bounds total selector bytes and unique style
-bodies before adding entries. If the heap is temporarily too fragmented to hydrate the cache,
-loading is deferred and retried after transient rendering allocations are
-released.
+9 (previously 8 and 7). Version 9 adds a one-byte status flag after the version:
+bit 0 marks a partial cache produced when CSS parsing hit a bounded memory or
+input limit. A partial cache can be used for the current open, but the source
+stylesheets are retried on the next open instead of treating the reduced rule
+set as complete. Unknown flags, a version mismatch, truncated payload, invalid
+enum/length field, trailing data, or a rule count above the parser limit
+invalidates the cache and causes CSS to be parsed again.
+
+Writers build the cache in `css_rules.cache.tmp` and promote it atomically,
+keeping the previous cache until the replacement is complete. An empty partial
+cache is never written, so a transient low-memory failure does not erase a
+usable cache. The parser also bounds total selector bytes and unique style
+bodies before adding entries. If the heap is temporarily too fragmented to
+hydrate the cache, loading is deferred and retried after transient rendering
+allocations are released.
+
+ImHex header pattern:
+
+```c++
+u8 version; // EXPECTED_VERSION = 9
+u8 flags;   // bit 0 = partial parse; all other bits are reserved and must be 0
+u16 ruleCount;
+```

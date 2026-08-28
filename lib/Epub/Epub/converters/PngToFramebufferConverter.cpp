@@ -174,14 +174,14 @@ void convertLineToGray(const uint8_t* pPixels, uint8_t* grayLine, int width, int
         if (hasAlpha) {
           for (int x = 0; x < width; x++) {
             uint8_t idx = readPackedSample(pPixels, x, bitsPerSample);
-            uint8_t* p = &palette[idx * 3];
+            const uint8_t* p = &palette[idx * 3];
             uint8_t gray = (uint8_t)((p[0] * 77 + p[1] * 150 + p[2] * 29) >> 8);
             uint8_t alpha = palette[768 + idx];
             grayLine[x] = (uint8_t)((gray * alpha + 255 * (255 - alpha)) / 255);
           }
         } else {
           for (int x = 0; x < width; x++) {
-            uint8_t* p = &palette[readPackedSample(pPixels, x, bitsPerSample) * 3];
+            const uint8_t* p = &palette[readPackedSample(pPixels, x, bitsPerSample) * 3];
             grayLine[x] = (uint8_t)((p[0] * 77 + p[1] * 150 + p[2] * 29) >> 8);
           }
         }

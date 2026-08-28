@@ -5,6 +5,9 @@
 #include <Logging.h>
 #include <Serialization.h>
 
+#include <cstdint>
+#include <cstdlib>
+
 #include "Epub/converters/DirectPixelWriter.h"
 #include "Epub/converters/ImageDecoderFactory.h"
 
@@ -19,6 +22,71 @@ ImageBlock::ImageBlock(const std::string& imagePath, int16_t width, int16_t heig
 bool ImageBlock::imageExists() const { return Storage.exists(imagePath.c_str()); }
 
 namespace {
+
+// Pages may be rendered repeatedly (BW plus grayscale passes). Keep failures
+// by image path for the lifetime of one reader session so a bad asset cannot
+// trigger an endless decode/repaint loop. A fixed hash table avoids another
+// heap allocation on the image error path.
+constexpr size_t MAX_SESSION_IMAGE_FAILURES = 16;
+uint64_t failedImageHashes[MAX_SESSION_IMAGE_FAILURES] = {};
+size_t failedImageCount = 0;
+
+uint64_t imagePathHash(const std::string& path) {
+  uint64_t hash = 14695981039346656037ull;
+  for (const char c : path) {
+    hash ^= static_cast<uint8_t>(c);
+    hash *= 1099511628211ull;
+  }
+  return hash;
+}
+
+bool imageFailedThisSession(const std::string& path) {
+  const uint64_t hash = imagePathHash(path);
+  for (size_t i = 0; i < failedImageCount; ++i) {
+    if (failedImageHashes[i] == hash) return true;
+  }
+  return false;
+}
+
+void rememberImageFailure(const std::string& path) {
+  if (failedImageCount >= MAX_SESSION_IMAGE_FAILURES || imageFailedThisSession(path)) return;
+  failedImageHashes[failedImageCount++] = imagePathHash(path);
+}
+
+bool readValidCacheHeader(HalFile& cacheFile, const int expectedWidth, const int expectedHeight, uint16_t& cachedWidth,
+                          uint16_t& cachedHeight) {
+  if (cacheFile.read(&cachedWidth, sizeof(cachedWidth)) != sizeof(cachedWidth) ||
+      cacheFile.read(&cachedHeight, sizeof(cachedHeight)) != sizeof(cachedHeight)) {
+    return false;
+  }
+
+  if (cachedWidth == 0 || cachedHeight == 0) {
+    return false;
+  }
+
+  const int widthDiff = abs(static_cast<int>(cachedWidth) - expectedWidth);
+  const int heightDiff = abs(static_cast<int>(cachedHeight) - expectedHeight);
+  if (widthDiff > 1 || heightDiff > 1) {
+    return false;
+  }
+
+  // Use a 64-bit size calculation so malformed dimensions cannot wrap before
+  // the truncated cache check. The cache header is 4 bytes followed by 2bpp
+  // payload, four pixels per byte.
+  const uint64_t bytesPerRow = (static_cast<uint64_t>(cachedWidth) + 3u) / 4u;
+  const uint64_t expectedSize = sizeof(cachedWidth) + sizeof(cachedHeight) + bytesPerRow * cachedHeight;
+  return cacheFile.fileSize64() >= expectedSize;
+}
+
+void renderPlaceholder(GfxRenderer& renderer, const int x, const int y, const int width, const int height) {
+  // Keep a failed asset visible without allocating a bitmap or retrying the
+  // decoder on every grayscale pass. The caller has already validated that
+  // the rectangle fits the viewport.
+  if (width <= 0 || height <= 0) return;
+  renderer.drawRect(x, y, width, height, true);
+  renderer.drawLine(x, y, x + width - 1, y + height - 1, true);
+  renderer.drawLine(x + width - 1, y, x, y + height - 1, true);
+}
 
 std::string getCachePath(const std::string& imagePath) {
   // Replace extension with .pxc (pixel cache)
@@ -36,17 +104,10 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
     return false;
   }
 
-  uint16_t cachedWidth, cachedHeight;
-  if (cacheFile.read(&cachedWidth, 2) != 2 || cacheFile.read(&cachedHeight, 2) != 2) {
-    return false;
-  }
-
-  // Verify dimensions are close (allow 1 pixel tolerance for rounding differences)
-  int widthDiff = abs(cachedWidth - expectedWidth);
-  int heightDiff = abs(cachedHeight - expectedHeight);
-  if (widthDiff > 1 || heightDiff > 1) {
-    LOG_ERR("IMG", "Cache dimension mismatch: %dx%d vs %dx%d", cachedWidth, cachedHeight, expectedWidth,
-            expectedHeight);
+  uint16_t cachedWidth = 0;
+  uint16_t cachedHeight = 0;
+  if (!readValidCacheHeader(cacheFile, expectedWidth, expectedHeight, cachedWidth, cachedHeight)) {
+    LOG_ERR("IMG", "Invalid or truncated image cache: %s", cachePath.c_str());
     return false;
   }
 
@@ -119,6 +180,8 @@ bool renderFromCache(GfxRenderer& renderer, const std::string& cachePath, int x,
 
 }  // namespace
 
+void ImageBlock::clearSessionRenderFailures() { failedImageCount = 0; }
+
 void ImageBlock::render(GfxRenderer& renderer, const int x, const int y) { (void)renderChecked(renderer, x, y); }
 
 bool ImageBlock::renderChecked(GfxRenderer& renderer, const int x, const int y) {
@@ -152,6 +215,11 @@ bool ImageBlock::renderChecked(GfxRenderer& renderer, const int x, const int y) 
     return true;
   }
 
+  if (imageFailedThisSession(imagePath)) {
+    renderPlaceholder(renderer, x, y, width, height);
+    return false;
+  }
+
   // Try to render from cache first
   std::string cachePath = getCachePath(imagePath);
   if (renderFromCache(renderer, cachePath, x, y, width, height)) {
@@ -163,6 +231,8 @@ bool ImageBlock::renderChecked(GfxRenderer& renderer, const int x, const int y) 
   HalFile file;
   if (!Storage.openFileForRead("IMG", imagePath, file)) {
     LOG_ERR("IMG", "Image file not found: %s", imagePath.c_str());
+    rememberImageFailure(imagePath);
+    renderPlaceholder(renderer, x, y, width, height);
     return false;
   }
   size_t fileSize = file.size();
@@ -170,6 +240,8 @@ bool ImageBlock::renderChecked(GfxRenderer& renderer, const int x, const int y) 
 
   if (fileSize == 0) {
     LOG_ERR("IMG", "Image file is empty: %s", imagePath.c_str());
+    rememberImageFailure(imagePath);
+    renderPlaceholder(renderer, x, y, width, height);
     return false;
   }
 
@@ -189,6 +261,8 @@ bool ImageBlock::renderChecked(GfxRenderer& renderer, const int x, const int y) 
   ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(imagePath);
   if (!decoder) {
     LOG_ERR("IMG", "No decoder found for image: %s", imagePath.c_str());
+    rememberImageFailure(imagePath);
+    renderPlaceholder(renderer, x, y, width, height);
     return false;
   }
 
@@ -197,6 +271,8 @@ bool ImageBlock::renderChecked(GfxRenderer& renderer, const int x, const int y) 
   bool success = decoder->decodeToFramebuffer(imagePath, renderer, config);
   if (!success) {
     LOG_ERR("IMG", "Failed to decode image: %s", imagePath.c_str());
+    rememberImageFailure(imagePath);
+    renderPlaceholder(renderer, x, y, width, height);
     return false;
   }
 

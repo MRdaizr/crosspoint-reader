@@ -2,6 +2,7 @@
 
 #include <HalStorage.h>
 
+#include <cstdint>
 #include <initializer_list>
 #include <string>
 #include <string_view>
@@ -32,8 +33,23 @@
  */
 class CssParser {
  public:
+  enum class ParseResult : uint8_t {
+    Complete,
+    Partial,
+    Error,
+  };
+
+  enum class CacheStatus : uint8_t {
+    Missing,
+    Complete,
+    Partial,
+    Invalid,
+  };
+
   // Bump when CSS cache format or rules change; section caches are invalidated when this changes
-  static constexpr uint8_t CSS_CACHE_VERSION = 8;
+  // Version 9 adds a cache-status byte so a low-memory parse cannot be mistaken for a complete
+  // stylesheet on the next open. Version 8 caches are intentionally rebuilt.
+  static constexpr uint8_t CSS_CACHE_VERSION = 9;
 
   enum class CacheLoadResult : uint8_t {
     Complete,
@@ -52,9 +68,9 @@ class CssParser {
    * Load and parse CSS from a file stream.
    * Can be called multiple times to accumulate rules from multiple stylesheets.
    * @param source Open file handle to read from
-   * @return true if parsing completed (even if no rules found)
+   * @return Complete unless bounded storage or malformed input stopped parsing
    */
-  bool loadFromStream(HalFile& source);
+  ParseResult loadFromStream(HalFile& source);
 
   /**
    * Look up the style for an HTML element, considering tag name and class attributes.
@@ -88,14 +104,22 @@ class CssParser {
    */
   void clear() {
     rulesBySelector_.clear();
+    // std::unordered_map::clear() retains its bucket array. Release it too so
+    // CSS parsing/hydration does not pin the rule table between section builds
+    // or after a warm EPUB open.
+    rulesBySelector_.rehash(0);
     selectorPoolBytes_ = 0;
     uniqueStyleCount_ = 0;
+    ruleGrowthStopped_ = false;
   }
 
   /**
    * Check if CSS rules cache file exists
    */
   bool hasCache() const;
+
+  /** Read the cache header without hydrating its rule map. */
+  CacheStatus inspectCache() const;
 
   /**
    * Delete CSS rules cache file exists
@@ -106,7 +130,7 @@ class CssParser {
    * Save parsed CSS rules to a cache file.
    * @return true if cache was written successfully
    */
-  bool saveToCache() const;
+  bool saveToCache(bool complete = true) const;
 
   /**
    * Load CSS rules from a cache file.
@@ -155,6 +179,9 @@ class CssParser {
   // X4's lookup architecture.
   size_t selectorPoolBytes_ = 0;
   size_t uniqueStyleCount_ = 0;
+  // Set while the current source stream had to drop rules because a bounded
+  // parser pool or scratch buffer was exhausted. This is reset per stream.
+  bool ruleGrowthStopped_ = false;
 
   std::string cachePath;
 

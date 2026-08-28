@@ -478,6 +478,7 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
   // Check if we've reached the rule limit before processing
   if (rulesBySelector_.size() >= MAX_RULES) {
     LOG_DBG("CSS", "Reached max rules limit (%zu), stopping CSS parsing", MAX_RULES);
+    ruleGrowthStopped_ = true;
     return;
   }
 
@@ -514,6 +515,7 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
         // Skip if this would exceed the rule limit
         if (rulesBySelector_.size() >= MAX_RULES) {
           LOG_DBG("CSS", "Reached max rules limit, stopping selector processing");
+          ruleGrowthStopped_ = true;
           limitReached = true;
           return;
         }
@@ -526,6 +528,7 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
         } else {
           if (selectorPoolBytes_ + sel.size() > SELECTOR_POOL_CAP) {
             LOG_DBG("CSS", "Selector pool limit reached (%zu bytes), skipping selector", SELECTOR_POOL_CAP);
+            ruleGrowthStopped_ = true;
             limitReached = true;
             return;
           }
@@ -533,6 +536,7 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
           if (heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) < requiredMapBytes) {
             LOG_DBG("CSS", "Insufficient heap for CSS selector (%zu bytes), deferring remaining rules",
                     requiredMapBytes);
+            ruleGrowthStopped_ = true;
             limitReached = true;
             return;
           }
@@ -546,6 +550,7 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
           }
           if (isNewStyle && uniqueStyleCount_ >= MAX_UNIQUE_STYLES) {
             LOG_DBG("CSS", "Unique CSS style limit reached (%zu), skipping selector", MAX_UNIQUE_STYLES);
+            ruleGrowthStopped_ = true;
             limitReached = true;
             return;
           }
@@ -561,11 +566,15 @@ void CssParser::processRuleBlockWithStyle(std::string_view selectorGroup, const 
 
 // Main parsing entry point
 
-bool CssParser::loadFromStream(HalFile& source) {
+CssParser::ParseResult CssParser::loadFromStream(HalFile& source) {
   if (!source) {
     LOG_ERR("CSS", "Cannot read from invalid file");
-    return false;
+    return ParseResult::Error;
   }
+
+  // A parser instance accumulates rules from multiple stylesheets, but each
+  // stream needs its own truncation result so callers can aggregate statuses.
+  ruleGrowthStopped_ = false;
 
   size_t totalRead = 0;
 
@@ -583,6 +592,7 @@ bool CssParser::loadFromStream(HalFile& source) {
   int bodyDepth = 0;
   bool skippingRule = false;
   CssStyle currentStyle;
+  bool inputTruncated = false;
 
   auto handleChar = [&](const char c) {
     if (inAtRule) {
@@ -618,6 +628,7 @@ bool CssParser::loadFromStream(HalFile& source) {
       if (!selector.push_back(c)) {
         // Keep parsing braces so the rule can be discarded cleanly, but never
         // silently process a truncated selector as a different valid rule.
+        inputTruncated = true;
         skippingRule = true;
       }
       return;
@@ -657,6 +668,7 @@ bool CssParser::loadFromStream(HalFile& source) {
         if (!declBuffer.push_back(c)) {
           // A declaration body larger than the fixed scratch buffer is not
           // safely parseable on the target; drop this rule instead of growing.
+          inputTruncated = true;
           skippingRule = true;
         }
       }
@@ -666,7 +678,10 @@ bool CssParser::loadFromStream(HalFile& source) {
   char buffer[READ_BUFFER_SIZE];
   while (source.available()) {
     int bytesRead = source.read(buffer, sizeof(buffer));
-    if (bytesRead <= 0) break;
+    if (bytesRead <= 0) {
+      inputTruncated = true;
+      break;
+    }
 
     totalRead += static_cast<size_t>(bytesRead);
 
@@ -708,8 +723,17 @@ bool CssParser::loadFromStream(HalFile& source) {
     handleChar('/');
   }
 
-  LOG_DBG("CSS", "Parsed %zu rules from %zu bytes", rulesBySelector_.size(), totalRead);
-  return true;
+  // An unterminated rule/comment/at-rule means the source was cut off. Keep
+  // already parsed rules usable, but mark the cache partial so a later open
+  // retries the source instead of treating it as complete.
+  if (bodyDepth > 0 || inAtRule || inComment || !selector.empty()) {
+    inputTruncated = true;
+  }
+
+  const ParseResult result = (ruleGrowthStopped_ || inputTruncated) ? ParseResult::Partial : ParseResult::Complete;
+  LOG_DBG("CSS", "Parsed %zu rules from %zu bytes (%s)", rulesBySelector_.size(), totalRead,
+          result == ParseResult::Complete ? "complete" : "partial");
+  return result;
 }
 
 // Style resolution
@@ -763,49 +787,114 @@ CssStyle CssParser::parseInlineStyle(std::string_view styleValue) { return parse
 
 // Cache file name (version is CssParser::CSS_CACHE_VERSION)
 constexpr char rulesCache[] = "/css_rules.cache";
+constexpr char rulesCacheTmp[] = "/css_rules.cache.tmp";
+constexpr char rulesCacheBackup[] = "/css_rules.cache.bak";
+constexpr uint8_t CSS_CACHE_FLAG_PARTIAL = 1u << 0;
+constexpr uint8_t CSS_CACHE_KNOWN_FLAGS = CSS_CACHE_FLAG_PARTIAL;
 
 bool CssParser::hasCache() const { return Storage.exists((cachePath + rulesCache).c_str()); }
 
 void CssParser::deleteCache() const {
   if (hasCache()) Storage.remove((cachePath + rulesCache).c_str());
+  Storage.remove((cachePath + rulesCacheTmp).c_str());
+  Storage.remove((cachePath + rulesCacheBackup).c_str());
 }
 
-bool CssParser::saveToCache() const {
+CssParser::CacheStatus CssParser::inspectCache() const {
+  if (cachePath.empty()) {
+    return CacheStatus::Missing;
+  }
+
+  // A power loss can occur after the old cache was moved to the backup but
+  // before the temporary replacement was promoted. Restore that known-good
+  // cache before deciding that the EPUB has no CSS cache at all.
+  if (!hasCache()) {
+    const std::string backupPath = cachePath + rulesCacheBackup;
+    if (!Storage.exists(backupPath.c_str()) ||
+        !Storage.rename(backupPath.c_str(), (cachePath + rulesCache).c_str())) {
+      return CacheStatus::Missing;
+    }
+    LOG_DBG("CSS", "Restored CSS cache backup after interrupted replacement");
+  }
+
+  HalFile file;
+  if (!Storage.openFileForRead("CSS", cachePath + rulesCache, file)) {
+    return CacheStatus::Invalid;
+  }
+
+  uint8_t version = 0;
+  uint8_t flags = 0;
+  uint16_t ruleCount = 0;
+  if (file.read(&version, sizeof(version)) != sizeof(version) || version != CSS_CACHE_VERSION ||
+      file.read(&flags, sizeof(flags)) != sizeof(flags) || (flags & ~CSS_CACHE_KNOWN_FLAGS) != 0 ||
+      file.read(&ruleCount, sizeof(ruleCount)) != sizeof(ruleCount) || ruleCount > MAX_RULES) {
+    return CacheStatus::Invalid;
+  }
+
+  return (flags & CSS_CACHE_FLAG_PARTIAL) != 0 ? CacheStatus::Partial : CacheStatus::Complete;
+}
+
+bool CssParser::saveToCache(const bool complete) const {
   if (cachePath.empty()) {
     return false;
   }
 
-  HalFile file;
-  if (!Storage.openFileForWrite("CSS", cachePath + rulesCache, file)) {
+  // An empty partial cache carries no usable styling and would only make the
+  // next open loop through the same failure. Keep an existing cache untouched
+  // and let the caller retry when more heap is available.
+  if (!complete && rulesBySelector_.empty()) {
+    LOG_ERR("CSS", "Refusing to save an empty partial CSS cache");
     return false;
   }
 
+  const std::string finalPath = cachePath + rulesCache;
+  const std::string tmpPath = cachePath + rulesCacheTmp;
+  const std::string backupPath = cachePath + rulesCacheBackup;
+  Storage.remove(tmpPath.c_str());
+
+  HalFile file;
+  if (!Storage.openFileForWrite("CSS", tmpPath, file)) {
+    return false;
+  }
+
+  bool writeOk = true;
+  const auto writeBytes = [&file, &writeOk](const void* data, const size_t size) {
+    if (writeOk && size > 0 && file.write(data, size) != size) {
+      writeOk = false;
+    }
+  };
+  const auto writeByte = [&writeBytes](const uint8_t value) { writeBytes(&value, sizeof(value)); };
+
   // Write version
-  file.write(CssParser::CSS_CACHE_VERSION);
+  writeByte(CssParser::CSS_CACHE_VERSION);
+
+  // A partial cache is useful for the current session, but must be retried on
+  // a later open rather than trusted as the final stylesheet set.
+  writeByte(complete ? 0 : CSS_CACHE_FLAG_PARTIAL);
 
   // Write rule count
   const auto ruleCount = static_cast<uint16_t>(rulesBySelector_.size());
-  file.write(reinterpret_cast<const uint8_t*>(&ruleCount), sizeof(ruleCount));
+  writeBytes(&ruleCount, sizeof(ruleCount));
 
   // Write each rule: selector string + CssStyle fields
   for (const auto& pair : rulesBySelector_) {
     // Write selector string (length-prefixed)
     const auto selectorLen = static_cast<uint16_t>(pair.first.size());
-    file.write(reinterpret_cast<const uint8_t*>(&selectorLen), sizeof(selectorLen));
-    file.write(reinterpret_cast<const uint8_t*>(pair.first.data()), selectorLen);
+    writeBytes(&selectorLen, sizeof(selectorLen));
+    writeBytes(pair.first.data(), selectorLen);
 
     // Write CssStyle fields (all are POD types)
     const CssStyle& style = pair.second;
-    file.write(static_cast<uint8_t>(style.textAlign));
-    file.write(static_cast<uint8_t>(style.fontStyle));
-    file.write(static_cast<uint8_t>(style.fontWeight));
-    file.write(static_cast<uint8_t>(style.textDecoration));
-    file.write(static_cast<uint8_t>(style.direction));
+    writeByte(static_cast<uint8_t>(style.textAlign));
+    writeByte(static_cast<uint8_t>(style.fontStyle));
+    writeByte(static_cast<uint8_t>(style.fontWeight));
+    writeByte(static_cast<uint8_t>(style.textDecoration));
+    writeByte(static_cast<uint8_t>(style.direction));
 
     // Write CssLength fields (value + unit)
-    auto writeLength = [&file](const CssLength& len) {
-      file.write(reinterpret_cast<const uint8_t*>(&len.value), sizeof(len.value));
-      file.write(static_cast<uint8_t>(len.unit));
+    auto writeLength = [&writeBytes, &writeByte](const CssLength& len) {
+      writeBytes(&len.value, sizeof(len.value));
+      writeByte(static_cast<uint8_t>(len.unit));
     };
 
     writeLength(style.textIndent);
@@ -819,8 +908,8 @@ bool CssParser::saveToCache() const {
     writeLength(style.paddingRight);
     writeLength(style.imageHeight);
     writeLength(style.imageWidth);
-    file.write(static_cast<uint8_t>(style.display));
-    file.write(static_cast<uint8_t>(style.verticalAlign));
+    writeByte(static_cast<uint8_t>(style.display));
+    writeByte(static_cast<uint8_t>(style.verticalAlign));
 
     // Write defined flags as uint32_t
     uint32_t definedBits = 0;
@@ -842,10 +931,38 @@ bool CssParser::saveToCache() const {
     if (style.defined.display) definedBits |= 1 << 15;
     if (style.defined.direction) definedBits |= 1 << 16;
     if (style.defined.verticalAlign) definedBits |= 1 << 17;
-    file.write(reinterpret_cast<const uint8_t*>(&definedBits), sizeof(definedBits));
+    writeBytes(&definedBits, sizeof(definedBits));
+    if (!writeOk) break;
   }
 
-  LOG_DBG("CSS", "Saved %u rules to cache", ruleCount);
+  if (!writeOk || !file.close()) {
+    LOG_ERR("CSS", "Failed to write temporary CSS cache");
+    file.close();
+    Storage.remove(tmpPath.c_str());
+    return false;
+  }
+
+  const bool hadExistingCache = Storage.exists(finalPath.c_str());
+  if (hadExistingCache) {
+    Storage.remove(backupPath.c_str());
+    if (!Storage.rename(finalPath.c_str(), backupPath.c_str())) {
+      LOG_ERR("CSS", "Failed to back up existing CSS cache");
+      Storage.remove(tmpPath.c_str());
+      return false;
+    }
+  }
+
+  if (!Storage.rename(tmpPath.c_str(), finalPath.c_str())) {
+    LOG_ERR("CSS", "Failed to promote temporary CSS cache");
+    Storage.remove(tmpPath.c_str());
+    if (hadExistingCache && Storage.exists(backupPath.c_str())) {
+      Storage.rename(backupPath.c_str(), finalPath.c_str());
+    }
+    return false;
+  }
+
+  Storage.remove(backupPath.c_str());
+  LOG_DBG("CSS", "Saved %u %s CSS rules to cache", ruleCount, complete ? "complete" : "partial");
   return true;
 }
 
@@ -877,6 +994,12 @@ CssParser::CacheLoadResult CssParser::loadFromCache() {
     // Explicitly close() file before calling Storage.remove()
     file.close();
     Storage.remove((cachePath + rulesCache).c_str());
+    return CacheLoadResult::Invalid;
+  }
+
+  uint8_t flags = 0;
+  if (file.read(&flags, sizeof(flags)) != sizeof(flags) || (flags & ~CSS_CACHE_KNOWN_FLAGS) != 0) {
+    LOG_DBG("CSS", "Invalid CSS cache flags: %u", flags);
     return CacheLoadResult::Invalid;
   }
 
@@ -1111,6 +1234,13 @@ CssParser::CacheLoadResult CssParser::loadFromCache() {
     if (isNewStyle) uniqueStyleCount_++;
   }
 
-  LOG_DBG("CSS", "Loaded %u rules from cache", ruleCount);
+  if (file.available() != 0) {
+    LOG_DBG("CSS", "CSS cache has trailing data; rejecting it");
+    clear();
+    return CacheLoadResult::Invalid;
+  }
+
+  LOG_DBG("CSS", "Loaded %u rules from %s cache", ruleCount,
+          (flags & CSS_CACHE_FLAG_PARTIAL) != 0 ? "partial" : "complete");
   return CacheLoadResult::Complete;
 }

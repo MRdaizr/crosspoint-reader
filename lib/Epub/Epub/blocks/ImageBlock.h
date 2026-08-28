@@ -17,6 +17,11 @@ class ImageBlock final : public Block {
 
   bool imageExists() const;
 
+  // Clear the bounded per-session failure table when a new EPUB is opened.
+  // A failed decode should render a placeholder once, not retry on every
+  // grayscale pass or page refresh until the reader is restarted.
+  static void clearSessionRenderFailures();
+
   BlockType getType() override { return IMAGE_BLOCK; }
   bool isEmpty() override { return false; }
 

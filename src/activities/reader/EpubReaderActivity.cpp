@@ -1,6 +1,7 @@
 #include "EpubReaderActivity.h"
 
 #include <Epub/Page.h>
+#include <Epub/blocks/ImageBlock.h>
 #include <Epub/blocks/TextBlock.h>
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
@@ -163,6 +164,11 @@ void EpubReaderActivity::onEnter() {
   if (!epub) {
     return;
   }
+
+  // Failed image assets are suppressed for one reader session so repeated
+  // grayscale passes cannot keep retrying a broken decoder. A new EPUB open
+  // starts a fresh retry window.
+  ImageBlock::clearSessionRenderFailures();
 
   // Configure screen orientation based on settings
   // NOTE: This affects layout math and must be applied before any render calls.
