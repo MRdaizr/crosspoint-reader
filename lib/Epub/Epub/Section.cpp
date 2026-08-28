@@ -28,8 +28,10 @@ namespace {
 // extraction. Existing pages only stored the extracted cache path, so old
 // section files cannot be safely reinterpreted and must be rebuilt.
 // v33: simple HTML table rows are laid out as positioned columns instead of
-// flattened paragraphs with synthetic row/cell labels.
-constexpr uint8_t SECTION_FILE_VERSION = 33;
+//      flattened paragraphs with synthetic row/cell labels.
+// v34: TextBlock stores bounded per-token Ruby annotations and reserves
+//      additional line height for <ruby>/<rt> rendering.
+constexpr uint8_t SECTION_FILE_VERSION = 34;
 constexpr size_t MIN_INCREMENTAL_FREE_HEAP = 48 * 1024;
 constexpr size_t MIN_INCREMENTAL_MAX_ALLOC = 32 * 1024;
 constexpr uint16_t INCREMENTAL_PARSE_BUFFER_SIZE = 256;
@@ -39,7 +41,8 @@ constexpr uint32_t BUILD_CHECKPOINT_MAGIC = 0x43504231;  // CPB1
 // its old-format prefix, so invalidate the incremental checkpoint as well.
 // v4 also invalidates partially built sections after the table column layout
 // change, which otherwise could mix old flattened rows with new grid rows.
-constexpr uint16_t BUILD_CHECKPOINT_VERSION = 4;
+// v5 invalidates any checkpoint whose pages lack Ruby payloads.
+constexpr uint16_t BUILD_CHECKPOINT_VERSION = 5;
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +

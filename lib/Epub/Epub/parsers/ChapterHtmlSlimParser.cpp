@@ -32,6 +32,7 @@ constexpr size_t IMAGE_FALLBACK_EXTRACTION_CHUNK_SIZE = 4096;
 // below the point where vector growth needs a large contiguous allocation.
 constexpr size_t MAX_BUFFERED_TEXT_WORDS = 256;
 constexpr size_t MAX_BUFFERED_TEXT_WORDS_WITH_CSS = 160;
+constexpr size_t MAX_RUBY_TEXT_BYTES = 256;
 
 // Hard cap on the number of anchor IDs recorded per chapter. Legitimate navigation
 // anchors (TOC entries, footnotes, cross-references) rarely exceed a few hundred per
@@ -60,6 +61,31 @@ constexpr const char* IMAGE_TAGS[] = {"img", "image", "svg:image"};
 constexpr const char* SKIP_TAGS[] = {"head"};
 
 bool isWhitespace(const char c) { return c == ' ' || c == '\r' || c == '\n' || c == '\t'; }
+
+std::string trimAndNormalizeRuby(const std::string& input) {
+  if (input.empty()) return {};
+  size_t begin = 0;
+  while (begin < input.size() && isWhitespace(input[begin])) ++begin;
+  size_t end = input.size();
+  while (end > begin && isWhitespace(input[end - 1])) --end;
+  std::string output;
+  output.reserve(end - begin);
+  bool pendingSpace = false;
+  for (size_t i = begin; i < end; ++i) {
+    if (isWhitespace(input[i])) {
+      pendingSpace = true;
+      continue;
+    }
+    if (pendingSpace && !output.empty()) output.push_back(' ');
+    pendingSpace = false;
+    output.push_back(input[i]);
+  }
+  const int safeLength = utf8SafeTruncateBuffer(output.c_str(), static_cast<int>(output.size()));
+  if (safeLength >= 0 && static_cast<size_t>(safeLength) < output.size()) {
+    output.resize(static_cast<size_t>(safeLength));
+  }
+  return output;
+}
 
 bool matches(const char* tag_name, const char* const* possible_tags, size_t count) {
   for (size_t i = 0; i < count; i++) {
@@ -552,7 +578,16 @@ void ChapterHtmlSlimParser::finishTableRow() {
       }
       currentPageNextY = 0;
     }
-    if (!currentPage->elements.empty() && currentPageNextY + lineHeight > viewportHeight) {
+    int16_t rowLineHeight = lineHeight;
+    for (size_t column = 0; column < columnCount; ++column) {
+      if (lineIndex < tableCellLines[column].size()) {
+        rowLineHeight = std::max<int16_t>(
+            rowLineHeight, static_cast<int16_t>(lineHeight +
+                                                tableCellLines[column][lineIndex]->getRubyShift(
+                                                    renderer.getFontAscenderSize(fontId))));
+      }
+    }
+    if (!currentPage->elements.empty() && currentPageNextY + rowLineHeight > viewportHeight) {
       completeCurrentPage(xpathParagraphIndex, xpathListItemIndex);
       currentPage.reset(new (std::nothrow) Page());
       if (!currentPage) {
@@ -586,7 +621,7 @@ void ChapterHtmlSlimParser::finishTableRow() {
       }
       currentPage->elements.push_back(std::move(pageLine));
     }
-    currentPageNextY = static_cast<int16_t>(rowY + lineHeight);
+    currentPageNextY = static_cast<int16_t>(rowY + rowLineHeight);
   }
 
   addTableRowSeparator();
@@ -601,6 +636,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   if (strcasecmp(name, "body") == 0) {
     self->insideBody = true;
   }
+
   if (self->insideBody && (self->nonVisibleTextDepth > 0 || isNonVisibleTextTag(name))) {
     self->nonVisibleTextDepth++;
   }
@@ -698,6 +734,37 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
   // Skip elements with display:none before all fast paths (tables, links, etc.).
   if (cssStyle.hasDisplay() && cssStyle.display == CssDisplay::None) {
     self->skipUntilDepth = self->depth;
+    self->depth += 1;
+    return;
+  }
+
+  // Ruby base text flows through the normal tokenizer while annotation text
+  // is collected separately. Handle these tags after skip/display checks so
+  // hidden ruby content remains hidden and <rt> never becomes body text.
+  if (strcasecmp(name, "ruby") == 0) {
+    if (self->partWordBufferIndex > 0) {
+      self->flushPartWordBuffer();
+      self->nextWordContinues = true;
+    }
+    if (!self->currentTextBlock) {
+      const BlockStyle flowStyle = self->blockStyleStack.empty()
+                                       ? BlockStyle()
+                                       : self->blockStyleStack.back().withoutBottom();
+      self->currentTextBlock = makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled,
+                                                             self->focusReadingEnabled, flowStyle);
+    }
+    self->inRuby = true;
+    self->collectingRubyText = false;
+    self->rubyStartWordIndex = self->currentTextBlock ? static_cast<int>(self->currentTextBlock->size()) : -1;
+    if (self->currentTextBlock) self->currentTextBlock->ensureRubyCapacity();
+    self->rubyTextBuffer.clear();
+    self->depth += 1;
+    return;
+  }
+  if (strcasecmp(name, "rt") == 0 && self->inRuby) {
+    if (self->partWordBufferIndex > 0) self->flushPartWordBuffer();
+    self->collectingRubyText = true;
+    self->rubyTextBuffer.clear();
     self->depth += 1;
     return;
   }
@@ -1411,7 +1478,8 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
 void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char* s, const int len) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
 
-  const bool countVisibleOffsets = self->insideBody && self->nonVisibleTextDepth == 0 && !self->syntheticCharacterData;
+  const bool countVisibleOffsets = self->insideBody && self->nonVisibleTextDepth == 0 && !self->syntheticCharacterData &&
+                                   !self->collectingRubyText;
   const uint32_t callbackVisibleOffset = self->visibleTextOffset;
   if (countVisibleOffsets) {
     const unsigned char* ptr = reinterpret_cast<const unsigned char*>(s);
@@ -1432,6 +1500,14 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
 
   // Middle of skip
   if (self->skipUntilDepth < self->depth) {
+    return;
+  }
+
+  if (self->collectingRubyText) {
+    if (self->rubyTextBuffer.size() < MAX_RUBY_TEXT_BYTES) {
+      const size_t remaining = MAX_RUBY_TEXT_BYTES - self->rubyTextBuffer.size();
+      self->rubyTextBuffer.append(s, std::min<size_t>(remaining, static_cast<size_t>(len)));
+    }
     return;
   }
 
@@ -1616,7 +1692,7 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
   // memory.
   // Spotted when reading Intermezzo, there are some really long text blocks in there.
   const size_t softFlushThreshold = self->embeddedStyle ? MAX_BUFFERED_TEXT_WORDS_WITH_CSS : MAX_BUFFERED_TEXT_WORDS;
-  if (self->currentTextBlock->size() > softFlushThreshold) {
+  if (!self->inRuby && !self->collectingRubyText && self->currentTextBlock->size() > softFlushThreshold) {
     LOG_DBG("EHP", "Text block too long, splitting into multiple pages");
     const int horizontalInset = self->currentTextBlock->getBlockStyle().totalHorizontalInset();
     const uint16_t effectiveWidth = (horizontalInset < self->viewportWidth)
@@ -1649,6 +1725,49 @@ void XMLCALL ChapterHtmlSlimParser::defaultHandlerExpand(void* userData, const X
 
 void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* name) {
   auto* self = static_cast<ChapterHtmlSlimParser*>(userData);
+
+  if (strcasecmp(name, "rt") == 0 && self->inRuby) {
+    self->collectingRubyText = false;
+    if (self->currentTextBlock && self->rubyStartWordIndex >= 0) {
+      const size_t start = static_cast<size_t>(self->rubyStartWordIndex);
+      const size_t count = self->currentTextBlock->size() > start ? self->currentTextBlock->size() - start : 0;
+      const std::string ruby = trimAndNormalizeRuby(self->rubyTextBuffer);
+      if (!ruby.empty()) {
+        if (count > 0) {
+          self->currentTextBlock->setRubyGroupAt(start, count, ruby);
+          self->rubyStartWordIndex = static_cast<int>(self->currentTextBlock->size());
+        } else if (start > 0) {
+          // Some converters emit multiple <rt> tags after one base run. Merge
+          // an annotation with the existing leader instead of dropping it.
+          size_t leader = start - 1;
+          while (leader > 0 &&
+                 (self->currentTextBlock->getWordStyleAt(leader) & EpdFontFamily::RUBY_CONTINUE) != 0) {
+            --leader;
+          }
+          self->currentTextBlock->setRubyForWordAt(
+              leader, self->currentTextBlock->getRubyTextAt(leader) + ruby);
+        }
+      }
+    }
+    self->rubyTextBuffer.clear();
+    if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
+      self->nextWordContinues = true;
+    }
+    self->depth -= 1;
+    return;
+  }
+
+  if (strcasecmp(name, "ruby") == 0 && self->inRuby) {
+    self->inRuby = false;
+    self->collectingRubyText = false;
+    self->rubyStartWordIndex = -1;
+    self->rubyTextBuffer.clear();
+    if (self->currentTextBlock && !self->currentTextBlock->isEmpty()) {
+      self->nextWordContinues = true;
+    }
+    self->depth -= 1;
+    return;
+  }
 
   if (self->nonVisibleTextDepth > 0) {
     self->nonVisibleTextDepth--;
@@ -1849,6 +1968,10 @@ bool ChapterHtmlSlimParser::beginParsing() {
   tableRowCells.clear();
   for (auto& lines : tableCellLines) lines.clear();
   tableLineVisibleOffsets.clear();
+  inRuby = false;
+  collectingRubyText = false;
+  rubyStartWordIndex = -1;
+  rubyTextBuffer.clear();
 
   auto paragraphAlignmentBlockStyle = BlockStyle();
   paragraphAlignmentBlockStyle.textAlignDefined = true;
@@ -2000,7 +2123,8 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 }
 
 void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const uint32_t visibleTextOffset) {
-  const int lineHeight = renderer.getLineHeight(fontId) * lineCompression;
+  const int lineHeight = renderer.getLineHeight(fontId) * lineCompression +
+                         line->getRubyShift(renderer.getFontAscenderSize(fontId));
 
   if (!currentPage) {
     currentPage.reset(new Page());

@@ -25,6 +25,11 @@ class ParsedText {
   // UTF-8 byte offset where Focus Reading switches from bold to the regular
   // style. Zero means no split (or a fully bold token).
   std::vector<uint8_t> wordFocusBoundaries;
+  // Optional ruby annotation per logical token. The leader stores the UTF-8
+  // annotation and followers are empty strings marked RUBY_CONTINUE in style.
+  // A deque keeps annotation growth bounded/fragmentation-friendly like words.
+  std::deque<std::string> rubyTexts;
+  bool rubyTrackingEnabled = false;
   // Source-visible Unicode-codepoint offset for each logical token. This metadata
   // is used only to stamp section page LUTs and never reaches page serialization.
   std::vector<uint32_t> wordVisibleOffsets;
@@ -40,9 +45,13 @@ class ParsedText {
   std::vector<bool> reorderedContinuesScratch;
   std::vector<bool> reorderedNoSpaceBeforeScratch;
   std::vector<uint8_t> reorderedFocusBoundaryScratch;
+  std::vector<std::string> reorderedRubyScratch;
   std::vector<uint16_t> visualOrderScratch;
 
   int resolveFirstLineIndent(bool isFirstLine, const GfxRenderer& renderer, int fontId) const;
+  int calculateRubyExtraStartOffset(size_t wordIdx, size_t maxWordIdx, const GfxRenderer& renderer, int fontId) const;
+  int calculateRubyExtraEndOffset(size_t lineStartIdx, size_t lineBreakIdx, const GfxRenderer& renderer,
+                                  int fontId) const;
   std::vector<size_t> computeLineBreaks(const GfxRenderer& renderer, int fontId, int pageWidth,
                                         std::vector<uint16_t>& wordWidths, std::vector<bool>& continuesVec,
                                         std::vector<bool>& noSpaceBeforeVec);
@@ -72,6 +81,15 @@ class ParsedText {
 
   void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false,
                uint32_t visibleTextOffset = 0);
+  void setRubyForWordAt(size_t index, const std::string& ruby);
+  void setRubyGroupAt(size_t startIndex, size_t count, const std::string& ruby);
+  EpdFontFamily::Style getWordStyleAt(size_t index) const {
+    return index < wordStyles.size() ? wordStyles[index] : EpdFontFamily::REGULAR;
+  }
+  std::string getRubyTextAt(size_t index) const {
+    return index < rubyTexts.size() ? rubyTexts[index] : std::string();
+  }
+  void ensureRubyCapacity();
   void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }
   BlockStyle& getBlockStyle() { return blockStyle; }
   size_t size() const { return words.size(); }

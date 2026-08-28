@@ -92,13 +92,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 33
+### Version 34
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
 
-Version 33 includes:
+Version 34 includes:
 
 - cache-busting fields for paragraph alignment, hyphenation, embedded CSS,
   image rendering mode, and Focus Reading
@@ -116,9 +116,11 @@ Version 33 includes:
   archive on first render
 - Simple HTML table rows are stored as ordinary positioned `PageLine` columns;
   oversized, spanning, or too-narrow rows use the full-width flow fallback
+- Ruby annotations from `<ruby>/<rt>` are stored per base token; follower tokens
+  carry the `RUBY_CONTINUE` style bit and are kept together during line breaking
 
 The section cache is intentionally invalidated when these semantics change. A
-section written with Version 32 (or any earlier version) is rejected and rebuilt;
+section written with Version 33 (or any earlier version) is rejected and rebuilt;
 no attempt is made to reinterpret its serialized page payload.
 
 ImHex pattern:
@@ -128,7 +130,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 33
+#define EXPECTED_VERSION 34
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256
@@ -159,7 +161,8 @@ enum WordStyle : u8 {
     UNDERLINE = 4,
     STRIKETHROUGH = 8,
     SUP = 16,
-    SUB = 32
+    SUB = 32,
+    RUBY_CONTINUE = 64
 };
 
 enum TextAlign : u8 {
@@ -202,6 +205,10 @@ struct TextBlock {
         u8 wordFocusBoundary[wordCount] [[comment("UTF-8 byte boundary between bold prefix and suffix")]];
         u16 wordFocusSuffixX[wordCount] [[comment("Suffix x offset from word start")]];
     }
+
+    // One length-prefixed UTF-8 annotation per base token. The leader contains
+    // the visible ruby text; followers are empty strings.
+    String rubyText[wordCount];
 
     BlockStyle blockStyle;
 };

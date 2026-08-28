@@ -34,6 +34,7 @@ class TextBlock final : public Block {
   const uint8_t* focusBoundaries = nullptr;
   const uint16_t* focusSuffixPositions = nullptr;
   const char* textData = nullptr;
+  std::vector<std::string> rubyTexts;
 
   static size_t arenaSize(uint16_t wordCount, uint16_t textSize, bool hasFocus);
   void bindArenaPointers();
@@ -42,9 +43,10 @@ class TextBlock final : public Block {
  public:
   explicit TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& word_xpos,
                      const std::vector<EpdFontFamily::Style>& word_styles,
-                     const std::vector<uint8_t>& focus_boundary,
-                     const std::vector<uint16_t>& focus_suffix_x,
-                     const BlockStyle& blockStyle = BlockStyle());
+                      const std::vector<uint8_t>& focus_boundary,
+                      const std::vector<uint16_t>& focus_suffix_x,
+                      const BlockStyle& blockStyle = BlockStyle(),
+                      std::vector<std::string> rubyTexts = {});
   ~TextBlock() override = default;
 
   void setBlockStyle(const BlockStyle& style) { blockStyle = style; }
@@ -54,6 +56,9 @@ class TextBlock final : public Block {
   size_t wordCount() const { return numWords; }
   bool valid() const { return isValid; }
   bool hasFocus() const { return focusPresent; }
+  bool hasRuby() const;
+  int getRubyShift(int ascender) const { return hasRuby() ? (ascender / 2) : 0; }
+  const std::vector<std::string>& getRubyTexts() const { return rubyTexts; }
 
   const char* wordText(size_t index) const;
   size_t wordTextLen(size_t index) const;

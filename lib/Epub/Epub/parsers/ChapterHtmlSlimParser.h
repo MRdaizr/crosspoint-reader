@@ -60,6 +60,12 @@ class ChapterHtmlSlimParser {
   uint32_t partWordVisibleOffset = 0;
   bool nextWordContinues = false;  // true when next flushed word attaches to previous (inline element boundary)
   bool listItemBulletOnly = false;
+  // EPUB Ruby annotation state. Base text is parsed normally; <rt> content is
+  // collected separately and attached to the base token range on close.
+  bool inRuby = false;
+  bool collectingRubyText = false;
+  int rubyStartWordIndex = -1;
+  std::string rubyTextBuffer;
   std::unique_ptr<ParsedText> currentTextBlock = nullptr;
   std::unique_ptr<Page> currentPage = nullptr;
   int16_t currentPageNextY = 0;

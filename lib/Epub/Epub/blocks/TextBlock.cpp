@@ -10,9 +10,11 @@
 #include <cstring>
 #include <limits>
 #include <new>
+#include <utility>
 
 namespace {
 constexpr uint16_t MAX_WORDS = 10000;
+constexpr uint16_t MAX_RUBY_BYTES = 1024;
 }
 
 size_t TextBlock::arenaSize(const uint16_t wordCount, const uint16_t textSize, const bool hasFocus) {
@@ -59,11 +61,13 @@ void TextBlock::bindArenaPointers() {
 TextBlock::TextBlock(const std::vector<std::string>& inputWords, const std::vector<int16_t>& inputXpos,
                      const std::vector<EpdFontFamily::Style>& inputStyles,
                      const std::vector<uint8_t>& inputFocusBoundary,
-                     const std::vector<uint16_t>& inputFocusSuffixX, const BlockStyle& style)
-    : focusPresent(!inputFocusBoundary.empty()), blockStyle(style) {
+                     const std::vector<uint16_t>& inputFocusSuffixX, const BlockStyle& style,
+                     std::vector<std::string> inputRubyTexts)
+    : focusPresent(!inputFocusBoundary.empty()), blockStyle(style), rubyTexts(std::move(inputRubyTexts)) {
   if (inputWords.size() != inputXpos.size() || inputWords.size() != inputStyles.size() ||
       (focusPresent &&
        (inputWords.size() != inputFocusBoundary.size() || inputWords.size() != inputFocusSuffixX.size())) ||
+      (!rubyTexts.empty() && rubyTexts.size() != inputWords.size()) ||
       inputWords.size() > MAX_WORDS || inputWords.size() > std::numeric_limits<uint16_t>::max()) {
     LOG_ERR("TXB", "Invalid text block vectors (words=%u, xpos=%u, styles=%u, boundary=%u, suffixX=%u)",
             static_cast<uint32_t>(inputWords.size()), static_cast<uint32_t>(inputXpos.size()),
@@ -128,7 +132,24 @@ TextBlock::TextBlock(const std::vector<std::string>& inputWords, const std::vect
     textOffset += word.size();
     textOut[textOffset++] = '\0';
   }
+  for (const auto& ruby : rubyTexts) {
+    if (ruby.size() > MAX_RUBY_BYTES) {
+      LOG_ERR("TXB", "Ruby annotation exceeds %u bytes", MAX_RUBY_BYTES);
+      isValid = false;
+      return;
+    }
+  }
+  if (!hasRuby()) {
+    rubyTexts.clear();
+  }
   isValid = true;
+}
+
+bool TextBlock::hasRuby() const {
+  for (const auto& ruby : rubyTexts) {
+    if (!ruby.empty()) return true;
+  }
+  return false;
 }
 
 const char* TextBlock::wordText(const size_t index) const {
@@ -160,7 +181,8 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
         BidiUtils::detectParagraphLevel(word, blockStyle.isRtl ? 1 : 0));
     const uint8_t boundary = focusBoundary(i);
 
-    int wordY = y;
+    const int rubyShift = getRubyShift(ascender);
+    int wordY = y + rubyShift;
     if ((currentStyle & EpdFontFamily::SUP) != 0) {
       wordY -= ascender * 2 / 5;
     } else if ((currentStyle & EpdFontFamily::SUB) != 0) {
@@ -180,6 +202,28 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
       renderer.drawText(fontId, wordX + focusSuffixX(i), wordY, word + boldLen, true, currentStyle, baseDir);
     } else {
       renderer.drawText(fontId, wordX, wordY, word, true, currentStyle, baseDir);
+    }
+
+    // Draw one compact ruby annotation above the complete base-token group.
+    // Followers carry RUBY_CONTINUE and are intentionally not drawn again.
+    if (i < rubyTexts.size() && !rubyTexts[i].empty() &&
+        (currentStyle & EpdFontFamily::RUBY_CONTINUE) == 0) {
+      size_t groupEnd = i + 1;
+      int baseLeft = wordX;
+      int baseRight = wordX + renderer.getTextAdvanceX(fontId, word, currentStyle);
+      while (groupEnd < numWords && (wordStyle(groupEnd) & EpdFontFamily::RUBY_CONTINUE) != 0) {
+        const char* nextWord = wordText(groupEnd);
+        const int nextX = wordXpos(groupEnd) + x;
+        const int nextRight = nextX + renderer.getTextAdvanceX(fontId, nextWord, wordStyle(groupEnd));
+        baseLeft = std::min(baseLeft, nextX);
+        baseRight = std::max(baseRight, nextRight);
+        ++groupEnd;
+      }
+      const int rubyWidth = renderer.getTextAdvanceX(fontId, rubyTexts[i].c_str(), EpdFontFamily::SUP);
+      int rubyX = baseLeft + (baseRight - baseLeft - rubyWidth) / 2;
+      rubyX = std::max(0, std::min(rubyX, renderer.getScreenWidth() - rubyWidth));
+      const int rubyY = wordY - ascender;
+      renderer.drawText(fontId, rubyX, rubyY, rubyTexts[i].c_str(), true, EpdFontFamily::SUP, baseDir);
     }
 
     if (!scanning && (currentStyle & EpdFontFamily::UNDERLINE) != 0) {
@@ -213,6 +257,15 @@ bool TextBlock::serialize(HalFile& file) const {
   if (bytes > 0 && file.write(arena.get(), bytes) != bytes) {
     LOG_ERR("TXB", "Serialization failed: short arena write");
     return false;
+  }
+
+  for (size_t i = 0; i < numWords; ++i) {
+    const std::string& ruby = i < rubyTexts.size() ? rubyTexts[i] : std::string();
+    if (ruby.size() > MAX_RUBY_BYTES) {
+      LOG_ERR("TXB", "Serialization failed: ruby annotation too large");
+      return false;
+    }
+    serialization::writeString(file, ruby);
   }
 
   serialization::writePod(file, blockStyle.alignment);
@@ -278,6 +331,24 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
     }
   } else {
     block->isValid = true;
+  }
+
+  block->rubyTexts.resize(wordCount);
+  for (auto& ruby : block->rubyTexts) {
+    uint32_t rubyBytes = 0;
+    serialization::readPod(file, rubyBytes);
+    if (rubyBytes > MAX_RUBY_BYTES) {
+      LOG_ERR("TXB", "Deserialization failed: ruby annotation too large");
+      return nullptr;
+    }
+    ruby.resize(rubyBytes);
+    if (rubyBytes > 0 && file.read(&ruby[0], rubyBytes) != static_cast<int>(rubyBytes)) {
+      LOG_ERR("TXB", "Deserialization failed: short ruby annotation read");
+      return nullptr;
+    }
+  }
+  if (!block->hasRuby()) {
+    block->rubyTexts.clear();
   }
 
   serialization::readPod(file, block->blockStyle.alignment);
