@@ -190,6 +190,14 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
       }
       renderer.drawLine(wordX, underlineY, wordX + underlineWidth, underlineY, true);
     }
+    if (!scanning && (currentStyle & EpdFontFamily::STRIKETHROUGH) != 0) {
+      int strikeWidth = renderer.getTextWidth(fontId, word, currentStyle, baseDir);
+      const int strikeY = wordY + ascender * 4 / 5;
+      if ((currentStyle & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
+        strikeWidth = (strikeWidth + 1) / 2;
+      }
+      renderer.drawLine(wordX, strikeY, wordX + strikeWidth, strikeY, 2, true);
+    }
   }
 }
 
