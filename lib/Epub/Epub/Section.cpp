@@ -31,7 +31,9 @@ namespace {
 //      flattened paragraphs with synthetic row/cell labels.
 // v34: TextBlock stores bounded per-token Ruby annotations and reserves
 //      additional line height for <ruby>/<rt> rendering.
-constexpr uint8_t SECTION_FILE_VERSION = 34;
+// v35: Ruby follower tokens are explicitly marked as no-break boundaries so
+//      grouped annotations cannot be split across pages.
+constexpr uint8_t SECTION_FILE_VERSION = 35;
 constexpr size_t MIN_INCREMENTAL_FREE_HEAP = 48 * 1024;
 constexpr size_t MIN_INCREMENTAL_MAX_ALLOC = 32 * 1024;
 constexpr uint16_t INCREMENTAL_PARSE_BUFFER_SIZE = 256;

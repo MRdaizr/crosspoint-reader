@@ -569,7 +569,13 @@ void ParsedText::setRubyGroupAt(const size_t startIndex, const size_t count, con
     wordStyles[i] = static_cast<EpdFontFamily::Style>(static_cast<uint8_t>(wordStyles[i]) |
                                                       EpdFontFamily::RUBY_CONTINUE);
     if (i < wordContinues.size()) {
+      // Keep the complete ruby group together during pagination. The page
+      // breaker checks both flags, so continuation alone is not enough when
+      // the follower token inherited a no-space boundary from CJK layout.
       wordContinues[i] = true;
+      if (i < wordNoSpaceBefore.size()) {
+        wordNoSpaceBefore[i] = false;
+      }
     }
   }
 }

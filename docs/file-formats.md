@@ -92,13 +92,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 34
+### Version 35
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
 
-Version 34 includes:
+Version 35 includes:
 
 - cache-busting fields for paragraph alignment, hyphenation, embedded CSS,
   image rendering mode, and Focus Reading
@@ -118,9 +118,11 @@ Version 34 includes:
   oversized, spanning, or too-narrow rows use the full-width flow fallback
 - Ruby annotations from `<ruby>/<rt>` are stored per base token; follower tokens
   carry the `RUBY_CONTINUE` style bit and are kept together during line breaking
+- Ruby follower tokens use an explicit no-break boundary, preventing a grouped
+  annotation from being split across pages when CJK token spacing is present
 
 The section cache is intentionally invalidated when these semantics change. A
-section written with Version 33 (or any earlier version) is rejected and rebuilt;
+section written with Version 34 (or any earlier version) is rejected and rebuilt;
 no attempt is made to reinterpret its serialized page payload.
 
 ImHex pattern:
@@ -130,7 +132,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 34
+#define EXPECTED_VERSION 35
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256
