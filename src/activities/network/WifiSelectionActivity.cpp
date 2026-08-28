@@ -51,7 +51,7 @@ void WifiSelectionActivity::onEnter() {
   if (allowAutoConnect) {
     const std::string lastSsid = WIFI_STORE.getLastConnectedSsid();
     if (!lastSsid.empty()) {
-      const auto* cred = WIFI_STORE.findCredential(lastSsid);
+      const auto cred = WIFI_STORE.findCredential(lastSsid);
       if (cred) {
         LOG_DBG("WIFI", "Attempting to auto-connect to %s", lastSsid.c_str());
         selectedSSID = cred->ssid;
@@ -172,7 +172,7 @@ void WifiSelectionActivity::selectNetwork(const int index) {
   autoConnecting = false;
 
   // Check if we have saved credentials for this network
-  const auto* savedCred = WIFI_STORE.findCredential(selectedSSID);
+  const auto savedCred = WIFI_STORE.findCredential(selectedSSID);
   if (savedCred && !savedCred->password.empty()) {
     // Use saved password - connect directly
     enteredPassword = savedCred->password;
@@ -221,6 +221,11 @@ void WifiSelectionActivity::attemptConnection() {
   mac.replace(":", "");
   String hostname = "CrossPoint-Reader-" + mac;
   WiFi.setHostname(hostname.c_str());
+
+  // Scan every channel and prefer the strongest AP when an SSID is broadcast by
+  // multiple access points (e.g. mesh networks).
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
 
   if (selectedRequiresPassword && !enteredPassword.empty()) {
     WiFi.begin(selectedSSID.c_str(), enteredPassword.c_str());

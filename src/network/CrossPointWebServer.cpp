@@ -103,6 +103,8 @@ const char* firmwareFlashResultMessage(firmware_flash::Result result) {
       return "Firmware checksum failed.";
     case firmware_flash::Result::BAD_SHA:
       return "Firmware SHA256 verification failed.";
+    case firmware_flash::Result::BAD_CHIP:
+      return "Firmware is for a different device.";
     case firmware_flash::Result::BAD_SIZE:
       return "Firmware image size is invalid.";
     case firmware_flash::Result::NO_PARTITION:
@@ -1692,8 +1694,7 @@ void CrossPointWebServer::handleDeleteOpdsServer() {
 // ---- Wi-Fi Credentials API ----
 
 void CrossPointWebServer::handleGetWifiNetworks() const {
-  const auto& credentials = WIFI_STORE.getCredentials();
-  const std::string& lastConnectedSsid = WIFI_STORE.getLastConnectedSsid();
+  const auto summaries = WIFI_STORE.getCredentialSummaries();
 
   // Stream JSON array incrementally to avoid allocating the full response in memory
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -1704,13 +1705,13 @@ void CrossPointWebServer::handleGetWifiNetworks() const {
   constexpr size_t outputSize = sizeof(output);
   JsonDocument doc;
 
-  for (size_t i = 0; i < credentials.size(); i++) {
+  for (size_t i = 0; i < summaries.size(); i++) {
     doc.clear();
     doc["index"] = i;
-    doc["ssid"] = credentials[i].ssid;
+    doc["ssid"] = summaries[i].ssid;
     // Never expose Wi-Fi passwords over the API — only indicate whether one is set
-    doc["hasPassword"] = !credentials[i].password.empty();
-    doc["isLastConnected"] = credentials[i].ssid == lastConnectedSsid;
+    doc["hasPassword"] = summaries[i].hasPassword;
+    doc["isLastConnected"] = summaries[i].isLastConnected;
 
     const size_t written = serializeJson(doc, output, outputSize);
     if (written >= outputSize) continue;
@@ -1721,7 +1722,7 @@ void CrossPointWebServer::handleGetWifiNetworks() const {
 
   server->sendContent("]");
   server->sendContent("");
-  LOG_DBG("WEB", "Served Wi-Fi credentials API (%zu network(s))", credentials.size());
+  LOG_DBG("WEB", "Served Wi-Fi credentials API (%zu network(s))", summaries.size());
 }
 
 void CrossPointWebServer::handlePostWifiNetwork() {
@@ -1751,15 +1752,20 @@ void CrossPointWebServer::handlePostWifiNetwork() {
 
   if (doc["index"].is<int>()) {
     int idx = doc["index"].as<int>();
-    const auto& credentials = WIFI_STORE.getCredentials();
-    if (idx < 0 || idx >= static_cast<int>(credentials.size())) {
+    if (idx < 0) {
       server->send(400, "text/plain", "Invalid network index");
       return;
     }
 
-    const std::string oldSsid = credentials[static_cast<size_t>(idx)].ssid;
+    const auto credential = WIFI_STORE.getCredentialAt(static_cast<size_t>(idx));
+    if (!credential) {
+      server->send(400, "text/plain", "Invalid network index");
+      return;
+    }
+
+    const std::string oldSsid = credential->ssid;
     if (!hasPasswordField) {
-      password = credentials[static_cast<size_t>(idx)].password;
+      password = credential->password;
     }
 
     bool ok = true;
@@ -1807,13 +1813,18 @@ void CrossPointWebServer::handleDeleteWifiNetwork() {
   }
 
   int idx = doc["index"].as<int>();
-  const auto& credentials = WIFI_STORE.getCredentials();
-  if (idx < 0 || idx >= static_cast<int>(credentials.size())) {
+  if (idx < 0) {
     server->send(400, "text/plain", "Invalid network index");
     return;
   }
 
-  const std::string ssid = credentials[static_cast<size_t>(idx)].ssid;
+  const auto credential = WIFI_STORE.getCredentialAt(static_cast<size_t>(idx));
+  if (!credential) {
+    server->send(400, "text/plain", "Invalid network index");
+    return;
+  }
+
+  const std::string ssid = credential->ssid;
   if (!WIFI_STORE.removeCredential(ssid)) {
     server->send(400, "text/plain", "Failed to delete Wi-Fi network");
     return;

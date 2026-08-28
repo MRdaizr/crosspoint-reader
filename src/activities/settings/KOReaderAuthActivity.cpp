@@ -23,6 +23,8 @@ void KOReaderAuthActivity::onWifiSelectionComplete(const bool success) {
     return;
   }
 
+  WiFi.setSleep(false);
+
   {
     RenderLock lock(*this);
     state = AUTHENTICATING;

@@ -74,29 +74,33 @@ void FileBrowserActivity::onEnter() {
     return;
   }
 
-  selectorIndex = 0;
   sdFontSystem.ensureLoaded(renderer);
 
   // If Confirm was held while this activity opened (typical when launched from a menu), ignore
   // its release — otherwise we'd immediately auto-open whatever is at index 0.
   lockNextConfirmRelease = mappedInput.isPressed(MappedInputManager::Button::Confirm);
 
-  auto root = Storage.open(basepath.c_str());
-  if (!root) {
-    basepath = "/";
-    loadFiles();
-  } else if (!root.isDirectory()) {
-    lockLongPressBack = mappedInput.isPressed(MappedInputManager::Button::Back);
+  {
+    RenderLock lock(*this);
+    selectorIndex = 0;
 
-    const std::string oldPath = basepath;
-    basepath = FsHelpers::extractFolderPath(basepath);
-    loadFiles();
+    auto root = Storage.open(basepath.c_str());
+    if (!root) {
+      basepath = "/";
+      loadFiles();
+    } else if (!root.isDirectory()) {
+      lockLongPressBack = mappedInput.isPressed(MappedInputManager::Button::Back);
 
-    const auto pos = oldPath.find_last_of('/');
-    const std::string fileName = oldPath.substr(pos + 1);
-    selectorIndex = findEntry(fileName);
-  } else {
-    loadFiles();
+      const std::string oldPath = basepath;
+      basepath = FsHelpers::extractFolderPath(basepath);
+      loadFiles();
+
+      const auto pos = oldPath.find_last_of('/');
+      const std::string fileName = oldPath.substr(pos + 1);
+      selectorIndex = findEntry(fileName);
+    } else {
+      loadFiles();
+    }
   }
 
   requestUpdate();
@@ -192,16 +196,25 @@ bool FileBrowserActivity::removeDirFile(const std::string& fullPath) {
 void FileBrowserActivity::loop() {
   // Long press BACK (1s+) goes to root folder (Books mode only).
   // In firmware-pick mode we keep navigation simple: short Back = up dir / cancel.
-  if (mode == Mode::Books && mappedInput.isPressed(MappedInputManager::Button::Back) &&
-      mappedInput.getHeldTime() >= GO_HOME_MS && basepath != "/" && !lockLongPressBack) {
-    basepath = "/";
-    loadFiles();
-    selectorIndex = 0;
+  bool canGoHome = false;
+  {
+    RenderLock lock(*this);
+    canGoHome = mode == Mode::Books && basepath != "/" && !lockLongPressBack;
+  }
+  if (canGoHome && mappedInput.isPressed(MappedInputManager::Button::Back) &&
+      mappedInput.getHeldTime() >= GO_HOME_MS) {
+    {
+      RenderLock lock(*this);
+      basepath = "/";
+      loadFiles();
+      selectorIndex = 0;
+    }
     requestUpdate();
     return;
   }
 
   if (lockLongPressBack && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    RenderLock lock(*this);
     lockLongPressBack = false;
     return;
   }
@@ -214,16 +227,24 @@ void FileBrowserActivity::loop() {
       lockNextConfirmRelease = false;
       return;
     }
-    if (files.empty()) return;
-
-    const std::string& entry = files[selectorIndex];
-    bool isDirectory = (entry.back() == '/');
+    std::string entry;
+    bool isDirectory = false;
+    {
+      RenderLock lock(*this);
+      if (files.empty() || selectorIndex >= files.size()) return;
+      entry = files[selectorIndex];
+      isDirectory = entry.back() == '/';
+    }
 
     // Firmware picker: select file -> return path; navigate into directories normally.
     if (mode == Mode::PickFirmware && !isDirectory) {
-      std::string cleanBasePath = basepath;
-      if (cleanBasePath.back() != '/') cleanBasePath += "/";
-      ActivityResult res{FilePathResult{cleanBasePath + entry}};
+      std::string selectedPath;
+      {
+        RenderLock lock(*this);
+        selectedPath = basepath;
+        if (selectedPath.back() != '/') selectedPath += "/";
+      }
+      ActivityResult res{FilePathResult{selectedPath + entry}};
       res.isCancelled = false;
       setResult(std::move(res));
       finish();
@@ -232,21 +253,28 @@ void FileBrowserActivity::loop() {
 
     if (mode == Mode::Books && mappedInput.getHeldTime() >= GO_HOME_MS) {
       // --- LONG PRESS ACTION: DELETE FILE OR DIRECTORY ---
-      std::string cleanBasePath = basepath;
-      if (cleanBasePath.back() != '/') cleanBasePath += "/";
-      const std::string fullPath = cleanBasePath + entry;
+      std::string fullPath;
+      {
+        RenderLock lock(*this);
+        fullPath = basepath;
+        if (fullPath.back() != '/') fullPath += "/";
+        fullPath += entry;
+      }
 
       auto handler = [this, fullPath](const ActivityResult& res) {
         if (!res.isCancelled) {
           LOG_DBG("FileBrowser", "Attempting to delete: %s", fullPath.c_str());
           if (removeDirFile(fullPath)) {
             LOG_DBG("FileBrowser", "Deleted successfully");
-            loadFiles();
-            if (files.empty()) {
-              selectorIndex = 0;
-            } else if (selectorIndex >= files.size()) {
-              // Move selection to the new "last" item
-              selectorIndex = files.size() - 1;
+            {
+              RenderLock lock(*this);
+              loadFiles();
+              if (files.empty()) {
+                selectorIndex = 0;
+              } else if (selectorIndex >= files.size()) {
+                // Move selection to the new "last" item
+                selectorIndex = files.size() - 1;
+              }
             }
 
             requestUpdate(true);
@@ -264,15 +292,23 @@ void FileBrowserActivity::loop() {
       return;
     } else {
       // --- SHORT PRESS ACTION: OPEN/NAVIGATE ---
-      if (basepath.back() != '/') basepath += "/";
-
       if (isDirectory) {
-        basepath += entry.substr(0, entry.length() - 1);
-        loadFiles();
-        selectorIndex = 0;
+        {
+          RenderLock lock(*this);
+          if (basepath.back() != '/') basepath += "/";
+          basepath += entry.substr(0, entry.length() - 1);
+          loadFiles();
+          selectorIndex = 0;
+        }
         requestUpdate();
       } else {
-        onSelectBook(basepath + entry);
+        std::string bookPath;
+        {
+          RenderLock lock(*this);
+          if (basepath.back() != '/') basepath += "/";
+          bookPath = basepath + entry;
+        }
+        onSelectBook(bookPath);
       }
     }
     return;
@@ -281,16 +317,24 @@ void FileBrowserActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     // Short press: go up one directory, or go home if at root
     if (mappedInput.getHeldTime() < GO_HOME_MS) {
-      if (basepath != "/") {
-        const std::string oldPath = basepath;
+      bool atRoot = false;
+      {
+        RenderLock lock(*this);
+        atRoot = basepath == "/";
+      }
+      if (!atRoot) {
+        {
+          RenderLock lock(*this);
+          const std::string oldPath = basepath;
 
-        basepath.replace(basepath.find_last_of('/'), std::string::npos, "");
-        if (basepath.empty()) basepath = "/";
-        loadFiles();
+          basepath.replace(basepath.find_last_of('/'), std::string::npos, "");
+          if (basepath.empty()) basepath = "/";
+          loadFiles();
 
-        const auto pos = oldPath.find_last_of('/');
-        const std::string dirName = oldPath.substr(pos + 1) + "/";
-        selectorIndex = findEntry(dirName);
+          const auto pos = oldPath.find_last_of('/');
+          const std::string dirName = oldPath.substr(pos + 1) + "/";
+          selectorIndex = findEntry(dirName);
+        }
 
         requestUpdate();
       } else if (mode == Mode::PickFirmware) {
@@ -305,23 +349,31 @@ void FileBrowserActivity::loop() {
     }
   }
 
-  int listSize = static_cast<int>(files.size());
+  int listSize = 0;
+  {
+    RenderLock lock(*this);
+    listSize = static_cast<int>(files.size());
+  }
   buttonNavigator.onNextRelease([this, listSize] {
+    RenderLock lock(*this);
     selectorIndex = ButtonNavigator::nextIndex(static_cast<int>(selectorIndex), listSize);
     requestUpdate();
   });
 
   buttonNavigator.onPreviousRelease([this, listSize] {
+    RenderLock lock(*this);
     selectorIndex = ButtonNavigator::previousIndex(static_cast<int>(selectorIndex), listSize);
     requestUpdate();
   });
 
   buttonNavigator.onNextContinuous([this, listSize, pageItems] {
+    RenderLock lock(*this);
     selectorIndex = ButtonNavigator::nextPageIndex(static_cast<int>(selectorIndex), listSize, pageItems);
     requestUpdate();
   });
 
   buttonNavigator.onPreviousContinuous([this, listSize, pageItems] {
+    RenderLock lock(*this);
     selectorIndex = ButtonNavigator::previousPageIndex(static_cast<int>(selectorIndex), listSize, pageItems);
     requestUpdate();
   });

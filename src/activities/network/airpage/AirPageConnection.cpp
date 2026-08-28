@@ -266,7 +266,7 @@ AirPageConnection::Event AirPageConnection::handleWifiFailure() {
 }
 
 bool AirPageConnection::startWifiAssociation() {
-  if (WIFI_STORE.getCredentials().empty()) WIFI_STORE.loadFromFile();
+  if (WIFI_STORE.getCredentialSummaries().empty()) WIFI_STORE.loadFromFile();
   const std::string lastSsid = WIFI_STORE.getLastConnectedSsid();
   const auto credential = WIFI_STORE.findCredential(lastSsid);
   if (!credential) {

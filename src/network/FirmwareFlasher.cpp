@@ -46,6 +46,8 @@ const char* resultName(Result r) {
       return "BAD_CHECKSUM";
     case Result::BAD_SHA:
       return "BAD_SHA";
+    case Result::BAD_CHIP:
+      return "BAD_CHIP";
     case Result::BAD_SIZE:
       return "BAD_SIZE";
     case Result::NO_PARTITION:
@@ -62,6 +64,26 @@ const char* resultName(Result r) {
       return "OTADATA_FAIL";
   }
   return "?";
+}
+
+uint16_t runningPartitionChipId() {
+  // The running image is immutable for the lifetime of this boot, so cache the
+  // flash read.  0xFFFF means the device identity could not be established;
+  // callers then retain the existing image-integrity checks.
+  static uint16_t cached = [] {
+    const esp_partition_t* run = esp_ota_get_running_partition();
+    if (!run) {
+      LOG_ERR("FLASH", "Unable to resolve running OTA partition; skipping chip-id check");
+      return static_cast<uint16_t>(0xFFFF);
+    }
+    uint16_t id = 0xFFFF;
+    if (esp_partition_read(run, 12, &id, sizeof(id)) != ESP_OK) {
+      LOG_ERR("FLASH", "Unable to read running image chip-id; skipping chip-id check");
+      return static_cast<uint16_t>(0xFFFF);
+    }
+    return id;
+  }();
+  return cached;
 }
 
 namespace {
@@ -116,6 +138,16 @@ Result validateImageFile(const char* sdPath, size_t partitionSize) {
     LOG_ERR("FLASH", "validate: bad magic 0x%02X", header[0]);
     file.close();
     return Result::BAD_MAGIC;
+  }
+  // chip_id lives at offset 12 of esp_image_header_t. Compare against the
+  // running image before accepting the candidate for flashing.
+  uint16_t imageChip;
+  std::memcpy(&imageChip, header + 12, sizeof(imageChip));
+  const uint16_t deviceChip = runningPartitionChipId();
+  if (deviceChip != 0xFFFF && imageChip != deviceChip) {
+    LOG_ERR("FLASH", "validate: wrong chip: image=0x%04X device=0x%04X", imageChip, deviceChip);
+    file.close();
+    return Result::BAD_CHIP;
   }
   const uint8_t segCount = header[1];
   const bool hashAppended = header[23] != 0;
@@ -236,16 +268,15 @@ Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, boo
     return Result::NO_PARTITION;
   }
 
-  // When the caller already ran validateImageFile() against this same partition
-  // size (e.g. SdFirmwareUpdateActivity validates before the confirmation
-  // prompt), skip the redundant integrity scan. We still keep the partition
-  // lookup so the rest of the flashing path stays unchanged.
-  if (!alreadyValidated) {
-    const Result validateRes = validateImageFile(sdPath, dest->size);
-    if (validateRes != Result::OK) {
-      LOG_ERR("FLASH", "image validation failed: %s", resultName(validateRes));
-      return validateRes;
-    }
+  // SD is removable and the file may have changed while the confirmation UI
+  // was visible. Always revalidate immediately before the first erase/write;
+  // alreadyValidated is retained for source compatibility but no longer skips
+  // this TOCTOU defense.
+  if (alreadyValidated) LOG_DBG("FLASH", "Revalidating previously checked image before flash");
+  const Result validateRes = validateImageFile(sdPath, dest->size);
+  if (validateRes != Result::OK) {
+    LOG_ERR("FLASH", "image validation failed: %s", resultName(validateRes));
+    return validateRes;
   }
 
   HalFile file;

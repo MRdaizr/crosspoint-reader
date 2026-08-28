@@ -23,6 +23,7 @@ enum class Result {
   BAD_SEGMENTS,  // segment table malformed or runs past EOF
   BAD_CHECKSUM,  // ESP image XOR checksum mismatch
   BAD_SHA,       // SHA256 trailer mismatch (hash_appended images)
+  BAD_CHIP,      // image chip_id doesn't match the running MCU family
   BAD_SIZE,      // body+pad+sha length doesn't match file size
   NO_PARTITION,
   OOM,
@@ -40,11 +41,9 @@ using ProgressCb = void (*)(size_t written, size_t total, void* ctx);
 // success switches otadata via ota_boot::switchTo. Caller is responsible for
 // ESP.restart() afterwards.
 //
-// `alreadyValidated` lets callers that have just run `validateImageFile()`
-// themselves (e.g. SdFirmwareUpdateActivity, which validates before showing
-// the user the confirmation prompt) skip the redundant second pass. Defaults
-// to false so callers without prior validation (any future entry point) keep
-// the defense-in-depth check.
+// `alreadyValidated` is retained for source compatibility with callers that
+// performed a pre-confirmation pass. The image is still revalidated here so a
+// removable SD card cannot be swapped between confirmation and writing.
 Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, bool alreadyValidated = false);
 
 // Full-image integrity check that mirrors the bootloader's verification:
@@ -59,5 +58,9 @@ Result flashFromSdPath(const char* sdPath, ProgressCb onProgress, void* ctx, boo
 Result validateImageFile(const char* sdPath, size_t partitionSize);
 
 const char* resultName(Result r);
+
+// Returns the chip_id (esp_image_header_t offset 12) of the currently-running
+// image, or 0xFFFF if it cannot be read.
+uint16_t runningPartitionChipId();
 
 }  // namespace firmware_flash

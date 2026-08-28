@@ -122,7 +122,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
   LOG_DBG("KOSync", "Auth response: %d (err: %d)", httpCode, err);
 
   if (err != ESP_OK) return NETWORK_ERROR;
-  if (httpCode == 200) return OK;
+  if (httpCode >= 200 && httpCode < 300) return OK;
   if (httpCode == 401) return AUTH_FAILED;
   return SERVER_ERROR;
 }
@@ -156,7 +156,9 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
 
   if (err != ESP_OK) return NETWORK_ERROR;
 
-  if (httpCode == 200 && buf.data) {
+  if (httpCode == 204) return NOT_FOUND;
+
+  if (httpCode >= 200 && httpCode < 300 && buf.data) {
     JsonDocument doc;
     const DeserializationError error = deserializeJson(doc, buf.data);
 
@@ -228,7 +230,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
   LOG_DBG("KOSync", "Update progress response: %d (err: %d)", httpCode, err);
 
   if (err != ESP_OK) return NETWORK_ERROR;
-  if (httpCode == 200 || httpCode == 202) return OK;
+  if (httpCode >= 200 && httpCode < 300) return OK;
   if (httpCode == 401) return AUTH_FAILED;
   return SERVER_ERROR;
 }

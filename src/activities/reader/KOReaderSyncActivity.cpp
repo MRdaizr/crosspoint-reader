@@ -92,6 +92,7 @@ void KOReaderSyncActivity::onWifiSelectionComplete(const bool success) {
   }
 
   LOG_DBG("KOSync", "WiFi connected, starting sync");
+  WiFi.setSleep(false);
 
   {
     RenderLock lock(*this);
