@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <string>
 
 #include "Epub/blocks/ImageBlock.h"
 #include "components/themes/BaseTheme.h"
@@ -77,7 +78,11 @@ bool AirPageImageRenderer::render(GfxRenderer& renderer, const Rect& viewport, c
 
   std::optional<ImageBlock> jpegBlock;
   if (selected.image.format == ImageFormat::Jpeg) {
-    jpegBlock.emplace(selected.path, static_cast<int16_t>(bounds.width), static_cast<int16_t>(bounds.height));
+    // AirPage already stores the JPEG at selected.path.  The second
+    // constructor argument is only used by EPUB lazy extraction, so keep it
+    // empty here instead of treating the AirPage file as an EPUB source.
+    jpegBlock.emplace(selected.path, std::string(), static_cast<int16_t>(bounds.width),
+                      static_cast<int16_t>(bounds.height));
   }
   ImageBlock* jpeg = jpegBlock ? &*jpegBlock : nullptr;
 

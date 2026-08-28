@@ -92,13 +92,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 31
+### Version 32
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
 
-Version 31 includes:
+Version 32 includes:
 
 - cache-busting fields for paragraph alignment, hyphenation, embedded CSS,
   image rendering mode, and Focus Reading
@@ -112,9 +112,11 @@ Version 31 includes:
 - CJK token continuation and source-space semantics used by the current parser
 - Focus Reading token-boundary semantics: attached tokens after a visible
   hyphen may wrap at that hyphen without inserting an extra space
+- ImageBlock source hrefs used for lazy extraction of images from the EPUB
+  archive on first render
 
 The section cache is intentionally invalidated when these semantics change. A
-section written with Version 30 (or any earlier version) is rejected and rebuilt;
+section written with Version 31 (or any earlier version) is rejected and rebuilt;
 no attempt is made to reinterpret its serialized page payload.
 
 ImHex pattern:
@@ -124,7 +126,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 31
+#define EXPECTED_VERSION 32
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256
@@ -204,6 +206,7 @@ struct TextBlock {
 
 struct ImageBlock {
     String imagePath;
+    String srcPath;
     s16 width;
     s16 height;
 };

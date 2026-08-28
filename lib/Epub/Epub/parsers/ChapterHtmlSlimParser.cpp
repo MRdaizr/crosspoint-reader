@@ -7,8 +7,6 @@
 #include <Utf8.h>
 #include <XmlParserUtils.h>
 #include <expat.h>
-#include <esp_heap_caps.h>
-#include <esp_system.h>
 
 #include <algorithm>
 #include <iterator>
@@ -18,19 +16,17 @@
 #include "Epub.h"
 #include "Epub/Page.h"
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "Epub/converters/ImageDimsProbe.h"
 #include "Epub/converters/ImageToFramebufferDecoder.h"
 #include "Epub/htmlEntities.h"
 
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
 constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
-// Image extraction/decoding briefly allocates much more than the final page
-// object, so retain a larger reserve than ordinary incremental text parsing.
-constexpr size_t MIN_FREE_HEAP_FOR_IMAGE = 80 * 1024;
-constexpr size_t MIN_MAX_ALLOC_FOR_IMAGE = 64 * 1024;
-// Keep each ZIP inflate/write slice small. Image extraction happens while the
-// incremental parser owns the render lock, so a 4KB slice plus SD latency made
-// key presses appear lost even though GPIO polling continued on the other task.
-constexpr size_t IMAGE_EXTRACTION_CHUNK_SIZE = 512;
+// Header probing stops ZIP inflation after dimensions are known. Only the rare
+// image format with a late/unusual header falls back to full extraction while
+// building the section.
+constexpr size_t IMAGE_PROBE_CHUNK_SIZE = 1024;
+constexpr size_t IMAGE_FALLBACK_EXTRACTION_CHUNK_SIZE = 4096;
 // Each CJK character can become an individual token. Keep a paragraph well
 // below the point where vector growth needs a large contiguous allocation.
 constexpr size_t MAX_BUFFERED_TEXT_WORDS = 256;
@@ -568,9 +564,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
         return;
       }
 
-      const bool enoughMemoryForImage = esp_get_free_heap_size() >= MIN_FREE_HEAP_FOR_IMAGE &&
-                                        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= MIN_MAX_ALLOC_FOR_IMAGE;
-      if (!src.empty() && self->imageRendering != 1 && enoughMemoryForImage) {
+      if (!src.empty() && self->imageRendering != 1) {
         LOG_DBG("EHP", "Found image: src=%s", src.c_str());
 
         {
@@ -586,25 +580,43 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
             }
             std::string cachedImagePath = self->imageBasePath + std::to_string(self->imageCounter++) + ext;
 
-            // Extract image to cache file
-            HalFile cachedImageFile;
-            bool extractSuccess = false;
-            if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
-              extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile,
-                                                                     IMAGE_EXTRACTION_CHUNK_SIZE);
-              cachedImageFile.flush();
-              cachedImageFile.close();
+            // Probe only the image header during section construction. The
+            // full resource is extracted lazily by ImageBlock on first render.
+            ImageDimensions dims = {0, 0};
+            ImageDimsProbe headerProbe;
+            self->epub->readItemContentsToStream(resolvedPath, headerProbe, IMAGE_PROBE_CHUNK_SIZE,
+                                                 /*allowEarlyStop=*/true);
+            bool gotDimensions = headerProbe.getDimensions(dims);
+
+            if (!gotDimensions) {
+              // A few encoders place their dimensions unusually late. Fall
+              // back to a one-time extraction so the page can still be laid
+              // out; the normal path remains lazy.
+              if (self->popupFn && !self->imagePopupFired) {
+                self->imagePopupFired = true;
+                self->popupFn();
+              }
+
+              HalFile cachedImageFile;
+              bool extractSuccess = false;
+              if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
+                extractSuccess = self->epub->readItemContentsToStream(
+                    resolvedPath, cachedImageFile, IMAGE_FALLBACK_EXTRACTION_CHUNK_SIZE);
+                cachedImageFile.flush();
+                cachedImageFile.close();
+              }
+
+              if (extractSuccess) {
+                ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cachedImagePath);
+                for (int attempt = 0; attempt < 3 && !gotDimensions; ++attempt) {
+                  if (attempt > 0) delay(50);
+                  gotDimensions = decoder && decoder->getDimensions(cachedImagePath, dims);
+                }
+              } else {
+                LOG_ERR("EHP", "Failed to extract image for dimension fallback: %s", resolvedPath.c_str());
+              }
             }
 
-            if (extractSuccess) {
-              // Get image dimensions
-              ImageDimensions dims = {0, 0};
-              ImageToFramebufferDecoder* decoder = ImageDecoderFactory::getDecoder(cachedImagePath);
-              bool gotDimensions = false;
-              for (int attempt = 0; attempt < 3 && !gotDimensions; ++attempt) {
-                if (attempt > 0) delay(50);
-                gotDimensions = decoder && decoder->getDimensions(cachedImagePath, dims);
-              }
               if (gotDimensions) {
                 LOG_DBG("EHP", "Image dimensions: %dx%d", dims.width, dims.height);
 
@@ -759,13 +771,19 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 self->currentPageNextY += imageMarginTop;
 
                 // Create ImageBlock and add to page
-                auto imageBlock = std::make_shared<ImageBlock>(cachedImagePath, displayWidth, displayHeight);
+                // Image nodes are created while the incremental parser already
+                // owns a substantial working set. Use nothrow allocation so a
+                // transient heap shortage fails this image cleanly instead of
+                // aborting the firmware when exceptions are disabled.
+                auto imageBlock = std::shared_ptr<ImageBlock>(
+                    new (std::nothrow) ImageBlock(cachedImagePath, resolvedPath, displayWidth, displayHeight));
                 if (!imageBlock) {
                   LOG_ERR("EHP", "Failed to create ImageBlock");
                   return;
                 }
                 int xPos = (self->viewportWidth - displayWidth) / 2;
-                auto pageImage = std::make_shared<PageImage>(imageBlock, xPos, self->currentPageNextY);
+                auto pageImage =
+                    std::shared_ptr<PageImage>(new (std::nothrow) PageImage(imageBlock, xPos, self->currentPageNextY));
                 if (!pageImage) {
                   LOG_ERR("EHP", "Failed to create PageImage");
                   return;
@@ -790,19 +808,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 self->depth += 1;
                 return;
               } else {
-                LOG_ERR("EHP", "Failed to get image dimensions");
+                LOG_ERR("EHP", "Failed to get image dimensions: %s", resolvedPath.c_str());
                 Storage.remove(cachedImagePath.c_str());
               }
-            } else {
-              LOG_ERR("EHP", "Failed to extract image");
-            }
           }  // isFormatSupported
         }
-      }
-
-      if (!src.empty() && self->imageRendering != 1 && !enoughMemoryForImage) {
-        LOG_INF("EHP", "Skipping image for low memory: free=%u maxAlloc=%u", esp_get_free_heap_size(),
-                heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
       }
 
       // Fallback to alt text if image processing fails

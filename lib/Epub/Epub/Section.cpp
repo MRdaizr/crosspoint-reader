@@ -24,12 +24,18 @@ namespace {
 // v31: TokenBoundary changes Focus Reading continuation semantics: explicit
 // visible hyphens are legal wrap points. Invalidate old layout caches so
 // their line/page indexes are rebuilt with the new boundaries.
-constexpr uint8_t SECTION_FILE_VERSION = 31;
+// v32: ImageBlock stores the book-internal source href for lazy image
+// extraction. Existing pages only stored the extracted cache path, so old
+// section files cannot be safely reinterpreted and must be rebuilt.
+constexpr uint8_t SECTION_FILE_VERSION = 32;
 constexpr size_t MIN_INCREMENTAL_FREE_HEAP = 48 * 1024;
 constexpr size_t MIN_INCREMENTAL_MAX_ALLOC = 32 * 1024;
 constexpr uint16_t INCREMENTAL_PARSE_BUFFER_SIZE = 256;
 constexpr uint32_t BUILD_CHECKPOINT_MAGIC = 0x43504231;  // CPB1
-constexpr uint16_t BUILD_CHECKPOINT_VERSION = 2;
+// ImageBlock page records gained a serialized source href in section v32. An
+// old .building file must not be resumed and have new-format pages appended to
+// its old-format prefix, so invalidate the incremental checkpoint as well.
+constexpr uint16_t BUILD_CHECKPOINT_VERSION = 3;
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +

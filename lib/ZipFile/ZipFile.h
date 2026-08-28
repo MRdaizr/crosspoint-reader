@@ -69,7 +69,10 @@ class ZipFile {
   // Due to the memory required to run each of these, it is recommended to not preopen the zip file for multiple
   // These functions will open and close the zip as needed
   uint8_t* readFileToMemory(const char* filename, size_t* size = nullptr, bool trailingNullByte = false);
-  bool readFileToStream(const char* filename, Print& out, size_t chunkSize);
+  // allowEarlyStop: a short write from `out` is treated as the sink asking to
+  // stop (returns true) instead of a write failure. Header probes use this to
+  // stop ZIP inflation as soon as dimensions are known.
+  bool readFileToStream(const char* filename, Print& out, size_t chunkSize, bool allowEarlyStop = false);
 
   template <typename F>
   bool enumerateFilePaths(F&& callback) {

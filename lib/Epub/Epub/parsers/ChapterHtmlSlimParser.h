@@ -30,6 +30,7 @@ class ChapterHtmlSlimParser {
   GfxRenderer& renderer;
   std::function<void(std::unique_ptr<Page>, uint16_t, uint16_t, uint32_t)> completePageFn;
   std::function<void()> popupFn;  // Popup callback
+  bool imagePopupFired = false;   // show the first slow image extraction popup once
   std::function<void(uint8_t)> progressFn;
   XML_Parser activeParser = nullptr;
   HalFile inputFile;

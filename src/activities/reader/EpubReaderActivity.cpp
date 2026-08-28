@@ -169,6 +169,9 @@ void EpubReaderActivity::onEnter() {
   // grayscale passes cannot keep retrying a broken decoder. A new EPUB open
   // starts a fresh retry window.
   ImageBlock::clearSessionRenderFailures();
+  ImageBlock::setExtractor(epub.get(), [](void* ctx, const char* srcPath, const char* destPath) {
+    return static_cast<Epub*>(ctx)->extractItemToFile(srcPath, destPath);
+  });
 
   // Configure screen orientation based on settings
   // NOTE: This affects layout math and must be applied before any render calls.
@@ -249,6 +252,12 @@ void EpubReaderActivity::onEnter() {
 
 void EpubReaderActivity::onExit() {
   Activity::onExit();
+
+  // ImageBlock keeps a process-wide extractor hook for lazy EPUB assets. Clear
+  // it before releasing this activity's Epub so no later render can call a
+  // dangling context pointer.
+  ImageBlock::setExtractor(nullptr, nullptr);
+  ImageBlock::releaseRenderCache();
 
   // Reset orientation back to portrait for the rest of the UI
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
@@ -922,6 +931,7 @@ bool EpubReaderActivity::launchKOReaderSync() {
     if (section) {
       nextPageNumber = section->currentPage;
     }
+    ImageBlock::setExtractor(nullptr, nullptr);
     section.reset();
     epub.reset();
   }
@@ -1633,6 +1643,13 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
                                         const int orientedMarginLeft) {
   const auto t0 = millis();
   const int fontId = SETTINGS.getReaderFontId();
+
+  // The same page may be rendered for BW, image cleanup, and multiple grayscale
+  // bands. ImageBlock owns a bounded payload cache for those passes; release it
+  // automatically on every exit path so it never survives a page turn.
+  struct PxcSlotGuard {
+    ~PxcSlotGuard() { ImageBlock::releaseRenderCache(); }
+  } pxcSlotGuard;
 
   // Font prewarm: scan pass accumulates text, then prewarm, then real render
   auto* fcm = renderer.getFontCacheManager();
