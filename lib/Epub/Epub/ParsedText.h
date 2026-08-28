@@ -22,7 +22,9 @@ class ParsedText {
   std::vector<EpdFontFamily::Style> wordStyles;
   std::vector<bool> wordContinues;      // true = word attaches to previous with no break
   std::vector<bool> wordNoSpaceBefore;  // true = may break before token, but no synthetic space when joined
-  std::vector<bool> wordIsFocusSuffix;  // true = token is the regular tail of a focus bold-prefix split
+  // UTF-8 byte offset where Focus Reading switches from bold to the regular
+  // style. Zero means no split (or a fully bold token).
+  std::vector<uint8_t> wordFocusBoundaries;
   // Source-visible Unicode-codepoint offset for each logical token. This metadata
   // is used only to stamp section page LUTs and never reaches page serialization.
   std::vector<uint32_t> wordVisibleOffsets;
@@ -37,7 +39,7 @@ class ParsedText {
   std::vector<uint16_t> reorderedWidthsScratch;
   std::vector<bool> reorderedContinuesScratch;
   std::vector<bool> reorderedNoSpaceBeforeScratch;
-  std::vector<bool> reorderedFocusSuffixScratch;
+  std::vector<uint8_t> reorderedFocusBoundaryScratch;
   std::vector<uint16_t> visualOrderScratch;
 
   int resolveFirstLineIndent(bool isFirstLine, const GfxRenderer& renderer, int fontId) const;

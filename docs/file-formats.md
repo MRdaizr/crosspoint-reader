@@ -92,13 +92,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 30
+### Version 31
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
 
-Version 30 includes:
+Version 31 includes:
 
 - cache-busting fields for paragraph alignment, hyphenation, embedded CSS,
   image rendering mode, and Focus Reading
@@ -110,9 +110,11 @@ Version 30 includes:
   optional focus metadata, and NUL-terminated text) to reduce heap fragmentation
 - per-page footnote entries with 256-byte href fields
 - CJK token continuation and source-space semantics used by the current parser
+- Focus Reading token-boundary semantics: attached tokens after a visible
+  hyphen may wrap at that hyphen without inserting an extra space
 
 The section cache is intentionally invalidated when these semantics change. A
-section written with Version 29 (or any earlier version) is rejected and rebuilt;
+section written with Version 30 (or any earlier version) is rejected and rebuilt;
 no attempt is made to reinterpret its serialized page payload.
 
 ImHex pattern:
@@ -122,7 +124,7 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 30
+#define EXPECTED_VERSION 31
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256

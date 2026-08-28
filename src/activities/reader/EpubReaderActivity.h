@@ -95,6 +95,7 @@ class EpubReaderActivity final : public Activity {
   // Jump to a percentage of the book (0-100), mapping it to spine and page.
   bool jumpToFraction(float fraction);
   void jumpToPercent(int percent);
+  void openReaderMenu();
   void onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction action);
   // Returns true if sync acted (launched, or surfaced a save error); false if it was a no-op
   // because no KOReader credentials are stored.

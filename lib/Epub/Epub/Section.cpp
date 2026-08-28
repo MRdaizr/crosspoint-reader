@@ -21,7 +21,10 @@ namespace {
 // v29: expands footnote href storage and invalidates updated CJK token spacing
 //      and continuation semantics.
 // v30: stores each TextBlock in a single arena and changes its line payload.
-constexpr uint8_t SECTION_FILE_VERSION = 30;
+// v31: TokenBoundary changes Focus Reading continuation semantics: explicit
+// visible hyphens are legal wrap points. Invalidate old layout caches so
+// their line/page indexes are rebuilt with the new boundaries.
+constexpr uint8_t SECTION_FILE_VERSION = 31;
 constexpr size_t MIN_INCREMENTAL_FREE_HEAP = 48 * 1024;
 constexpr size_t MIN_INCREMENTAL_MAX_ALLOC = 32 * 1024;
 constexpr uint16_t INCREMENTAL_PARSE_BUFFER_SIZE = 256;

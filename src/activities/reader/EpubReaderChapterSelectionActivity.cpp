@@ -91,8 +91,13 @@ void EpubReaderChapterSelectionActivity::render(RenderLock&&) {
   const int totalItems = getTotalItems();
   const int pageItems = std::max(1, UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, false));
   const int pageStartIndex = selectorIndex / pageItems * pageItems;
+  // Prewarm a bounded look-ahead window rather than only the visible page.
+  // Fast chapter-list paging then reuses the same CJK fallback glyphs instead
+  // of synchronously rereading the SD font for every newly exposed row.
+  const int prewarmStartIndex = std::max(0, pageStartIndex - pageItems);
+  const int prewarmEndIndex = std::min(totalItems, pageStartIndex + pageItems * 2);
   std::string visibleText;
-  for (int i = pageStartIndex; i < totalItems && i < pageStartIndex + pageItems; i++) {
+  for (int i = prewarmStartIndex; i < prewarmEndIndex; i++) {
     auto item = epub->getTocItem(i);
     visibleText.append((item.level - 1) * 2, ' ');
     visibleText += item.title;
