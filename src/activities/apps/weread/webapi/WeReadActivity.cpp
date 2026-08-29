@@ -626,9 +626,31 @@ void WeReadActivity::buildFuiScreen(UiScreen& screen) {
     fuiTabProps_.action = ACTION_FUI_TAB;
     fuiTabProps_.inputMask = fui::InputTouch;
     fuiTabProps_.text = screen.theme().bodyText;
-    fuiTabProps_.layout = fui::TabBarLayout::ContentWidth;
-    fuiTabProps_.gap = static_cast<int16_t>(metrics.tabSpacing);
+    // Match crossmux/RoundedRaff: the shelf and manage tabs occupy equal
+    // full-width slots rather than hugging their labels.  This keeps the
+    // top row stable for Chinese, English and longer translated labels.
+    fuiTabProps_.layout = fui::TabBarLayout::EqualWidth;
+    fuiTabProps_.tabInset = fui::Insets{4, 4, 8, 4};
+    fuiTabProps_.contentInset = fui::Insets{0, 0, 0, 0};
+    fuiTabProps_.gap = 0;
     fuiTabProps_.minTouchSize = screen.theme().minTouchSize;
+    fuiTabProps_.divider = true;
+
+    // crossmux uses a strong black/white pill while the tab strip owns the
+    // focus and a dark-gray/white pill after focus moves into its content.
+    // Set every state explicitly so FreeInkUI never falls back to an unset
+    // foreground or paints black text on a dark selected background.
+    const bool tabsFocused = mainFocus_.load() == MainFocus::Tabs;
+    fui::StyleSet tabStyles;
+    tabStyles.explicitlySet = true;
+    tabStyles.normal.foreground = fui::Paint::solid(fui::Color::Black);
+    tabStyles.selected.background =
+        tabsFocused ? fui::Paint::solid(fui::Color::Black) : fui::Paint::dither(fui::Color::DarkGray);
+    tabStyles.selected.foreground = fui::Paint::solid(fui::Color::White);
+    tabStyles.selected.radius = 18;
+    tabStyles.focused = tabStyles.selected;
+    tabStyles.active = tabStyles.selected;
+    fuiTabProps_.tabStyles = tabStyles;
     fui::tabBar(screen.frame(), tabsRect, fuiTabProps_);
 
     if (mainTab_.load() != MainTab::Manage) return;
