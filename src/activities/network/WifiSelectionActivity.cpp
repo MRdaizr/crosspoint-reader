@@ -319,12 +319,29 @@ void WifiSelectionActivity::checkConnectionStatus() {
 void WifiSelectionActivity::loop() {
   // Check scan progress
   if (state == WifiSelectionState::SCANNING) {
+    // An asynchronous scan otherwise consumes the whole loop branch until it
+    // completes, which made the Back/Cancel hint appear unresponsive.  Abort
+    // the scan before finishing so callers (WeRead, AirPage, web setup, etc.)
+    // receive their cancellation result immediately.
+    if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+      WiFi.scanDelete();
+      onComplete(false);
+      return;
+    }
     processWifiScanResults();
     return;
   }
 
   // Check connection progress
   if (state == WifiSelectionState::CONNECTING || state == WifiSelectionState::AUTO_CONNECTING) {
+    // Do not wait for the connection timeout when the user explicitly backs
+    // out.  This is especially important for AUTO_CONNECTING, which can
+    // otherwise leave the parent activity waiting for up to 15 seconds.
+    if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
+      WiFi.disconnect();
+      onComplete(false);
+      return;
+    }
     checkConnectionStatus();
     return;
   }
