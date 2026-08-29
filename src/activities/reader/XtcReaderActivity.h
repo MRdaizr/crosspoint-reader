@@ -12,9 +12,9 @@
 #include <string>
 #include <utility>
 
-#include "activities/Activity.h"
+#include "ReaderActivity.h"
 
-class XtcReaderActivity final : public Activity {
+class XtcReaderActivity final : public ReaderActivity {
   std::shared_ptr<Xtc> xtc;
 
   uint32_t currentPage = 0;
@@ -32,14 +32,15 @@ class XtcReaderActivity final : public Activity {
   StatusBarInfo getStatusBarInfo() const;
   void saveProgress() const;
   void loadProgress();
+  bool isAtEndOfBook() const override;
+  void onReturnFromEndOfBook() override;
 
  public:
   explicit XtcReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Xtc> xtc)
-      : Activity("XtcReader", renderer, mappedInput), xtc(std::move(xtc)) {}
+      : ReaderActivity("XtcReader", renderer, mappedInput, xtc ? xtc->getPath() : ""), xtc(std::move(xtc)) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
-  bool isReaderActivity() const override { return true; }
   ScreenshotInfo getScreenshotInfo() const override;
 };

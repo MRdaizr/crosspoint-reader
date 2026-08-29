@@ -10,9 +10,9 @@
 #include "BookmarkEntry.h"
 #include "EpubReaderMenuActivity.h"
 #include "ProgressMapper.h"
-#include "activities/Activity.h"
+#include "ReaderActivity.h"
 
-class EpubReaderActivity final : public Activity {
+class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
   std::unique_ptr<Section> section = nullptr;
   std::unique_ptr<Section> nextChapterPreload = nullptr;
@@ -118,14 +118,16 @@ class EpubReaderActivity final : public Activity {
   void navigateToHref(const std::string& href, bool savePosition = false);
   void restoreSavedPosition();
 
+  bool isAtEndOfBook() const override;
+  void onReturnFromEndOfBook() override;
+
  public:
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub)
-      : Activity("EpubReader", renderer, mappedInput), epub(std::move(epub)) {}
+      : ReaderActivity("EpubReader", renderer, mappedInput, epub ? epub->getPath() : ""), epub(std::move(epub)) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&& lock) override;
-  bool isReaderActivity() const override { return true; }
   ScreenshotInfo getScreenshotInfo() const override;
   CrossPointPosition getCurrentPosition() const;
 };

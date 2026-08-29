@@ -6,10 +6,10 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
-#include "activities/Activity.h"
+#include "ReaderActivity.h"
 #include "activities/reader/TxtReaderMenuActivity.h"
 
-class TxtReaderActivity final : public Activity {
+class TxtReaderActivity final : public ReaderActivity {
   struct PageLayout {
     int page = -1;
     size_t nextOffset = 0;
@@ -110,14 +110,15 @@ class TxtReaderActivity final : public Activity {
   void updateIndexProgress(bool requestRefresh);
   void saveProgress();
   void loadProgress();
+  bool isAtEndOfBook() const override;
+  void onReturnFromEndOfBook() override;
 
  public:
   explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Txt> txt)
-      : Activity("TxtReader", renderer, mappedInput), txt(std::move(txt)) {}
+      : ReaderActivity("TxtReader", renderer, mappedInput, txt ? txt->getPath() : ""), txt(std::move(txt)) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
-  bool isReaderActivity() const override { return true; }
   ScreenshotInfo getScreenshotInfo() const override;
 };

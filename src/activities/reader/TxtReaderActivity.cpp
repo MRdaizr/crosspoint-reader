@@ -114,6 +114,9 @@ void TxtReaderActivity::onEnter() {
 void TxtReaderActivity::onExit() {
   Activity::onExit();
 
+  endOfBookOptions.reset();
+  endOfBookOptionsReady.store(false, std::memory_order_release);
+
   pendingPageTurn.store(0, std::memory_order_release);
   pendingPercentJump.store(-1, std::memory_order_release);
 
@@ -140,6 +143,10 @@ void TxtReaderActivity::onExit() {
 
 void TxtReaderActivity::loop() {
   READING_STATS.noteActivity();
+  const bool atEndOfBook = isAtEndOfBook();
+  clearEndOfBookOptionsIfNeeded(atEndOfBook);
+  if (handleEndOfBookMenu(atEndOfBook)) return;
+
   if (txt) {
     const int pageCount = displayedTotalPages();
     const int page = displayedPage();
@@ -181,6 +188,8 @@ void TxtReaderActivity::loop() {
   if (!prevTriggered && !nextTriggered) {
     return;
   }
+
+  if (handleEndOfBookPageTurn(atEndOfBook, prevTriggered, nextTriggered)) return;
 
   // The render task exclusively owns page/index/preload state. Keep only one
   // intent while it is busy so a delayed display can never skip a page.
@@ -635,6 +644,10 @@ bool TxtReaderActivity::applyPendingPageTurn() {
   updateTotalPages();
   if (currentPage < static_cast<int>(pageOffsets.size()) - 1) {
     ++currentPage;
+  } else if (pageIndexComplete) {
+    // Keep a one-step sentinel after the last page so the shared reader layer
+    // can display the end-of-book menu without clamping back to the page.
+    currentPage = totalPages;
   }
   return true;
 }
@@ -874,6 +887,12 @@ void TxtReaderActivity::render(RenderLock&&) {
     applyPercentJump(requestedPercent);
   }
 
+  if (isAtEndOfBook()) {
+    READING_STATS.updateProgress(100, true);
+    renderEndOfBook(mappedInput);
+    return;
+  }
+
   if (!pageTurnApplied && !percentJumpApplied &&
       (nextPagePrepareRequested || nextPagePrepareStage != NextPagePrepareStage::NONE)) {
     nextPagePrepareRequested = false;
@@ -1104,6 +1123,15 @@ void TxtReaderActivity::loadProgress() {
     if (currentPage < 0) currentPage = 0;
     LOG_DBG("TRS", "Loaded progress: page %d/%d", currentPage, totalPages);
   }
+}
+
+bool TxtReaderActivity::isAtEndOfBook() const {
+  return txt && pageIndexComplete && totalPages > 0 && currentPage >= totalPages;
+}
+
+void TxtReaderActivity::onReturnFromEndOfBook() {
+  if (!isAtEndOfBook()) return;
+  currentPage = std::max(0, totalPages - 1);
 }
 
 bool TxtReaderActivity::loadPageIndexCache() {

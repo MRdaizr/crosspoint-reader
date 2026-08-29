@@ -253,6 +253,9 @@ void EpubReaderActivity::onEnter() {
 void EpubReaderActivity::onExit() {
   Activity::onExit();
 
+  endOfBookOptions.reset();
+  endOfBookOptionsReady.store(false, std::memory_order_release);
+
   // ImageBlock keeps a process-wide extractor hook for lazy EPUB assets. Clear
   // it before releasing this activity's Epub so no later render can call a
   // dangling context pointer.
@@ -356,6 +359,9 @@ void EpubReaderActivity::loop() {
   // Drop this book from the Recent Books list; if the reader then pages back into the book,
   // re-add it. So removal only sticks if the reader leaves while still on the End-of-Book
   // screen. Acts only on the transition (guarded by recentsEntryRemoved) — no per-frame writes.
+  clearEndOfBookOptionsIfNeeded(atEndOfBook);
+  if (handleEndOfBookMenu(atEndOfBook, ignoreNextConfirmRelease)) return;
+
   if (SETTINGS.removeReadBooksFromRecents) {
     if (atEndOfBook && !recentsEntryRemoved) {
       // Only treat the book as "removed by us" if it was actually in the list, so the
@@ -505,18 +511,7 @@ void EpubReaderActivity::loop() {
     return;
   }
 
-  // At end of the book, forward button goes home and back button returns to last page
-  if (currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount()) {
-    if (nextTriggered) {
-      onGoHome();
-    } else {
-      currentSpineIndex = epub->getSpineItemsCount() - 1;
-      nextPageNumber = 0;
-      pendingPageJump = std::numeric_limits<uint16_t>::max();
-      requestUpdate();
-    }
-    return;
-  }
+  if (handleEndOfBookPageTurn(atEndOfBook, prevTriggered, nextTriggered)) return;
 
   const bool longPress = !fromTilt && mappedInput.getHeldTime() > ReaderUtils::SKIP_HOLD_MS;
 
@@ -1083,9 +1078,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // Show end of book screen
   if (currentSpineIndex == epub->getSpineItemsCount()) {
     READING_STATS.updateProgress(100, true);
-    renderer.clearScreen();
-    renderer.drawCenteredText(UI_12_FONT_ID, 300, tr(STR_END_OF_BOOK), true, EpdFontFamily::BOLD);
-    renderer.displayBuffer();
+    renderEndOfBook(mappedInput);
     automaticPageTurnActive = false;
     showPendingSyncSaveError();
     return;
@@ -2015,6 +2008,18 @@ void EpubReaderActivity::updateBookmarkFlag() {
   currentPageBookmarked = std::any_of(cachedBookmarks.begin(), cachedBookmarks.end(), [&](const BookmarkEntry& b) {
     return bookmarkMatchesProgress(b, currentSpineIndex, section->currentPage, section->pageCount, pageRange);
   });
+}
+
+bool EpubReaderActivity::isAtEndOfBook() const {
+  return epub && currentSpineIndex > 0 && currentSpineIndex >= epub->getSpineItemsCount();
+}
+
+void EpubReaderActivity::onReturnFromEndOfBook() {
+  if (!epub || !isAtEndOfBook()) return;
+  currentSpineIndex = std::max(0, epub->getSpineItemsCount() - 1);
+  nextPageNumber = 0;
+  pendingPageJump = std::numeric_limits<uint16_t>::max();
+  clearNextChapterPreload();
 }
 
 ScreenshotInfo EpubReaderActivity::getScreenshotInfo() const {

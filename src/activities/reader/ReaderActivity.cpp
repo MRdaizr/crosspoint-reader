@@ -147,3 +147,71 @@ void ReaderActivity::onEnter() {
 }
 
 void ReaderActivity::onGoBack() { finish(); }
+
+void ReaderActivity::clearEndOfBookOptionsIfNeeded(const bool atEndOfBook) {
+  if (atEndOfBook || !endOfBookOptionsReady.load(std::memory_order_acquire)) return;
+
+  RenderLock lock(*this);
+  endOfBookOptionsReady.store(false, std::memory_order_release);
+  endOfBookOptions.reset();
+}
+
+bool ReaderActivity::handleEndOfBookMenu(const bool atEndOfBook, const bool suppressConfirmRelease) {
+  if (!atEndOfBook || suppressConfirmRelease || !endOfBookOptionsReady.load(std::memory_order_acquire) ||
+      !endOfBookOptions || !endOfBookOptions->menuActive()) {
+    return false;
+  }
+
+  std::string openPath;
+  switch (endOfBookOptions->handleMenuInput(mappedInput, &openPath)) {
+    case EndOfBookOptions::Action::OpenBook:
+      activityManager.goToReader(std::move(openPath));
+      return true;
+    case EndOfBookOptions::Action::GoHome:
+      onGoHome();
+      return true;
+    case EndOfBookOptions::Action::LastPage:
+      // The format reader owns the actual page sentinel and restores its last
+      // page through the normal render path.
+      onReturnFromEndOfBook();
+      requestUpdate();
+      return true;
+    case EndOfBookOptions::Action::Redraw:
+      requestUpdate();
+      return true;
+    case EndOfBookOptions::Action::None:
+      return false;
+  }
+  return false;
+}
+
+bool ReaderActivity::handleEndOfBookPageTurn(const bool atEndOfBook, const bool prevTriggered,
+                                             const bool nextTriggered) {
+  if (!atEndOfBook) return false;
+  if (endOfBookOptionsReady.load(std::memory_order_acquire) && endOfBookOptions &&
+      endOfBookOptions->menuActive()) {
+    return true;
+  }
+  if (nextTriggered) {
+    onGoHome();
+  } else if (prevTriggered) {
+    onReturnFromEndOfBook();
+    requestUpdate();
+  }
+  return true;
+}
+
+void ReaderActivity::renderEndOfBook(const MappedInputManager& input) {
+  if (!endOfBookOptions) {
+    endOfBookOptions = makeUniqueNoThrow<EndOfBookOptions>(renderer);
+    if (!endOfBookOptions) LOG_ERR("READER", "OOM: EndOfBookOptions");
+  }
+
+  renderer.clearScreen();
+  if (endOfBookOptions) {
+    endOfBookOptions->loadOnce(bookPath);
+    endOfBookOptionsReady.store(true, std::memory_order_release);
+    endOfBookOptions->render(renderer, input);
+  }
+  renderer.displayBuffer();
+}
