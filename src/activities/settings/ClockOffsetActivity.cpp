@@ -10,9 +10,14 @@
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
+#include "components/UiAppHelpers.h"
 #include "fontIds.h"
 
+namespace fui = freeink::ui;
+
 namespace {
+constexpr fui::ActionId ACTION_FIELD = 1;
+constexpr fui::ActionId ACTION_STEP = 2;
 constexpr uint8_t MAX_POS_HOURS = 14;
 constexpr uint8_t MAX_NEG_HOURS = 12;
 constexpr uint8_t MINUTE_STEPS = 4;  // 0, 15, 30, 45
@@ -45,14 +50,22 @@ void decodeOffset(uint8_t biased, uint8_t& sign, uint8_t& hours, uint8_t& quarte
 }
 }  // namespace
 
+ClockOffsetActivity::ClockOffsetActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+    : Activity("ClockOffset", renderer, mappedInput), UiAppHost(renderer) {}
+
 void ClockOffsetActivity::onEnter() {
   Activity::onEnter();
   loadFromSettings();
   activeField = FIELD_HOURS;
+  resetUi();
+  app.on(ACTION_FIELD, &ClockOffsetActivity::onFieldEvent, this);
+  app.on(ACTION_STEP, &ClockOffsetActivity::onStepEvent, this);
+  app.setScreen(&ClockOffsetActivity::offsetScreen, this);
   requestUpdate();
 }
 
 void ClockOffsetActivity::onExit() {
+  closeRouting();
   saveToSettings();
   Activity::onExit();
 }
@@ -120,6 +133,17 @@ void ClockOffsetActivity::loop() {
     return;
   }
 
+  // Touch routes through the FUI interaction table built over the legacy
+  // field/step controls. InputDrag selects a field on contact; a tap release
+  // additionally toggles the sign field, matching the old touch semantics.
+  if (routingReady() && mappedInput.hasTouch()) {
+    const fui::InputSnapshot snap = touchSnapshotFrom(mappedInput);
+    if (snap.touchPressed || snap.touchHeld || snap.touchReleased) {
+      routedRelease = snap.touchReleased;
+      if (route(snap)) return;
+    }
+  }
+
   buttonNavigator.onNextRelease([this] {
     adjustActiveField(+1);
     requestUpdate();
@@ -136,6 +160,99 @@ void ClockOffsetActivity::loop() {
     adjustActiveField(-1);
     requestUpdate();
   });
+}
+
+void ClockOffsetActivity::onFieldEvent(const fui::ActionEvent& event, void* user) {
+  auto* self = static_cast<ClockOffsetActivity*>(user);
+  const Field touched = static_cast<Field>(event.value);
+  if (touched < FIELD_SIGN || touched >= FIELD_COUNT) return;
+  if (self->routedRelease) {
+    if (touched == FIELD_SIGN) {
+      self->activeField = FIELD_SIGN;
+      self->adjustActiveField(+1);
+    } else {
+      self->activeField = touched;
+    }
+  } else if (self->activeField != touched) {
+    self->activeField = touched;
+  }
+  self->requestUpdate();
+}
+
+void ClockOffsetActivity::onStepEvent(const fui::ActionEvent& event, void* user) {
+  auto* self = static_cast<ClockOffsetActivity*>(user);
+  self->adjustActiveField(event.value);
+  self->requestUpdate();
+}
+
+void ClockOffsetActivity::offsetScreen(UiScreen& screen, void* user) {
+  static_cast<ClockOffsetActivity*>(user)->buildOffsetScreen(screen);
+}
+
+void ClockOffsetActivity::getFieldRects(Rect& signRect, Rect& hoursRect, Rect& minutesRect) const {
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  const int centreY = pageHeight / 2 - 40;
+  const auto widthOf = [&](const char* text) { return renderer.getTextWidth(UI_12_FONT_ID, text, EpdFontFamily::BOLD); };
+  constexpr int fieldPaddingX = 6;
+  constexpr int labelGap = 16;
+  constexpr int fieldGap = 12;
+  constexpr int colonGap = 5;
+  const int fieldHeight = renderer.getLineHeight(UI_12_FONT_ID) + 2;
+  const int labelWidth = widthOf("UTC");
+  const int signBoxW = std::max(widthOf("+"), widthOf("-")) + fieldPaddingX * 2;
+  const int hoursBoxW = std::max(widthOf("14"), widthOf("12")) + fieldPaddingX * 2;
+  const int colonWidth = widthOf(":");
+  const int minutesBoxW = std::max({widthOf("00"), widthOf("15"), widthOf("30"), widthOf("45")}) + fieldPaddingX * 2;
+  const int totalWidth = labelWidth + labelGap + signBoxW + fieldGap + hoursBoxW + colonGap + colonWidth + colonGap + minutesBoxW;
+  int boxX = (pageWidth - totalWidth) / 2 + labelWidth + labelGap;
+  signRect = Rect{boxX, centreY, signBoxW, fieldHeight};
+  boxX += signBoxW + fieldGap;
+  hoursRect = Rect{boxX, centreY, hoursBoxW, fieldHeight};
+  boxX += hoursBoxW + colonGap + colonWidth + colonGap;
+  minutesRect = Rect{boxX, centreY, minutesBoxW, fieldHeight};
+}
+
+void ClockOffsetActivity::getTouchControlRects(Rect& minusRect, Rect& plusRect) const {
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  const int centreY = pageHeight / 2 - 40;
+  const auto widthOf = [&](const char* text) { return renderer.getTextWidth(UI_12_FONT_ID, text, EpdFontFamily::BOLD); };
+  constexpr int fieldPaddingX = 6;
+  constexpr int labelGap = 16;
+  constexpr int fieldGap = 12;
+  constexpr int colonGap = 5;
+  constexpr int touchButtonSize = 44;
+  constexpr int touchButtonGap = 18;
+  const int fieldHeight = renderer.getLineHeight(UI_12_FONT_ID) + 2;
+  const int labelWidth = widthOf("UTC");
+  const int signBoxW = std::max(widthOf("+"), widthOf("-")) + fieldPaddingX * 2;
+  const int hoursBoxW = std::max(widthOf("14"), widthOf("12")) + fieldPaddingX * 2;
+  const int colonWidth = widthOf(":");
+  const int minutesBoxW = std::max({widthOf("00"), widthOf("15"), widthOf("30"), widthOf("45")}) + fieldPaddingX * 2;
+  const int totalWidth = labelWidth + labelGap + signBoxW + fieldGap + hoursBoxW + colonGap + colonWidth + colonGap + minutesBoxW;
+  const int offsetX = (pageWidth - totalWidth) / 2;
+  const int buttonY = centreY + (fieldHeight - touchButtonSize) / 2;
+  minusRect = Rect{offsetX - touchButtonGap - touchButtonSize, buttonY, touchButtonSize, touchButtonSize};
+  plusRect = Rect{offsetX + totalWidth + touchButtonGap, buttonY, touchButtonSize, touchButtonSize};
+}
+
+void ClockOffsetActivity::buildOffsetScreen(UiScreen& screen) {
+  if (!mappedInput.hasTouch()) return;
+  const auto toFui = [](const Rect& rect) { return fui::makeRect(rect.x, rect.y, rect.width, rect.height); };
+  Rect signRect;
+  Rect hoursRect;
+  Rect minutesRect;
+  getFieldRects(signRect, hoursRect, minutesRect);
+  const uint16_t fieldMask = static_cast<uint16_t>(fui::InputTouch | fui::InputDrag);
+  screen.frame().hit(toFui(signRect), ACTION_FIELD, FIELD_SIGN, fieldMask);
+  screen.frame().hit(toFui(hoursRect), ACTION_FIELD, FIELD_HOURS, fieldMask);
+  screen.frame().hit(toFui(minutesRect), ACTION_FIELD, FIELD_MINUTES, fieldMask);
+  Rect minusRect;
+  Rect plusRect;
+  getTouchControlRects(minusRect, plusRect);
+  screen.frame().hit(toFui(minusRect), ACTION_STEP, -1, fui::InputTouch);
+  screen.frame().hit(toFui(plusRect), ACTION_STEP, +1, fui::InputTouch);
 }
 
 void ClockOffsetActivity::render(RenderLock&&) {
@@ -196,6 +313,21 @@ void ClockOffsetActivity::render(RenderLock&&) {
 
   drawField(minutesStr, x, minutesBoxW, FIELD_MINUTES);
 
+  if (mappedInput.hasTouch()) {
+    Rect minusRect;
+    Rect plusRect;
+    getTouchControlRects(minusRect, plusRect);
+    const auto drawTouchButton = [&](const Rect& rect, const char* label) {
+      renderer.fillRectDither(rect.x, rect.y, rect.width, rect.height, Color::White);
+      renderer.drawRect(rect.x, rect.y, rect.width, rect.height, true);
+      const int textX = rect.x + (rect.width - widthOf(label)) / 2;
+      const int textY = rect.y + (rect.height - lineHeight) / 2;
+      renderer.drawText(UI_12_FONT_ID, textX, textY, label, true, EpdFontFamily::BOLD);
+    };
+    drawTouchButton(minusRect, "-");
+    drawTouchButton(plusRect, "+");
+  }
+
   // Live preview of the resulting wall-clock time, so users can verify against a watch.
   if (halClock.isAvailable()) {
     char timeBuf[9];
@@ -206,6 +338,8 @@ void ClockOffsetActivity::render(RenderLock&&) {
       renderer.drawCenteredText(UI_10_FONT_ID, centreY + 60, preview);
     }
   }
+
+  renderUi();
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_NEXT_FIELD), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

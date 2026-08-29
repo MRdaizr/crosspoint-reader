@@ -8,23 +8,9 @@
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
 #include "components/UITheme.h"
-#include "fontIds.h"
 #include "util/DynamicFont.h"
 
-int XtcReaderChapterSelectionActivity::getPageItems() const {
-  constexpr int lineHeight = 30;
-
-  const int screenHeight = renderer.getScreenHeight();
-  const auto orientation = renderer.getOrientation();
-  // In inverted portrait, the hint row is drawn near the logical top.
-  // Reserve vertical space so the list starts below the hints.
-  const bool isPortraitInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
-  const int hintGutterHeight = isPortraitInverted ? 50 : 0;
-  const int startY = 60 + hintGutterHeight;
-  const int availableHeight = screenHeight - startY - lineHeight;
-  // Clamp to at least one item to prevent empty page math.
-  return std::max(1, availableHeight / lineHeight);
-}
+namespace fui = freeink::ui;
 
 int XtcReaderChapterSelectionActivity::findChapterIndexForPage(uint32_t page) const {
   if (!xtc) {
@@ -41,115 +27,44 @@ int XtcReaderChapterSelectionActivity::findChapterIndexForPage(uint32_t page) co
 }
 
 void XtcReaderChapterSelectionActivity::onEnter() {
-  Activity::onEnter();
+  UiListActivity::onEnter();
 
   if (!xtc) {
     return;
   }
 
-  selectorIndex = findChapterIndexForPage(currentPage);
+  nav.selected = findChapterIndexForPage(currentPage);
 
   sdFontSystem.ensureLoaded(renderer);
 
-  requestUpdate();
 }
 
-void XtcReaderChapterSelectionActivity::onExit() { Activity::onExit(); }
-
-void XtcReaderChapterSelectionActivity::loop() {
-  const int pageItems = getPageItems();
-  const int totalItems = static_cast<int>(xtc->getChapters().size());
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    const auto& chapters = xtc->getChapters();
-    if (!chapters.empty() && selectorIndex >= 0 && selectorIndex < static_cast<int>(chapters.size())) {
-      setResult(PageResult{chapters[selectorIndex].startPage});
-      finish();
-    }
-  } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    ActivityResult result;
-    result.isCancelled = true;
-    setResult(std::move(result));
-    finish();
-  }
-
-  buttonNavigator.onNextRelease([this, totalItems] {
-    selectorIndex = ButtonNavigator::nextIndex(selectorIndex, totalItems);
-    requestUpdate();
-  });
-
-  buttonNavigator.onPreviousRelease([this, totalItems] {
-    selectorIndex = ButtonNavigator::previousIndex(selectorIndex, totalItems);
-    requestUpdate();
-  });
-
-  buttonNavigator.onNextContinuous([this, totalItems, pageItems] {
-    selectorIndex = ButtonNavigator::nextPageIndex(selectorIndex, totalItems, pageItems);
-    requestUpdate();
-  });
-
-  buttonNavigator.onPreviousContinuous([this, totalItems, pageItems] {
-    selectorIndex = ButtonNavigator::previousPageIndex(selectorIndex, totalItems, pageItems);
-    requestUpdate();
-  });
+void XtcReaderChapterSelectionActivity::activateIndex(const int index) {
+  if (!xtc || index < 0 || index >= listCount()) return;
+  app.clearTapFlash();
+  nav.selected = index;
+  setResult(PageResult{xtc->getChapters()[static_cast<size_t>(index)].startPage});
+  finish();
 }
 
-void XtcReaderChapterSelectionActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto orientation = renderer.getOrientation();
-  // Landscape orientation: reserve a horizontal gutter for button hints.
-  const bool isLandscapeCw = orientation == GfxRenderer::Orientation::LandscapeClockwise;
-  const bool isLandscapeCcw = orientation == GfxRenderer::Orientation::LandscapeCounterClockwise;
-  // Inverted portrait: reserve vertical space for hints at the top.
-  const bool isPortraitInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
-  const int hintGutterWidth = (isLandscapeCw || isLandscapeCcw) ? 30 : 0;
-  // Landscape CW places hints on the left edge; CCW keeps them on the right.
-  const int contentX = isLandscapeCw ? hintGutterWidth : 0;
-  const int contentWidth = pageWidth - hintGutterWidth;
-  const int hintGutterHeight = isPortraitInverted ? 50 : 0;
-  const int contentY = hintGutterHeight;
-  const int pageItems = getPageItems();
-  // Manual centering to honor content gutters.
-  const int titleX =
-      contentX + (contentWidth - renderer.getTextWidth(UI_12_FONT_ID, tr(STR_SELECT_CHAPTER), EpdFontFamily::BOLD)) / 2;
-  renderer.drawText(UI_12_FONT_ID, titleX, 15 + contentY, tr(STR_SELECT_CHAPTER), true, EpdFontFamily::BOLD);
-
-  const auto& chapters = xtc->getChapters();
-  if (chapters.empty()) {
-    // Center the empty state within the gutter-safe content region.
-    const int emptyX = contentX + (contentWidth - renderer.getTextWidth(UI_10_FONT_ID, tr(STR_NO_CHAPTERS))) / 2;
-    renderer.drawText(UI_10_FONT_ID, emptyX, 120 + contentY, tr(STR_NO_CHAPTERS));
-    renderer.displayBuffer();
+void XtcReaderChapterSelectionActivity::buildScreen(UiScreen& screen) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                      static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  if (!xtc || xtc->getChapters().empty()) {
+    screen.centeredText(tr(STR_NO_CHAPTERS), screen.theme().bodyText);
     return;
   }
-
-  const auto pageStartIndex = selectorIndex / pageItems * pageItems;
-  std::string visibleText;
-  for (int i = pageStartIndex; i < static_cast<int>(chapters.size()) && i < pageStartIndex + pageItems; i++) {
-    const auto& chapter = chapters[i];
-    visibleText += chapter.name.empty() ? tr(STR_UNNAMED) : chapter.name;
-    visibleText += '\n';
+  rowLabels.clear(); rowItems.clear();
+  rowLabels.reserve(xtc->getChapters().size()); rowItems.reserve(xtc->getChapters().size());
+  for (size_t i = 0; i < xtc->getChapters().size(); ++i) {
+    const auto& chapter = xtc->getChapters()[i];
+    rowLabels.push_back(chapter.name.empty() ? std::string(tr(STR_UNNAMED)) : chapter.name);
+    fui::ListItem item; item.label = rowLabels.back().c_str(); item.actionValue = static_cast<int16_t>(i); item.icon = {};
+    rowItems.push_back(item);
   }
-  visibleText += "\xe2\x80\xa6";
-  const int chapterTitleFontId = DynamicFont::fontForCjkText(renderer, visibleText.c_str(), UI_10_FONT_ID);
-  DynamicFont::prewarmIfSdFont(renderer, chapterTitleFontId, visibleText);
-
-  // Highlight only the content area, not the hint gutters.
-  renderer.fillRect(contentX, 60 + contentY + (selectorIndex % pageItems) * 30 - 2, contentWidth - 1, 30);
-  for (int i = pageStartIndex; i < static_cast<int>(chapters.size()) && i < pageStartIndex + pageItems; i++) {
-    const auto& chapter = chapters[i];
-    const char* title = chapter.name.empty() ? tr(STR_UNNAMED) : chapter.name.c_str();
-    renderer.drawText(chapterTitleFontId, contentX + 20, 60 + contentY + (i % pageItems) * 30, title,
-                      i != selectorIndex);
-  }
-
-  // Skip button hints in landscape CW mode (they overlap content)
-  if (renderer.getOrientation() != GfxRenderer::LandscapeClockwise) {
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  }
-
-  renderer.displayBuffer();
+  fui::ListProps props; props.items = rowItems.data(); props.count = static_cast<uint16_t>(rowItems.size());
+  props.action = ACTION_ROW; props.inputMask = fui::InputTouch; props.labelText = screen.theme().smallText; props.labelText.maxLines = 2;
+  syncListViewport(screen, props); screen.list(props);
 }

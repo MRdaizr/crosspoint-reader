@@ -61,7 +61,7 @@ void FlashcardDeckListActivity::onEnter() {
 }
 
 void FlashcardDeckListActivity::onExit() {
-  Activity::onExit();
+  UiListActivity::onExit();
   decks.clear();
   rowItems.clear();
   fileNameBuffer.reset();

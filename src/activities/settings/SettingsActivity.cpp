@@ -24,6 +24,8 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
+namespace fui = freeink::ui;
+
 const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_READER,
                                                               StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
 
@@ -84,23 +86,23 @@ void SettingsActivity::rebuildSettingsLists() {
       break;
   }
   settingsCount = static_cast<int>(currentSettings->size());
+  rebuildRowItems();
 }
 
 void SettingsActivity::onEnter() {
-  Activity::onEnter();
+  // Reset the active tab before the base sizes/resets per-tab navigation so
+  // reopening Settings always starts from the first category's remembered
+  // row state rather than the category used on the previous visit.
+  selectedCategoryIndex = 0;
+  UiTabListActivity::onEnter();
 
   // Reset selection to first category
-  selectedCategoryIndex = 0;
-  selectedSettingIndex = 0;
   preserveQuickResumeTimeoutOn =
       SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT;
   quickResumeTimeoutAutoEnabled = false;
   syncQuickResumeTimeoutForSleepScreen(/*sleepScreenChanged=*/true, /*quickResumeTimeoutChanged=*/false);
 
   rebuildSettingsLists();
-
-  // Trigger first update
-  requestUpdate();
 }
 
 void SettingsActivity::onExit() {
@@ -109,78 +111,94 @@ void SettingsActivity::onExit() {
   UITheme::getInstance().reload();  // Re-apply theme in case it was changed
 }
 
-void SettingsActivity::loop() {
-  bool hasChangedCategory = false;
+void SettingsActivity::selectCategory(const int categoryIndex) {
+  selectedCategoryIndex = std::clamp(categoryIndex, 0, categoryCount - 1);
+  switch (selectedCategoryIndex) {
+    case 0:
+      currentSettings = &displaySettings;
+      break;
+    case 1:
+      currentSettings = &readerSettings;
+      break;
+    case 2:
+      currentSettings = &controlsSettings;
+      break;
+    case 3:
+      currentSettings = &systemSettings;
+      break;
+  }
+  settingsCount = static_cast<int>(currentSettings->size());
+  activeNav().top = 0;
+  rebuildRowItems();
+}
 
-  // Handle actions with early return
-  if (mappedInput.wasPressed(MappedInputManager::Button::Confirm)) {
-    if (selectedSettingIndex == 0) {
-      selectedCategoryIndex = (selectedCategoryIndex < categoryCount - 1) ? (selectedCategoryIndex + 1) : 0;
-      hasChangedCategory = true;
-      requestUpdate();
+void SettingsActivity::rebuildRowItems() {
+  if (!currentSettings) return;
+  rowValues.assign(currentSettings->size(), std::string());
+  rowItems.clear();
+  rowItems.reserve(currentSettings->size());
+  for (size_t i = 0; i < currentSettings->size(); ++i) {
+    fui::ListItem item;
+    item.label = I18N.get((*currentSettings)[i].nameId);
+    item.actionValue = static_cast<int16_t>(i);
+    // RoundedRaffExt is text-first; keeping all generic settings rows iconless
+    // also prevents a later theme change from reintroducing menu icons.
+    item.icon = {};
+    rowItems.push_back(item);
+  }
+}
+
+void SettingsActivity::onTabAction(const int index) {
+  selectCategory(index);
+  activeNav().selected = 0;
+  app.clearTapFlash();
+}
+
+void SettingsActivity::activateIndex(const int index) {
+  if (index < 0 || index >= settingsCount) return;
+  app.clearTapFlash();
+  activeNav().selected = index + 1;
+  toggleCurrentSetting();
+  if (mappedInput.hasTouch()) activeNav().selected = 0;
+}
+
+void SettingsActivity::stepTab(const int direction) {
+  const bool onTabBar = ringPos() == 0;
+  const int next = direction > 0 ? ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount)
+                                 : ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount);
+  selectCategory(next);
+  activeNav().selected = onTabBar ? 0 : 1;
+  requestUpdate();
+}
+
+bool SettingsActivity::handleButtons() {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    if (ringPos() == 0) {
+      stepTab(1);
     } else {
       toggleCurrentSetting();
       requestUpdate();
-      return;
     }
+    return true;
   }
-
-  if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
-    if (selectedSettingIndex > 0) {
-      selectedSettingIndex = 0;
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    if (ringPos() > 0) {
+      activeNav().selected = 0;
       requestUpdate();
     } else {
       SETTINGS.saveToFile();
       onGoHome();
     }
-    return;
+    return true;
   }
-
-  // Handle navigation
-  buttonNavigator.onNextRelease([this] {
-    selectedSettingIndex = ButtonNavigator::nextIndex(selectedSettingIndex, settingsCount + 1);
-    requestUpdate();
-  });
-
-  buttonNavigator.onPreviousRelease([this] {
-    selectedSettingIndex = ButtonNavigator::previousIndex(selectedSettingIndex, settingsCount + 1);
-    requestUpdate();
-  });
-
-  buttonNavigator.onNextContinuous([this, &hasChangedCategory] {
-    hasChangedCategory = true;
-    selectedCategoryIndex = ButtonNavigator::nextIndex(selectedCategoryIndex, categoryCount);
-    requestUpdate();
-  });
-
-  buttonNavigator.onPreviousContinuous([this, &hasChangedCategory] {
-    hasChangedCategory = true;
-    selectedCategoryIndex = ButtonNavigator::previousIndex(selectedCategoryIndex, categoryCount);
-    requestUpdate();
-  });
-
-  if (hasChangedCategory) {
-    selectedSettingIndex = (selectedSettingIndex == 0) ? 0 : 1;
-    switch (selectedCategoryIndex) {
-      case 0:
-        currentSettings = &displaySettings;
-        break;
-      case 1:
-        currentSettings = &readerSettings;
-        break;
-      case 2:
-        currentSettings = &controlsSettings;
-        break;
-      case 3:
-        currentSettings = &systemSettings;
-        break;
-    }
-    settingsCount = static_cast<int>(currentSettings->size());
-  }
+  return false;
 }
 
 void SettingsActivity::toggleCurrentSetting() {
-  int selectedSetting = selectedSettingIndex - 1;
+  // UiTabListActivity exposes a ring: position 0 is the tab bar and
+  // positions 1..N are rows.  Keep all setting mutations keyed off that
+  // ring position so touch and physical-button activation share one path.
+  int selectedSetting = ringPos() - 1;
   if (selectedSetting < 0 || selectedSetting >= settingsCount) {
     return;
   }
@@ -274,7 +292,7 @@ void SettingsActivity::toggleCurrentSetting() {
   syncQuickResumeTimeoutForSleepScreen(sleepScreenChanged, quickResumeTimeoutChanged);
   SETTINGS.saveToFile();
   rebuildSettingsLists();
-  selectedSettingIndex = std::min(selectedSettingIndex, settingsCount);
+  activeNav().selected = std::min(activeNav().selected, settingsCount);
 }
 
 void SettingsActivity::syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged) {
@@ -316,77 +334,74 @@ void SettingsActivity::openSleepTimeoutPicker() {
       });
 }
 
-void SettingsActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto pageHeight = renderer.getScreenHeight();
-
+void SettingsActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
+  screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                      static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  buildTabBar(screen);
 
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_SETTINGS_TITLE),
-                 CROSSPOINT_VERSION);
-
-  std::vector<TabInfo> tabs;
-  tabs.reserve(categoryCount);
-  for (int i = 0; i < categoryCount; i++) {
-    tabs.push_back({I18N.get(categoryNames[i]), selectedCategoryIndex == i});
-  }
-  GUI.drawTabBar(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, pageWidth, metrics.tabBarHeight}, tabs,
-                 selectedSettingIndex == 0);
-
-  const auto& settings = *currentSettings;
-  GUI.drawList(
-      renderer,
-      Rect{0, metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing, pageWidth,
-           pageHeight - (metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.buttonHintsHeight +
-                         metrics.verticalSpacing * 2)},
-      settingsCount, selectedSettingIndex - 1,
-      [&settings](int index) { return std::string(I18N.get(settings[index].nameId)); }, nullptr, nullptr,
-      [&settings](int i) {
-        const auto& setting = settings[i];
-        std::string valueText = "";
-        if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
-          const bool value = SETTINGS.*(setting.valuePtr);
-          valueText = value ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-        } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
-          const uint8_t value = SETTINGS.*(setting.valuePtr);
-          valueText = I18N.get(setting.enumValues[value]);
-        } else if (setting.type == SettingType::ENUM && setting.valueGetter) {
-          const uint8_t value = setting.valueGetter();
-          if (!setting.enumStringValues.empty() && value < setting.enumStringValues.size()) {
-            valueText = setting.enumStringValues[value];
-          } else if (value < setting.enumValues.size()) {
-            valueText = I18N.get(setting.enumValues[value]);
-          }
-        } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
-          if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
-            char valueBuffer[32];
-            if (SETTINGS.sleepTimeoutMinutes >= CrossPointSettings::SLEEP_TIMEOUT_NEVER_MINUTES) {
-              valueText = tr(STR_SLEEP_NEVER);
-            } else {
-              snprintf(valueBuffer, sizeof(valueBuffer), tr(STR_SLEEP_TIMER_VALUE_FORMAT),
-                       static_cast<unsigned int>(SETTINGS.*(setting.valuePtr)));
-              valueText = valueBuffer;
-            }
-          } else {
-            valueText = std::to_string(SETTINGS.*(setting.valuePtr));
-          }
+  if (!currentSettings) return;
+  for (size_t i = 0; i < currentSettings->size(); ++i) {
+    const auto& setting = (*currentSettings)[i];
+    std::string value;
+    if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
+      value = (SETTINGS.*(setting.valuePtr)) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+    } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
+      const uint8_t selected = SETTINGS.*(setting.valuePtr);
+      if (selected < setting.enumValues.size()) value = I18N.get(setting.enumValues[selected]);
+    } else if (setting.type == SettingType::ENUM && setting.valueGetter) {
+      const uint8_t selected = setting.valueGetter();
+      if (!setting.enumStringValues.empty() && selected < setting.enumStringValues.size()) {
+        value = setting.enumStringValues[selected];
+      } else if (selected < setting.enumValues.size()) {
+        value = I18N.get(setting.enumValues[selected]);
+      }
+    } else if (setting.type == SettingType::VALUE && setting.valuePtr != nullptr) {
+      if (setting.nameId == StrId::STR_TIME_TO_SLEEP) {
+        char buffer[32];
+        if (SETTINGS.sleepTimeoutMinutes >= CrossPointSettings::SLEEP_TIMEOUT_NEVER_MINUTES) {
+          value = tr(STR_SLEEP_NEVER);
+        } else {
+          snprintf(buffer, sizeof(buffer), tr(STR_SLEEP_TIMER_VALUE_FORMAT),
+                   static_cast<unsigned int>(SETTINGS.*(setting.valuePtr)));
+          value = buffer;
         }
-        return valueText;
-      },
-      true);
+      } else {
+        value = std::to_string(SETTINGS.*(setting.valuePtr));
+      }
+    }
+    rowValues[i] = std::move(value);
+    rowItems[i].value = rowValues[i].empty() ? nullptr : rowValues[i].c_str();
+  }
 
-  // Draw help text
-  const auto confirmLabel =
-      (selectedSettingIndex == 0)
-          ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
-          : (selectedSettingIndex > 0 && (*currentSettings)[selectedSettingIndex - 1].nameId == StrId::STR_TIME_TO_SLEEP
-                 ? tr(STR_SELECT)
-                 : tr(STR_TOGGLE));
+  fui::ListProps props;
+  props.items = rowItems.data();
+  props.count = static_cast<uint16_t>(rowItems.size());
+  props.action = ACTION_ROW;
+  props.inputMask = fui::InputTouch;
+  props.valueInset = 8;
+  props.labelText = screen.theme().bodyText;
+  props.labelText.maxLines = 2;
+  props.valueText = screen.theme().smallText;
+  syncTabListViewport(screen, props);
+  screen.list(props);
+}
+
+void SettingsActivity::drawChrome() {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
+                 tr(STR_SETTINGS_TITLE), CROSSPOINT_VERSION);
+}
+
+void SettingsActivity::drawFooter() {
+  const int ring = ringPos();
+  const char* confirmLabel = tr(STR_TOGGLE);
+  if (ring == 0) {
+    confirmLabel = I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount]);
+  } else if (ring > 0 && currentSettings && ring - 1 < settingsCount &&
+             (*currentSettings)[ring - 1].nameId == StrId::STR_TIME_TO_SLEEP) {
+    confirmLabel = tr(STR_SELECT);
+  }
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-
-  // Always use standard refresh for settings screen
-  renderer.displayBuffer();
 }

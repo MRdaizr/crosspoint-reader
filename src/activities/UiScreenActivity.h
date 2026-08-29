@@ -13,6 +13,7 @@ class UiScreenActivity : public Activity, protected UiAppHost {
                    bool wantsTouchLongPress = false);
 
   void onEnter() override;
+  void onExit() override;
   void loop() override;
   void render(RenderLock&& lock) override;
 
@@ -29,4 +30,3 @@ class UiScreenActivity : public Activity, protected UiAppHost {
   static void screenTrampoline(UiScreen& screen, void* user);
   bool wantsTouchLongPress = false;
 };
-

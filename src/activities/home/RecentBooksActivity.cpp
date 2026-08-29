@@ -12,8 +12,9 @@
 #include "SdCardFontSystem.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
-#include "fontIds.h"
 #include "util/DynamicFont.h"
+
+namespace fui = freeink::ui;
 
 namespace {
 // Hold threshold for the long-press "remove from list" action (firmware convention).
@@ -40,7 +41,7 @@ const char* recentBookAuthorGetter(const void* context, uint32_t index) {
 void RecentBooksActivity::loadRecentBooks() { recentBooks = RECENT_BOOKS.getBooks(); }
 
 void RecentBooksActivity::onEnter() {
-  Activity::onEnter();
+  UiListActivity::onEnter();
 
   // Prune entries whose backing files are gone; this is one of two interaction
   // points where the persistent store gets cleaned (the other is addBook).
@@ -51,71 +52,60 @@ void RecentBooksActivity::onEnter() {
   // Load data
   loadRecentBooks();
 
-  selectorIndex = 0;
+  nav.selected = 0;
   sdFontSystem.ensureLoaded(renderer);
-  requestUpdate();
 }
 
 void RecentBooksActivity::onExit() {
-  Activity::onExit();
+  UiListActivity::onExit();
   recentBooks.clear();
 }
 
-void RecentBooksActivity::loop() {
-  const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, true);
-
+bool RecentBooksActivity::handleCustomInput() {
   // After a long-press has fired, swallow input until Confirm is physically released
   // (so the release doesn't also open the book; re-arm only once the button is up).
   if (longPressFired) {
     if (!mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
       longPressFired = false;
     }
-    return;
+    return true;
   }
 
   // Long-press Confirm on the selected book: prompt to remove it from the list.
   // Fires when the hold times out while still held (firmware hold-to-act pattern,
   // cf. FileBrowserActivity BACK long-press).
-  if (!recentBooks.empty() && selectorIndex < recentBooks.size() &&
+  if (!recentBooks.empty() && nav.selected < recentBooks.size() &&
       mappedInput.isPressed(MappedInputManager::Button::Confirm) && mappedInput.getHeldTime() >= LONG_PRESS_MS) {
     longPressFired = true;
-    promptRemoveBook(recentBooks[selectorIndex].path, recentBooks[selectorIndex].title);
-    return;
+    promptRemoveBook(recentBooks[nav.selected].path, recentBooks[nav.selected].title);
+    return true;
   }
+  return false;
+}
 
+void RecentBooksActivity::onRowLongPress(const int index) {
+  if (index >= 0 && index < static_cast<int>(recentBooks.size())) {
+    longPressFired = true;
+    promptRemoveBook(recentBooks[static_cast<size_t>(index)].path, recentBooks[static_cast<size_t>(index)].title);
+  }
+}
+
+bool RecentBooksActivity::handleButtons() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (!recentBooks.empty() && selectorIndex < static_cast<int>(recentBooks.size())) {
-      LOG_DBG("RBA", "Selected recent book: %s", recentBooks[selectorIndex].path.c_str());
-      onSelectBook(recentBooks[selectorIndex].path);
-      return;
+    if (longPressFired) {
+      longPressFired = false;
+      return true;
     }
+    if (!recentBooks.empty() && nav.selected < static_cast<int>(recentBooks.size())) {
+      activateIndex(nav.selected);
+    }
+    return true;
   }
-
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     onGoHome();
+    return true;
   }
-
-  int listSize = static_cast<int>(recentBooks.size());
-
-  buttonNavigator.onNextRelease([this, listSize] {
-    selectorIndex = ButtonNavigator::nextIndex(static_cast<int>(selectorIndex), listSize);
-    requestUpdate();
-  });
-
-  buttonNavigator.onPreviousRelease([this, listSize] {
-    selectorIndex = ButtonNavigator::previousIndex(static_cast<int>(selectorIndex), listSize);
-    requestUpdate();
-  });
-
-  buttonNavigator.onNextContinuous([this, listSize, pageItems] {
-    selectorIndex = ButtonNavigator::nextPageIndex(static_cast<int>(selectorIndex), listSize, pageItems);
-    requestUpdate();
-  });
-
-  buttonNavigator.onPreviousContinuous([this, listSize, pageItems] {
-    selectorIndex = ButtonNavigator::previousPageIndex(static_cast<int>(selectorIndex), listSize, pageItems);
-    requestUpdate();
-  });
+  return UiListActivity::handleButtons();
 }
 
 void RecentBooksActivity::promptRemoveBook(const std::string& path, const std::string& title) {
@@ -128,9 +118,9 @@ void RecentBooksActivity::promptRemoveBook(const std::string& path, const std::s
       LOG_DBG("RBA", "Removed from recents: %s", path.c_str());
       loadRecentBooks();
       if (recentBooks.empty()) {
-        selectorIndex = 0;
-      } else if (selectorIndex >= recentBooks.size()) {
-        selectorIndex = recentBooks.size() - 1;
+        nav.selected = 0;
+      } else if (nav.selected >= recentBooks.size()) {
+        nav.selected = static_cast<int>(recentBooks.size() - 1);
       }
       requestUpdate(true);
     }
@@ -141,66 +131,37 @@ void RecentBooksActivity::promptRemoveBook(const std::string& path, const std::s
       std::move(handler));
 }
 
-void RecentBooksActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+void RecentBooksActivity::activateIndex(const int index) {
+  if (index < 0 || index >= static_cast<int>(recentBooks.size())) return;
+  app.clearTapFlash();
+  nav.selected = index;
+  LOG_DBG("RBA", "Selected recent book: %s", recentBooks[static_cast<size_t>(index)].path.c_str());
+  onSelectBook(recentBooks[static_cast<size_t>(index)].path);
+}
 
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto pageHeight = renderer.getScreenHeight();
+void RecentBooksActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_MENU_RECENT_BOOKS));
-
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
-
-  // Recent tab
+  screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                      static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   if (recentBooks.empty()) {
-    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, tr(STR_NO_RECENT_BOOKS));
-  } else {
-    const int pageItems =
-        std::max(1, UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, true));
-    const int pageStartIndex = static_cast<int>(selectorIndex) / pageItems * pageItems;
-    std::string visibleText;
-    for (int i = pageStartIndex; i < static_cast<int>(recentBooks.size()) && i < pageStartIndex + pageItems; i++) {
-      visibleText += recentBooks[i].title;
-      visibleText += '\n';
-    }
-    visibleText += "\xe2\x80\xa6";  // ellipsis used by truncatedText()
-    const int recentTitleFontId = DynamicFont::fontForCjkText(renderer, visibleText.c_str(), 0);
-    const int visibleCount = std::min(static_cast<int>(recentBooks.size()) - pageStartIndex, pageItems);
-    const RecentBooksTextContext prewarmContext{&recentBooks, pageStartIndex};
-    DynamicFont::prewarmIfSdFont(renderer, recentTitleFontId, recentBookTitleGetter, &prewarmContext,
-                                 static_cast<uint32_t>(std::max(0, visibleCount)));
-    // The renderer truncates titles with an ellipsis; keep that glyph resident
-    // without rebuilding the title batch.
-    DynamicFont::prewarmIfSdFont(renderer, recentTitleFontId, "\xe2\x80\xa6");
-
-    // BaseTheme draws authors as per-row subtitles. Batch them first so those
-    // row callbacks become resident-cache subset hits instead of repeatedly
-    // reopening the .cpfont file.
-    int recentAuthorFontId = 0;
-    for (int i = pageStartIndex; i < pageStartIndex + visibleCount; i++) {
-      const int candidate = DynamicFont::fontForCjkText(renderer, recentBooks[i].author.c_str(), SMALL_FONT_ID);
-      if (renderer.isSdCardFont(candidate)) {
-        recentAuthorFontId = candidate;
-        break;
-      }
-    }
-    if (recentAuthorFontId != 0) {
-      DynamicFont::prewarmIfSdFont(renderer, recentAuthorFontId, recentBookAuthorGetter, &prewarmContext,
-                                   static_cast<uint32_t>(visibleCount));
-    }
-
-    GUI.drawList(
-        renderer, Rect{0, contentTop, pageWidth, contentHeight}, recentBooks.size(), selectorIndex,
-        [this](int index) { return recentBooks[index].title; }, [this](int index) { return recentBooks[index].author; },
-        [this](int index) { return UITheme::getFileIcon(recentBooks[index].path); }, nullptr, false, nullptr,
-        recentTitleFontId);
+    screen.centeredText(tr(STR_NO_RECENT_BOOKS), screen.theme().bodyText);
+    return;
   }
+  rowLabels.clear(); rowSubtitles.clear(); rowItems.clear();
+  rowLabels.reserve(recentBooks.size()); rowSubtitles.reserve(recentBooks.size()); rowItems.reserve(recentBooks.size());
+  for (size_t i = 0; i < recentBooks.size(); ++i) {
+    rowLabels.push_back(recentBooks[i].title);
+    rowSubtitles.push_back(recentBooks[i].author);
+    fui::ListItem item; item.label = rowLabels.back().c_str(); item.subtitle = rowSubtitles.back().empty() ? nullptr : rowSubtitles.back().c_str();
+    item.actionValue = static_cast<int16_t>(i); item.icon = {}; rowItems.push_back(item);
+  }
+  fui::ListProps props; props.items = rowItems.data(); props.count = static_cast<uint16_t>(rowItems.size()); props.action = ACTION_ROW;
+  props.inputMask = fui::InputTouch | fui::InputLongPress; props.subtitleText = screen.theme().smallText; props.subtitleText.maxLines = 1;
+  syncListViewport(screen, props, true); screen.list(props);
+}
 
-  // Help text
+void RecentBooksActivity::drawFooter() {
   const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-
-  renderer.displayBuffer();
 }

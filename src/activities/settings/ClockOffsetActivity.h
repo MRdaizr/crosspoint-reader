@@ -1,15 +1,21 @@
 #pragma once
 
+#include <GfxRenderer.h>
+
+#include <cstdint>
+
 #include "activities/Activity.h"
+#include "components/UiAppHost.h"
 #include "util/ButtonNavigator.h"
+
+struct Rect;
 
 // Dedicated UTC offset picker for the status bar clock.
 // Three editable fields (sign, hours, minutes); Confirm cycles fields, Up/Down adjust the active one.
 // Supports the full IANA UTC offset range in 15 minute steps, including oddball zones like Nepal (+5:45).
-class ClockOffsetActivity final : public Activity {
+class ClockOffsetActivity final : public Activity, private UiAppHost {
  public:
-  explicit ClockOffsetActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("ClockOffset", renderer, mappedInput) {}
+  explicit ClockOffsetActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
 
   void onEnter() override;
   void onExit() override;
@@ -34,4 +40,11 @@ class ClockOffsetActivity final : public Activity {
   void saveToSettings() const;
   void adjustActiveField(int delta);
   void clampForSign();
+  void getFieldRects(Rect& signRect, Rect& hoursRect, Rect& minutesRect) const;
+  void getTouchControlRects(Rect& minusRect, Rect& plusRect) const;
+  void buildOffsetScreen(UiScreen& screen);
+  static void offsetScreen(UiScreen& screen, void* user);
+  static void onFieldEvent(const freeink::ui::ActionEvent& event, void* user);
+  static void onStepEvent(const freeink::ui::ActionEvent& event, void* user);
+  bool routedRelease = false;
 };

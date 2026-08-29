@@ -3,32 +3,25 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
-#include <functional>
-
-#include "activities/Activity.h"
-#include "components/UITheme.h"
-#include "util/ButtonNavigator.h"
+#include "activities/UiListActivity.h"
 
 class MappedInputManager;
 
 /**
  * Activity for selecting UI language
  */
-class LanguageSelectActivity final : public Activity {
+class LanguageSelectActivity final : public UiListActivity {
  public:
-  explicit LanguageSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("LanguageSelect", renderer, mappedInput) {}
+  explicit LanguageSelectActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
 
   void onEnter() override;
-  void onExit() override;
-  void loop() override;
-  void render(RenderLock&&) override;
 
  private:
-  void handleSelection();
+  int listCount() const override { return totalItems; }
+  void buildScreen(UiScreen& screen) override;
+  void activateIndex(int index) override;
+  const char* headerTitle() const override { return tr(STR_LANGUAGE); }
 
-  void onBack() { finish(); }
-  ButtonNavigator buttonNavigator;
-  int selectedIndex = 0;
   constexpr static uint8_t totalItems = getLanguageCount();
+  freeink::ui::ListItem rowItems[totalItems]{};
 };

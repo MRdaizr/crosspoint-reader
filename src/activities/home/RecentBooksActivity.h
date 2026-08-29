@@ -1,26 +1,23 @@
 #pragma once
 #include <I18n.h>
 
-#include <functional>
 #include <string>
 #include <vector>
 
 #include "RecentBooksStore.h"
-#include "activities/Activity.h"
-#include "util/ButtonNavigator.h"
+#include "activities/UiListActivity.h"
 
-class RecentBooksActivity final : public Activity {
+class RecentBooksActivity final : public UiListActivity {
  private:
-  ButtonNavigator buttonNavigator;
-
-  size_t selectorIndex = 0;
-
   // Set when a long-press has fired; input is swallowed until Confirm is released
   // again so the release doesn't also open the book.
   bool longPressFired = false;
 
   // Recent tab state
   std::vector<RecentBook> recentBooks;
+  std::vector<std::string> rowLabels;
+  std::vector<std::string> rowSubtitles;
+  std::vector<freeink::ui::ListItem> rowItems;
 
   // Data loading
   void loadRecentBooks();
@@ -30,9 +27,17 @@ class RecentBooksActivity final : public Activity {
 
  public:
   explicit RecentBooksActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("RecentBooks", renderer, mappedInput) {}
+      : UiListActivity("RecentBooks", renderer, mappedInput, true) {}
   void onEnter() override;
   void onExit() override;
-  void loop() override;
-  void render(RenderLock&&) override;
+
+ private:
+  int listCount() const override { return static_cast<int>(recentBooks.size()); }
+  void buildScreen(UiScreen& screen) override;
+  void activateIndex(int index) override;
+  void onRowLongPress(int index) override;
+  bool handleCustomInput() override;
+  bool handleButtons() override;
+  const char* headerTitle() const override { return tr(STR_MENU_RECENT_BOOKS); }
+  void drawFooter() override;
 };

@@ -1,33 +1,35 @@
 #pragma once
 #include <Epub.h>
+#include <I18n.h>
 
 #include <memory>
 
 #include "../../BookmarkEntry.h"
-#include "../Activity.h"
-#include "util/ButtonNavigator.h"
+#include "../UiListActivity.h"
 
-class EpubReaderBookmarksActivity final : public Activity {
+class EpubReaderBookmarksActivity final : public UiListActivity {
   std::shared_ptr<Epub> epub;
   std::string epubPath;
-  ButtonNavigator buttonNavigator;
-  int selectorIndex = 0;
   std::vector<BookmarkEntry> bookmarks;
   int confirmingDelete = 0;  // 0 = hide dialog, 1 = show dialog, 2 = allow confirmation to delete
+  int deleteIndex = 0;
+  std::vector<std::string> rowLabels;
+  std::vector<std::string> rowSubtitles;
+  std::vector<freeink::ui::ListItem> rowItems;
 
  public:
   explicit EpubReaderBookmarksActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                        const std::shared_ptr<Epub>& epub, const std::string& epubPath)
-      : Activity("EpubReaderBookmarks", renderer, mappedInput), epub(epub), epubPath(epubPath) {}
+      : UiListActivity("EpubReaderBookmarks", renderer, mappedInput, true), epub(epub), epubPath(epubPath) {}
   void onEnter() override;
-  void onExit() override;
-  void loop() override;
-  void render(RenderLock&&) override;
 
  private:
-  // Calculate the vertical space to reserve for button hints based on orientation
-  int getGutterBottom(const GfxRenderer& renderer);
-
-  // Calculate the height available for the bookmark list based on orientation
-  int getListHeight(const GfxRenderer& renderer);
+  int listCount() const override { return confirmingDelete ? (bookmarks.empty() ? 0 : 1) : static_cast<int>(bookmarks.size()); }
+  void buildScreen(UiScreen& screen) override;
+  void activateIndex(int index) override;
+  void onRowLongPress(int index) override;
+  bool handleCustomInput() override;
+  bool handleButtons() override;
+  const char* headerTitle() const override { return tr(STR_BOOKMARKS); }
+  void drawFooter() override;
 };

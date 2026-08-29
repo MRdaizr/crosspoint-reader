@@ -8,6 +8,7 @@
 #include "KOReaderSyncClient.h"
 #include "ProgressMapper.h"
 #include "activities/Activity.h"
+#include "components/UiAppHost.h"
 
 /**
  * Activity for syncing reading progress with KOReader sync server.
@@ -19,28 +20,18 @@
  * 4. Show comparison and options (Apply/Upload)
  * 5. Apply or upload progress
  */
-class KOReaderSyncActivity final : public Activity {
+class KOReaderSyncActivity final : public Activity, private UiAppHost {
  public:
   explicit KOReaderSyncActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& epubPath,
                                 int currentSpineIndex, int currentPage, int totalPagesInSpine,
                                 SavedProgressPosition localKoPos, std::string localChapterName,
-                                std::optional<uint16_t> currentParagraphIndex = std::nullopt)
-      : Activity("KOReaderSync", renderer, mappedInput),
-        epubPath(epubPath),
-        currentSpineIndex(currentSpineIndex),
-        currentPage(currentPage),
-        totalPagesInSpine(totalPagesInSpine),
-        currentParagraphIndex(currentParagraphIndex),
-        localChapterName(std::move(localChapterName)),
-        remoteProgress{},
-        remotePosition{},
-        localProgress(std::move(localKoPos)) {}
+                                std::optional<uint16_t> currentParagraphIndex = std::nullopt);
 
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
-  bool preventAutoSleep() override { return state == CONNECTING || state == SYNCING; }
+  bool preventAutoSleep() override { return state == CONNECTING || state == SYNCING || state == UPLOADING; }
 
  private:
   enum State {
@@ -90,4 +81,11 @@ class KOReaderSyncActivity final : public Activity {
   void ensureEpubLoaded();
   void saveProgressAndReturn(int spineIndex, int page);
   void returnToReader();
+
+  static constexpr freeink::ui::ActionId ACTION_ROW = 1;
+  static void resultScreen(UiScreen& screen, void* user);
+  static void onResultRow(const freeink::ui::ActionEvent& event, void* user);
+  void buildResultScreen(UiScreen& screen);
+  void chooseResultOption();
+  void startUpload();
 };

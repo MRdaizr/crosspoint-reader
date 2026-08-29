@@ -7,105 +7,75 @@
 
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
-#include "fontIds.h"
+#include "components/UiAppHelpers.h"
+
+namespace fui = freeink::ui;
 
 void EpubReaderFootnotesActivity::onEnter() {
-  Activity::onEnter();
-  selectedIndex = 0;
-  requestUpdate();
+  UiListActivity::onEnter();
+  rowLabels.clear();
+  rowSubtitles.clear();
+  rowItems.clear();
+  rowLabels.reserve(footnotes.size());
+  rowSubtitles.reserve(footnotes.size());
+  rowItems.reserve(footnotes.size());
+  for (const auto& footnote : footnotes) {
+    rowLabels.push_back(footnote.number[0] == '\0' ? std::string(tr(STR_LINK)) : footnote.number);
+    rowSubtitles.push_back(footnote.href);
+    fui::ListItem item;
+    item.label = rowLabels.back().c_str();
+    item.subtitle = rowSubtitles.back().empty() ? nullptr : rowSubtitles.back().c_str();
+    item.actionValue = static_cast<int16_t>(rowItems.size());
+    item.icon = {};
+    rowItems.push_back(item);
+  }
 }
 
-void EpubReaderFootnotesActivity::onExit() { Activity::onExit(); }
-
-void EpubReaderFootnotesActivity::loop() {
+bool EpubReaderFootnotesActivity::handleButtons() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     ActivityResult result;
     result.isCancelled = true;
     setResult(std::move(result));
     finish();
-    return;
+    return true;
   }
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-      mappedInput.wasReleased(MappedInputManager::Button::Power)) {
-    if (selectedIndex >= 0 && selectedIndex < static_cast<int>(footnotes.size())) {
-      setResult(FootnoteResult{footnotes[selectedIndex].href});
-      finish();
-    }
-    return;
+  if (mappedInput.wasReleased(MappedInputManager::Button::Power) && !footnotes.empty()) {
+    activateIndex(nav.selected);
+    return true;
   }
-
-  buttonNavigator.onNext([this] {
-    if (!footnotes.empty()) {
-      selectedIndex = (selectedIndex + 1) % footnotes.size();
-      requestUpdate();
-    }
-  });
-
-  buttonNavigator.onPrevious([this] {
-    if (!footnotes.empty()) {
-      selectedIndex = (selectedIndex - 1 + footnotes.size()) % footnotes.size();
-      requestUpdate();
-    }
-  });
+  return UiListActivity::handleButtons();
 }
 
-void EpubReaderFootnotesActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+void EpubReaderFootnotesActivity::activateIndex(const int index) {
+  if (index < 0 || index >= static_cast<int>(footnotes.size())) return;
+  app.clearTapFlash();
+  nav.selected = index;
+  setResult(FootnoteResult{footnotes[static_cast<size_t>(index)].href});
+  finish();
+}
 
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto orientation = renderer.getOrientation();
-  // Landscape orientation: reserve a horizontal gutter for button hints.
-  const bool isLandscapeCw = orientation == GfxRenderer::Orientation::LandscapeClockwise;
-  const bool isLandscapeCcw = orientation == GfxRenderer::Orientation::LandscapeCounterClockwise;
-  // Inverted portrait: reserve vertical space for hints at the top.
-  const bool isPortraitInverted = orientation == GfxRenderer::Orientation::PortraitInverted;
-  const int hintGutterWidth = (isLandscapeCw || isLandscapeCcw) ? 30 : 0;
-  // Landscape CW places hints on the left edge; CCW keeps them on the right.
-  const int contentX = isLandscapeCw ? hintGutterWidth : 0;
-  const int contentWidth = pageWidth - hintGutterWidth;
-  const int hintGutterHeight = isPortraitInverted ? 50 : 0;
-  const int contentY = hintGutterHeight;
-
-  // Manual centering to honor content gutters.
-  const int titleX =
-      contentX + (contentWidth - renderer.getTextWidth(UI_12_FONT_ID, tr(STR_FOOTNOTES), EpdFontFamily::BOLD)) / 2;
-  renderer.drawText(UI_12_FONT_ID, titleX, 15 + contentY, tr(STR_FOOTNOTES), true, EpdFontFamily::BOLD);
-
-  if (footnotes.empty()) {
-    renderer.drawCenteredText(UI_10_FONT_ID, 90 + contentY, tr(STR_NO_FOOTNOTES));
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
+void EpubReaderFootnotesActivity::buildScreen(UiScreen& screen) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                      static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  if (rowItems.empty()) {
+    screen.centeredText(tr(STR_NO_FOOTNOTES), screen.theme().bodyText);
     return;
   }
+  fui::ListProps props;
+  props.items = rowItems.data();
+  props.count = static_cast<uint16_t>(rowItems.size());
+  props.action = ACTION_ROW;
+  props.inputMask = fui::InputTouch;
+  props.subtitleText = screen.theme().smallText;
+  props.subtitleText.maxLines = 1;
+  syncListViewport(screen, props, true);
+  screen.list(props);
+}
 
-  constexpr int lineHeight = 36;
-  const int screenWidth = renderer.getScreenWidth();
-  const int marginLeft = contentX + 20;
-
-  const int visibleCount = std::max(1, (renderer.getScreenHeight() - contentY) / lineHeight);
-  if (selectedIndex < scrollOffset) scrollOffset = selectedIndex;
-  if (selectedIndex >= scrollOffset + visibleCount) scrollOffset = selectedIndex - visibleCount + 1;
-
-  for (int i = scrollOffset; i < static_cast<int>(footnotes.size()) && i < scrollOffset + visibleCount; i++) {
-    const int y = 60 + contentY + (i - scrollOffset) * lineHeight;
-    const bool isSelected = (i == selectedIndex);
-
-    if (isSelected) {
-      renderer.fillRect(0, y, screenWidth, lineHeight, true);
-    }
-
-    // Show footnote number and abbreviated href
-    std::string label = footnotes[i].number;
-    if (label.empty()) {
-      label = tr(STR_LINK);
-    }
-    renderer.drawText(UI_10_FONT_ID, marginLeft, y + 4, label.c_str(), !isSelected);
-  }
-
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), "", "");
+void EpubReaderFootnotesActivity::drawFooter() {
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), footnotes.empty() ? "" : tr(STR_SELECT),
+                                            tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-
-  renderer.displayBuffer();
 }

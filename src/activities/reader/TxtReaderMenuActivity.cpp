@@ -23,6 +23,7 @@ TxtReaderMenuActivity::TxtReaderMenuActivity(GfxRenderer& renderer, MappedInputM
   for (size_t i = 0; i < menuItems.size(); ++i) {
     fui::ListItem item;
     item.label = I18N.get(menuItems[i].labelId);
+    item.icon = {};
     item.actionValue = static_cast<int16_t>(i);
     rowItems.push_back(item);
   }
@@ -39,7 +40,7 @@ void TxtReaderMenuActivity::onEnter() {
   UiListActivity::onEnter();
 }
 
-void TxtReaderMenuActivity::onExit() { Activity::onExit(); }
+void TxtReaderMenuActivity::onExit() { UiListActivity::onExit(); }
 
 void TxtReaderMenuActivity::activateIndex(const int index) {
   if (index < 0 || index >= listCount()) return;

@@ -145,6 +145,7 @@ void ButtonRemapActivity::buildScreen(UiScreen& screen) {
     rows[i].label = getRoleName(static_cast<uint8_t>(i));
     const uint8_t assigned = tempMapping[i];
     rows[i].value = assigned == kUnassigned ? tr(STR_UNASSIGNED) : getHardwareName(assigned);
+    rows[i].icon = {};
     rows[i].actionValue = static_cast<int16_t>(i);
   }
   freeink::ui::ListProps props;

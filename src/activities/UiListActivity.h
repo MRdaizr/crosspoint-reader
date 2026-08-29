@@ -28,6 +28,12 @@ class UiListActivity : public Activity, protected UiAppHost {
   UiListActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
                  bool wantsTouchLongPress = false);
 
+  // Invalidate the published interaction table before a derived list releases
+  // its row labels/items.  ActivityManager calls this virtually for list pages
+  // without their own cleanup override; pages with custom cleanup must call it
+  // first from their onExit().
+  void onExit() override;
+
   // --- subclass contract -----------------------------------------------------
   // Current number of list rows (re-read every loop pass; may change).
   virtual int listCount() const = 0;

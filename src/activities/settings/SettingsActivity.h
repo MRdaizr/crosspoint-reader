@@ -6,8 +6,7 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
-#include "activities/Activity.h"
-#include "util/ButtonNavigator.h"
+#include "activities/UiTabListActivity.h"
 
 enum class SettingType { TOGGLE, ENUM, ACTION, VALUE, STRING };
 
@@ -143,11 +142,8 @@ struct SettingInfo {
   }
 };
 
-class SettingsActivity final : public Activity {
-  ButtonNavigator buttonNavigator;
-
+class SettingsActivity final : public UiTabListActivity {
   int selectedCategoryIndex = 0;  // Currently selected category
-  int selectedSettingIndex = 0;
   int settingsCount = 0;
 
   // Per-category settings derived from shared list + device-only actions
@@ -160,20 +156,36 @@ class SettingsActivity final : public Activity {
   bool preserveQuickResumeTimeoutOn = false;
   bool quickResumeTimeoutAutoEnabled = false;
 
+  // FUI rows keep label/value pointers stable between render passes. Labels
+  // point at the translation table; values are refreshed in buildScreen().
+  std::vector<std::string> rowValues;
+  std::vector<freeink::ui::ListItem> rowItems;
+
   static constexpr int categoryCount = 4;
   static const StrId categoryNames[categoryCount];
 
-  void enterCategory(int categoryIndex);
+  int listCount() const override { return settingsCount; }
+  int tabCount() const override { return categoryCount; }
+  int activeTab() const override { return selectedCategoryIndex; }
+  const char* tabLabel(int index) const override { return I18N.get(categoryNames[index]); }
+  void buildScreen(UiScreen& screen) override;
+  void activateIndex(int index) override;
+  void onTabAction(int index) override;
+  void stepTab(int direction) override;
+  bool handleButtons() override;
+  void drawChrome() override;
+  void drawFooter() override;
+
   void toggleCurrentSetting();
   void openSleepTimeoutPicker();
   void rebuildSettingsLists();
+  void rebuildRowItems();
   void syncQuickResumeTimeoutForSleepScreen(bool sleepScreenChanged, bool quickResumeTimeoutChanged);
+  void selectCategory(int categoryIndex);
 
  public:
   explicit SettingsActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("Settings", renderer, mappedInput) {}
+      : UiTabListActivity("Settings", renderer, mappedInput) {}
   void onEnter() override;
   void onExit() override;
-  void loop() override;
-  void render(RenderLock&&) override;
 };

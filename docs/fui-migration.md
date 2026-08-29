@@ -10,24 +10,32 @@ owns the interaction table and the chrome for migrated screens.
 `UiListActivity` is used by the file browser, recent books, OPDS browsing and
 server lists, Wi-Fi mode/network lists, extension lists, font and language
 selection, KOReader settings, status-bar settings, and EPUB/XTC chapter,
-bookmark, footnote, percent, and reader-menu screens.  AirPage settings and
+bookmark, footnote, and reader-menu screens.  AirPage settings and
 history, front-button remapping, the home menu, WeRead chapter-range and
 manage/detail action lists, and the book/day/achievement lists in reading
 statistics use the same FUI list interaction and scrolling contract.
 `SettingsActivity`
 uses `UiTabListActivity` so the four settings categories share the same tab
 ring and per-tab viewport behavior.  `UiScreenActivity` and `UiAppHost` are
-available for stateful pages (network prompts, sliders, timers, QR/image and
-statistics charts) while their existing models and long-running operations stay
-in the activity layer.  Home cover tiles, WeRead's shelf grid and multi-stage
-network pages, and specialised reader/image canvases remain renderer-owned
-where their variable layout cannot be represented by a single FUI list.
+used by stateful pages (network prompts, KOReader sync choices, UTC offset,
+interval and percent sliders, timers, QR/image and statistics charts) while
+their existing models and long-running operations stay in the activity layer.
+Home cover tiles, WeRead's shelf grid and multi-stage network pages, and
+specialised reader/image canvases remain renderer-owned where their variable
+layout cannot be represented by a single FUI list.
+
+Migrated data/settings rows explicitly leave `ListItem::icon` empty.  The
+home, extension, and flashcard menus keep theme-aware icon slots for themes
+that use them; `RoundedRaffExtTheme` returns `false` from
+`showsFuiMenuIcon()`, so those menus remain text-first under RoundedRaffExt.
 
 Touch events are converted by `MappedInputManager` into a FreeInkUI snapshot;
 button mappings, orientation-aware navigation, hold/release semantics, and
 legacy row hit tests remain available for pages that still use the renderer
 directly.  The interaction table is published only after a complete render,
-so a tap cannot observe a half-built list.
+so a tap cannot observe a half-built list.  `UiListActivity::onExit()` closes
+the published route before row buffers are released; list pages with custom
+cleanup call that base hook first.
 
 List selection and viewport updates are guarded by the activity render lock;
 wrapped CJK labels use the measured page size and a bounded rebuild pass.  The

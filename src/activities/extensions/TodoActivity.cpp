@@ -53,6 +53,7 @@ void TodoActivity::rebuildRowItems() {
     freeink::ui::ListItem item;
     item.label = rowTitles[i].c_str();
     item.value = rowDates[i].c_str();
+    item.icon = {};
     item.actionValue = static_cast<int16_t>(i);
     item.state = freeink::ui::StateNormal;
     rowItems.push_back(item);

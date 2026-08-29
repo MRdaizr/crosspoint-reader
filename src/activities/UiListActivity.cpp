@@ -77,6 +77,11 @@ void UiListActivity::moveSelectionTo(const int index) {
   requestUpdate();
 }
 
+void UiListActivity::onExit() {
+  closeRouting();
+  Activity::onExit();
+}
+
 void UiListActivity::loop() {
   if (handleCustomInput()) return;
   if (handleButtons()) return;

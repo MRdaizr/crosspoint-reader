@@ -67,7 +67,7 @@ void FontSelectionActivity::onEnter() {
   nav.selected = selectedIndex_;
 }
 
-void FontSelectionActivity::onExit() { Activity::onExit(); }
+void FontSelectionActivity::onExit() { UiListActivity::onExit(); }
 
 void FontSelectionActivity::onBackButton() {
     SETTINGS.fontFamily = originalFontFamily_;
@@ -180,6 +180,7 @@ void FontSelectionActivity::buildScreen(UiScreen& screen) {
     if (static_cast<int>(i) == previewFontIndex_ && static_cast<int>(i) != currentFontIndex) values[i] = tr(STR_PREVIEW);
     else if (static_cast<int>(i) == currentFontIndex) values[i] = tr(STR_SELECTED);
     rows[i].value = values[i].empty() ? nullptr : values[i].c_str();
+    rows[i].icon = {};
     rows[i].actionValue = static_cast<int16_t>(i);
   }
   freeink::ui::ListProps props;

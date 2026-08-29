@@ -7,6 +7,9 @@
 #include <WiFi.h>
 #include <esp_mac.h>
 
+#include <algorithm>
+#include <cstdio>
+
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "WifiCredentialStore.h"
@@ -16,6 +19,9 @@
 
 void WifiSelectionActivity::onEnter() {
   Activity::onEnter();
+  resetUi();
+  app.on(ACTION_NETWORK_ROW, &WifiSelectionActivity::onRowEvent, this);
+  app.setScreen(&WifiSelectionActivity::listScreen, this);
 
   // Load saved WiFi credentials - SD card operations need lock as we use SPI
   // for both
@@ -26,6 +32,9 @@ void WifiSelectionActivity::onEnter() {
 
   // Reset state
   selectedNetworkIndex = 0;
+  listNav.reset();
+  networkRowItems.clear();
+  networkStatuses.clear();
   networks.clear();
   state = WifiSelectionState::SCANNING;
   selectedSSID.clear();
@@ -79,6 +88,7 @@ void WifiSelectionActivity::onEnter() {
 
 void WifiSelectionActivity::onExit() {
   Activity::onExit();
+  closeRouting();
 
   LOG_DBG("WIFI", "Free heap at onExit start: %d bytes", ESP.getFreeHeap());
 
@@ -119,6 +129,7 @@ void WifiSelectionActivity::processWifiScanResults() {
 
   if (scanResult == WIFI_SCAN_FAILED) {
     state = WifiSelectionState::NETWORK_LIST;
+    rebuildNetworkRowItems();
     requestUpdate();
     return;
   }
@@ -163,7 +174,69 @@ void WifiSelectionActivity::processWifiScanResults() {
   WiFi.scanDelete();
   state = WifiSelectionState::NETWORK_LIST;
   selectedNetworkIndex = 0;
+  rebuildNetworkRowItems();
   requestUpdate();
+}
+
+void WifiSelectionActivity::rebuildNetworkRowItems() {
+  networkStatuses.clear();
+  networkRowItems.clear();
+  networkStatuses.reserve(networks.size());
+  networkRowItems.reserve(networks.size());
+  for (size_t i = 0; i < networks.size(); ++i) {
+    const auto& network = networks[i];
+    networkStatuses.push_back(std::string(network.hasSavedPassword ? "+ " : "") +
+                              (network.isEncrypted ? "* " : "") + getSignalStrengthIndicator(network.rssi));
+    freeink::ui::ListItem item;
+    item.label = network.ssid.c_str();
+    item.value = networkStatuses.back().c_str();
+    item.actionValue = static_cast<int16_t>(i);
+    item.icon = {};
+    networkRowItems.push_back(item);
+  }
+  listNav.selected = networks.empty()
+                         ? 0
+                         : static_cast<int>(std::min(selectedNetworkIndex, networks.size() - 1));
+  listNav.top = 0;
+  listNav.followOnBuild = true;
+}
+
+void WifiSelectionActivity::listScreen(UiScreen& screen, void* user) {
+  auto* self = static_cast<WifiSelectionActivity*>(user);
+  if (self->state == WifiSelectionState::NETWORK_LIST) self->buildListScreen(screen);
+}
+
+void WifiSelectionActivity::onRowEvent(const freeink::ui::ActionEvent& event, void* user) {
+  auto* self = static_cast<WifiSelectionActivity*>(user);
+  if (self->state != WifiSelectionState::NETWORK_LIST || event.value < 0 ||
+      event.value >= static_cast<int>(self->networks.size())) return;
+  self->app.clearTapFlash();
+  self->selectedNetworkIndex = static_cast<size_t>(event.value);
+  self->listNav.selected = event.value;
+  self->selectNetwork(event.value);
+}
+
+void WifiSelectionActivity::buildListScreen(UiScreen& screen) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  screen.setContentMargin(freeink::ui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight), 0,
+                                               static_cast<int16_t>(metrics.buttonHintsHeight + 34), 0});
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  if (networkRowItems.empty()) return;
+  freeink::ui::ListProps props;
+  props.items = networkRowItems.data();
+  props.count = static_cast<uint16_t>(networkRowItems.size());
+  props.action = ACTION_NETWORK_ROW;
+  props.inputMask = freeink::ui::InputTouch;
+  props.valueInset = 8;
+  props.labelText = screen.theme().bodyText;
+  props.labelText.maxLines = 1;
+  props.valueText = screen.theme().smallText;
+  const int16_t rowHeight = mappedInput.hasTouch() ? screen.theme().rowHeight
+                                                   : static_cast<int16_t>(metrics.listRowHeight);
+  props.rowHeight = rowHeight;
+  listNav.syncToProps(screen.body(), rowHeight, screen.theme().listRowGap,
+                      static_cast<int>(networkRowItems.size()), props);
+  screen.list(props);
 }
 
 void WifiSelectionActivity::selectNetwork(const int index) {
@@ -445,6 +518,12 @@ void WifiSelectionActivity::loop() {
 
   // Handle network list state
   if (state == WifiSelectionState::NETWORK_LIST) {
+    // Let FUI dispatch row taps before processing the legacy directional
+    // controls. The published table remains valid while a scan result is
+    // being rendered, so a tap can never index a partially rebuilt list.
+    const auto route = routeTouch(mappedInput);
+    if (route) return;
+
     // Check for Back button to exit (cancel)
     if (mappedInput.wasPressed(MappedInputManager::Button::Back)) {
       onComplete(false);
@@ -481,11 +560,13 @@ void WifiSelectionActivity::loop() {
     // Handle navigation
     buttonNavigator.onNext([this] {
       selectedNetworkIndex = ButtonNavigator::nextIndex(selectedNetworkIndex, networks.size());
+      listNav.selected = static_cast<int>(selectedNetworkIndex);
       requestUpdate();
     });
 
     buttonNavigator.onPrevious([this] {
       selectedNetworkIndex = ButtonNavigator::previousIndex(selectedNetworkIndex, networks.size());
+      listNav.selected = static_cast<int>(selectedNetworkIndex);
       requestUpdate();
     });
   }
@@ -536,6 +617,7 @@ void WifiSelectionActivity::render(RenderLock&&) {
       renderConnecting(&screen, &metrics);  // Reuse connecting screen with different message
       break;
     case WifiSelectionState::NETWORK_LIST:
+      renderUi();
       renderNetworkList(&screen, &metrics);
       break;
     case WifiSelectionState::CONNECTING:
@@ -565,25 +647,14 @@ void WifiSelectionActivity::renderNetworkList(const Rect* screen, const ThemeMet
     const auto top = screen->y + (screen->height - height) / 2;
     UITheme::drawCenteredText(renderer, *screen, UI_10_FONT_ID, top, tr(STR_NO_NETWORKS));
     UITheme::drawCenteredText(renderer, *screen, SMALL_FONT_ID, top + height + 10, tr(STR_PRESS_OK_SCAN));
-  } else {
-    int contentTop =
-        screen->y + metrics->topPadding + metrics->headerHeight + metrics->tabBarHeight + metrics->verticalSpacing;
-    int contentHeight = screen->height - contentTop - metrics->verticalSpacing * 2;
-    GUI.drawList(
-        renderer, Rect{screen->x, contentTop, screen->width, contentHeight}, static_cast<int>(networks.size()),
-        selectedNetworkIndex, [this](int index) { return networks[index].ssid; }, nullptr, nullptr,
-        [this](int index) {
-          auto network = networks[index];
-          return std::string(network.hasSavedPassword ? "+ " : "") + (network.isEncrypted ? "* " : "") +
-                 getSignalStrengthIndicator(network.rssi);
-        });
   }
 
   GUI.drawHelpText(renderer,
                    Rect{screen->x, screen->y + screen->height - metrics->contentSidePadding - 15, screen->width, 20},
                    tr(STR_NETWORK_LEGEND));
 
-  const bool hasSavedPassword = !networks.empty() && networks[selectedNetworkIndex].hasSavedPassword;
+  const bool hasSelectedNetwork = selectedNetworkIndex < networks.size();
+  const bool hasSavedPassword = hasSelectedNetwork && networks[selectedNetworkIndex].hasSavedPassword;
   const char* forgetLabel = hasSavedPassword ? tr(STR_FORGET_BUTTON) : "";
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_CONNECT), forgetLabel, tr(STR_RETRY));

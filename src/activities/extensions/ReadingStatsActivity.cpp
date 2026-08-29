@@ -196,6 +196,7 @@ void ReadingStatsActivity::buildFuiScreen(UiScreen& screen) {
     fui::ListItem item;
     item.label = fuiLabels_[static_cast<size_t>(i)].c_str();
     item.value = fuiValues_[static_cast<size_t>(i)].empty() ? nullptr : fuiValues_[static_cast<size_t>(i)].c_str();
+    item.icon = {};
     item.actionValue = static_cast<int16_t>(i);
     fuiRows_.push_back(item);
   }

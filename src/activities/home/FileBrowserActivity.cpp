@@ -7,6 +7,9 @@
 #include <Memory.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <string_view>
 
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
@@ -17,32 +20,11 @@
 #include "util/BookCacheUtils.h"
 #include "util/DynamicFont.h"
 
+namespace fui = freeink::ui;
+
 namespace {
 constexpr unsigned long GO_HOME_MS = 1000;
 constexpr size_t NAME_BUFFER_SIZE = 500;
-
-struct FilePrewarmContext {
-  const std::vector<std::string>* files;
-  size_t startIndex;
-  size_t itemCount;
-  const std::string* path;
-};
-
-const char* filePrewarmGetter(const void* context, uint32_t index) {
-  const auto* ctx = static_cast<const FilePrewarmContext*>(context);
-  if (ctx == nullptr) return nullptr;
-  if (index < ctx->itemCount && ctx->files != nullptr) {
-    const size_t fileIndex = ctx->startIndex + static_cast<size_t>(index);
-    if (fileIndex < ctx->files->size()) {
-      // The display name removes the extension, but prewarming the original
-      // stable filename avoids allocating a temporary string per row. Any
-      // extra ASCII extension glyphs are harmless and remain bounded by the
-      // SD font's page cache limit.
-      return (*ctx->files)[fileIndex].c_str();
-    }
-  }
-  return ctx->path != nullptr ? ctx->path->c_str() : nullptr;
-}
 }  // namespace
 
 void FileBrowserActivity::loadFiles() {
@@ -89,7 +71,7 @@ void FileBrowserActivity::loadFiles() {
 }
 
 void FileBrowserActivity::onEnter() {
-  Activity::onEnter();
+  UiListActivity::onEnter();
 
   fileNameBuffer = makeUniqueNoThrow<char[]>(NAME_BUFFER_SIZE);
   if (!fileNameBuffer) {
@@ -105,7 +87,7 @@ void FileBrowserActivity::onEnter() {
 
   {
     RenderLock lock(*this);
-    selectorIndex = 0;
+    nav.selected = 0;
 
     auto root = Storage.open(basepath.c_str());
     if (!root) {
@@ -120,7 +102,7 @@ void FileBrowserActivity::onEnter() {
 
       const auto pos = oldPath.find_last_of('/');
       const std::string fileName = oldPath.substr(pos + 1);
-      selectorIndex = findEntry(fileName);
+      nav.selected = static_cast<int>(findEntry(fileName));
     } else {
       loadFiles();
     }
@@ -130,7 +112,7 @@ void FileBrowserActivity::onEnter() {
 }
 
 void FileBrowserActivity::onExit() {
-  Activity::onExit();
+  UiListActivity::onExit();
   files.clear();
   fileNameBuffer.reset();
 }
@@ -216,7 +198,7 @@ bool FileBrowserActivity::removeDirFile(const std::string& fullPath) {
   return true;
 }
 
-void FileBrowserActivity::loop() {
+bool FileBrowserActivity::handleCustomInput() {
   // Long press BACK (1s+) goes to root folder (Books mode only).
   // In firmware-pick mode we keep navigation simple: short Back = up dir / cancel.
   bool canGoHome = false;
@@ -230,32 +212,38 @@ void FileBrowserActivity::loop() {
       RenderLock lock(*this);
       basepath = "/";
       loadFiles();
-      selectorIndex = 0;
+      nav.selected = 0;
     }
     requestUpdate();
-    return;
+    return true;
   }
 
   if (lockLongPressBack && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     RenderLock lock(*this);
     lockLongPressBack = false;
-    return;
+    return true;
   }
 
-  const int pathReserved = renderer.getLineHeight(SMALL_FONT_ID) + UITheme::getInstance().getMetrics().verticalSpacing;
-  const int pageItems = UITheme::getNumberOfItemsPerPage(renderer, true, false, true, false, pathReserved);
+  return false;
+}
+
+bool FileBrowserActivity::handleButtons() {
+  if (lockLongPressBack && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    lockLongPressBack = false;
+    return true;
+  }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (lockNextConfirmRelease) {
       lockNextConfirmRelease = false;
-      return;
+      return true;
     }
     std::string entry;
     bool isDirectory = false;
     {
       RenderLock lock(*this);
-      if (files.empty() || selectorIndex >= files.size()) return;
-      entry = files[selectorIndex];
+      if (files.empty() || nav.selected >= files.size()) return true;
+      entry = files[nav.selected];
       isDirectory = entry.back() == '/';
     }
 
@@ -271,7 +259,7 @@ void FileBrowserActivity::loop() {
       res.isCancelled = false;
       setResult(std::move(res));
       finish();
-      return;
+      return true;
     }
 
     if (mode == Mode::Books && mappedInput.getHeldTime() >= GO_HOME_MS) {
@@ -293,10 +281,10 @@ void FileBrowserActivity::loop() {
               RenderLock lock(*this);
               loadFiles();
               if (files.empty()) {
-                selectorIndex = 0;
-              } else if (selectorIndex >= files.size()) {
+                nav.selected = 0;
+              } else if (nav.selected >= files.size()) {
                 // Move selection to the new "last" item
-                selectorIndex = files.size() - 1;
+                nav.selected = static_cast<int>(files.size() - 1);
               }
             }
 
@@ -312,7 +300,7 @@ void FileBrowserActivity::loop() {
       std::string heading = tr(STR_DELETE) + std::string("? ");
 
       startActivityForResult(std::make_unique<ConfirmationActivity>(renderer, mappedInput, heading, entry), handler);
-      return;
+      return true;
     } else {
       // --- SHORT PRESS ACTION: OPEN/NAVIGATE ---
       if (isDirectory) {
@@ -321,7 +309,7 @@ void FileBrowserActivity::loop() {
           if (basepath.back() != '/') basepath += "/";
           basepath += entry.substr(0, entry.length() - 1);
           loadFiles();
-          selectorIndex = 0;
+          nav.selected = 0;
         }
         requestUpdate();
       } else {
@@ -334,7 +322,7 @@ void FileBrowserActivity::loop() {
         onSelectBook(bookPath);
       }
     }
-    return;
+    return true;
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
@@ -356,7 +344,7 @@ void FileBrowserActivity::loop() {
 
           const auto pos = oldPath.find_last_of('/');
           const std::string dirName = oldPath.substr(pos + 1) + "/";
-          selectorIndex = findEntry(dirName);
+          nav.selected = static_cast<int>(findEntry(dirName));
         }
 
         requestUpdate();
@@ -370,36 +358,9 @@ void FileBrowserActivity::loop() {
         onGoHome();
       }
     }
+    return true;
   }
-
-  int listSize = 0;
-  {
-    RenderLock lock(*this);
-    listSize = static_cast<int>(files.size());
-  }
-  buttonNavigator.onNextRelease([this, listSize] {
-    RenderLock lock(*this);
-    selectorIndex = ButtonNavigator::nextIndex(static_cast<int>(selectorIndex), listSize);
-    requestUpdate();
-  });
-
-  buttonNavigator.onPreviousRelease([this, listSize] {
-    RenderLock lock(*this);
-    selectorIndex = ButtonNavigator::previousIndex(static_cast<int>(selectorIndex), listSize);
-    requestUpdate();
-  });
-
-  buttonNavigator.onNextContinuous([this, listSize, pageItems] {
-    RenderLock lock(*this);
-    selectorIndex = ButtonNavigator::nextPageIndex(static_cast<int>(selectorIndex), listSize, pageItems);
-    requestUpdate();
-  });
-
-  buttonNavigator.onPreviousContinuous([this, listSize, pageItems] {
-    RenderLock lock(*this);
-    selectorIndex = ButtonNavigator::previousPageIndex(static_cast<int>(selectorIndex), listSize, pageItems);
-    requestUpdate();
-  });
+  return false;
 }
 
 std::string getFileName(std::string filename) {
@@ -422,97 +383,101 @@ std::string getFileExtension(std::string filename) {
   return filename.substr(pos);
 }
 
-void FileBrowserActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto pageHeight = renderer.getScreenHeight();
+void FileBrowserActivity::drawChrome() {
   const auto& metrics = UITheme::getInstance().getMetrics();
-
   std::string folderName =
       (mode == Mode::PickFirmware)
           ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
           : ((basepath == "/") ? std::string(tr(STR_SD_CARD)) : basepath.substr(basepath.rfind('/') + 1));
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, folderName.c_str());
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight}, folderName.c_str());
+}
 
+void FileBrowserActivity::buildScreen(UiScreen& screen) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int pathFontId = DynamicFont::fontForCjkText(renderer, basepath.c_str(), SMALL_FONT_ID);
+  const int pathReserved = renderer.getLineHeight(pathFontId) + metrics.verticalSpacing;
+  screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                      static_cast<int16_t>(metrics.buttonHintsHeight + pathReserved), 0});
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  if (files.empty()) {
+    screen.centeredText(mode == Mode::PickFirmware ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND),
+                        screen.theme().bodyText);
+    return;
+  }
+  rowLabels.clear(); rowValues.clear(); rowItems.clear();
+  rowLabels.reserve(files.size()); rowValues.reserve(files.size()); rowItems.reserve(files.size());
+  for (size_t i = 0; i < files.size(); ++i) {
+    rowLabels.push_back(getFileName(files[i]));
+    rowValues.push_back(getFileExtension(files[i]));
+    fui::ListItem item;
+    item.label = rowLabels.back().c_str();
+    item.value = rowValues.back().empty() ? nullptr : rowValues.back().c_str();
+    item.actionValue = static_cast<int16_t>(i);
+    // File glyphs are intentionally omitted for RoundedRaffExt and all
+    // generic FUI menu rows; the filename remains the complete affordance.
+    item.icon = {};
+    rowItems.push_back(item);
+  }
+  fui::ListProps props;
+  props.items = rowItems.data(); props.count = static_cast<uint16_t>(rowItems.size()); props.action = ACTION_ROW;
+  props.inputMask = fui::InputTouch; props.valueInset = 8; props.labelText = screen.theme().smallText; props.labelText.maxLines = 2;
+  syncListViewport(screen, props); screen.list(props);
+}
+
+void FileBrowserActivity::activateIndex(const int index) {
+  if (index < 0 || index >= static_cast<int>(files.size())) return;
+  nav.selected = index;
+  const std::string entry = files[static_cast<size_t>(index)];
+  const bool isDirectory = !entry.empty() && entry.back() == '/';
+  if (mode == Mode::PickFirmware && !isDirectory) {
+    std::string selectedPath = basepath;
+    if (selectedPath.back() != '/') selectedPath += "/";
+    setResult(FilePathResult{selectedPath + entry});
+    finish();
+    return;
+  }
+  if (isDirectory) {
+    if (basepath.back() != '/') basepath += "/";
+    basepath += entry.substr(0, entry.length() - 1);
+    loadFiles();
+    nav.selected = 0;
+    requestUpdate();
+  } else {
+    std::string bookPath = basepath;
+    if (bookPath.back() != '/') bookPath += "/";
+    onSelectBook(bookPath + entry);
+  }
+}
+
+void FileBrowserActivity::drawFooter() {
+  const auto& metrics = UITheme::getInstance().getMetrics();
   const int pathFontId = DynamicFont::fontForCjkText(renderer, basepath.c_str(), SMALL_FONT_ID);
   const int pathLineHeight = renderer.getLineHeight(pathFontId);
-  const int pathReserved = pathLineHeight + metrics.verticalSpacing;
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight =
-      pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
-  const int pageItems = std::max(1, UITheme::getNumberOfItemsPerPage(renderer, true, false, true, false, pathReserved));
-  const int pageStartIndex = files.empty() ? 0 : static_cast<int>(selectorIndex) / pageItems * pageItems;
-  const int visibleCount = std::max(0, std::min(static_cast<int>(files.size()) - pageStartIndex, pageItems));
-
-  // Prefer the small font selected for the path when it is already an SD
-  // fallback. Otherwise inspect only the visible filenames to find the shared
-  // CJK font. This avoids constructing a concatenated page-sized string.
-  int fileTitleFontId = renderer.isSdCardFont(pathFontId) ? pathFontId : 0;
-  for (int i = 0; fileTitleFontId == 0 && i < visibleCount; i++) {
-    const auto displayName = getFileName(files[pageStartIndex + i]);
-    const int candidate = DynamicFont::fontForCjkText(renderer, displayName.c_str(), 0);
-    if (renderer.isSdCardFont(candidate)) fileTitleFontId = candidate;
-  }
-
-  FilePrewarmContext prewarmContext{&files, static_cast<size_t>(pageStartIndex),
-                                    static_cast<size_t>(visibleCount), &basepath};
-  if (renderer.isSdCardFont(fileTitleFontId)) {
-    DynamicFont::prewarmIfSdFont(renderer, fileTitleFontId, filePrewarmGetter, &prewarmContext,
-                                 static_cast<uint32_t>(visibleCount + 1));
-    // Both list truncation and the left-truncated path use U+2026.
-    DynamicFont::prewarmIfSdFont(renderer, fileTitleFontId, "\xe2\x80\xa6");
-  }
-
-  if (files.empty()) {
-    const char* emptyMsg = (mode == Mode::PickFirmware) ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND);
-    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, emptyMsg);
-  } else {
-    GUI.drawList(
-        renderer, Rect{0, contentTop, pageWidth, contentHeight}, files.size(), selectorIndex,
-        [this](int index) { return getFileName(files[index]); }, nullptr,
-        [this](int index) { return UITheme::getFileIcon(files[index]); },
-        [this](int index) { return getFileExtension(files[index]); }, false, nullptr, fileTitleFontId);
-  }
-
-  // Full path display
-  {
-    const int pathY = pageHeight - metrics.buttonHintsHeight - metrics.verticalSpacing - pathLineHeight;
-    const int separatorY = pathY - metrics.verticalSpacing / 2;
-    renderer.drawLine(0, separatorY, pageWidth - 1, separatorY, 3, true);
-    const int pathMaxWidth = pageWidth - metrics.contentSidePadding * 2;
-    // Left-truncate so the deepest directory is always visible
-    const char* pathStr = basepath.c_str();
-    const char* pathDisplay = pathStr;
-    char leftTruncBuf[256];
-    if (renderer.getTextWidth(pathFontId, pathStr) > pathMaxWidth) {
-      const char ellipsis[] = "\xe2\x80\xa6";  // UTF-8 ellipsis (…)
-      const int ellipsisWidth = renderer.getTextWidth(pathFontId, ellipsis);
-      const int available = pathMaxWidth - ellipsisWidth;
-      // Walk forward from the start until the suffix fits, skipping UTF-8 continuation bytes
-      const char* p = pathStr;
-      while (*p) {
-        if (renderer.getTextWidth(pathFontId, p) <= available) break;
-        ++p;
-        while (*p && (static_cast<unsigned char>(*p) & 0xC0) == 0x80) ++p;
-      }
-      snprintf(leftTruncBuf, sizeof(leftTruncBuf), "%s%s", ellipsis, p);
-      pathDisplay = leftTruncBuf;
+  const int pathY = renderer.getScreenHeight() - metrics.buttonHintsHeight - metrics.verticalSpacing - pathLineHeight;
+  const int separatorY = pathY - metrics.verticalSpacing / 2;
+  renderer.drawLine(0, separatorY, renderer.getScreenWidth() - 1, separatorY, 3, true);
+  const int pathMaxWidth = renderer.getScreenWidth() - metrics.contentSidePadding * 2;
+  const char* pathDisplay = basepath.c_str();
+  char leftTruncBuf[256];
+  if (renderer.getTextWidth(pathFontId, basepath.c_str()) > pathMaxWidth) {
+    const char ellipsis[] = "\xe2\x80\xa6";
+    const int available = pathMaxWidth - renderer.getTextWidth(pathFontId, ellipsis);
+    const char* p = basepath.c_str();
+    while (*p && renderer.getTextWidth(pathFontId, p) > available) {
+      ++p;
+      while (*p && (static_cast<unsigned char>(*p) & 0xC0) == 0x80) ++p;
     }
-    renderer.drawText(pathFontId, metrics.contentSidePadding, pathY, pathDisplay);
+    snprintf(leftTruncBuf, sizeof(leftTruncBuf), "%s%s", ellipsis, p);
+    pathDisplay = leftTruncBuf;
   }
-
-  // Help text
+  renderer.drawText(pathFontId, metrics.contentSidePadding, pathY, pathDisplay);
   const char* backLabel = (basepath == "/") ? (mode == Mode::PickFirmware ? tr(STR_BACK) : tr(STR_HOME)) : tr(STR_BACK);
-  // In PickFirmware mode, Confirm on a .bin returns the path to the caller (not "open"); show
-  // STR_SELECT instead. Directories in the same picker still descend, so keep STR_OPEN there.
-  const bool selectingFirmwareFile = mode == Mode::PickFirmware && !files.empty() && files[selectorIndex].back() != '/';
+  const bool hasSelectedFile = nav.selected >= 0 && nav.selected < static_cast<int>(files.size());
+  const bool selectingFirmwareFile = mode == Mode::PickFirmware && hasSelectedFile && !files[nav.selected].empty() &&
+                                     files[nav.selected].back() != '/';
   const char* confirmLabel = files.empty() ? "" : (selectingFirmwareFile ? tr(STR_SELECT) : tr(STR_OPEN));
-  const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, files.empty() ? "" : tr(STR_DIR_UP),
-                                            files.empty() ? "" : tr(STR_DIR_DOWN));
+  const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, files.empty() ? "" : tr(STR_DIR_UP), files.empty() ? "" : tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-
-  renderer.displayBuffer();
 }
 
 size_t FileBrowserActivity::findEntry(const std::string& name) const {

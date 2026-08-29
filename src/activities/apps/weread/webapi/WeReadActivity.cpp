@@ -472,6 +472,12 @@ static_assert(sizeof(WeReadChapterRangeActivity) <= 8 * 1024, "WeRead chapter se
 void WeReadActivity::onEnter() {
   Activity::onEnter();
   resetUi();
+  // WeReadActivity owns a UiAppHost directly (rather than inheriting from
+  // UiScreenActivity), so it must explicitly bind the FUI screen callback.
+  // Without this, renderUi() still runs but FreeInkApp has no screen to
+  // build: the shelf/manage tab strip and detail action list are invisible,
+  // while the legacy renderer underneath remains visible.
+  app.setScreen(&WeReadActivity::fuiScreen, this);
   app.on(ACTION_FUI_TAB, &WeReadActivity::onFuiAction, this);
   app.on(ACTION_FUI_MANAGE, &WeReadActivity::onFuiAction, this);
   app.on(ACTION_FUI_DETAIL, &WeReadActivity::onFuiAction, this);
@@ -686,6 +692,11 @@ void WeReadActivity::buildFuiScreen(UiScreen& screen) {
   fuiDetailProps_.labelText = screen.theme().bodyText;
   fuiDetailProps_.valueText = screen.theme().smallText;
   fuiDetailProps_.valueInset = 8;
+  // The legacy detail renderer paints action rows edge-to-edge before FUI
+  // draws its list.  Keep the FUI row band edge-to-edge too, otherwise the
+  // old black selection can remain as an 8px strip at either side of the new
+  // selected row during a full repaint.
+  fuiDetailProps_.rowInset = 0;
   const int selected = detailSelected_.load();
   fuiDetailProps_.selectedIndex = selected >= static_cast<int>(DetailAction::Read)
                                       ? static_cast<int16_t>(selected - 1)
@@ -2481,7 +2492,11 @@ void WeReadActivity::drawDetailActions(const Rect& actions, const int selectedIn
         break;
     }
     if (!label) continue;
-    const bool black = selected || enabled;
+    // A selected legacy row is filled black.  Its label/value therefore have
+    // to be drawn white; the previous expression selected black text and
+    // made the entire row look solid black.  Unselected disabled rows retain
+    // the existing light/white treatment.
+    const bool black = !selected && enabled;
     renderer.drawText(UI_10_FONT_ID, actions.x + UITheme::getInstance().getMetrics().contentSidePadding,
                       y + std::max(0, (rowHeight - renderer.getLineHeight(UI_10_FONT_ID)) / 2), label, black);
     if (value && value[0]) {

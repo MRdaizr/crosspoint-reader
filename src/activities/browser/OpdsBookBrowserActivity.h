@@ -7,18 +7,19 @@
 
 #include "OpdsServerStore.h"
 #include "activities/Activity.h"
+#include "components/UiAppHost.h"
 #include "util/ButtonNavigator.h"
 
 /**
  * Activity for browsing and downloading books from an OPDS server.
  * Supports navigation through catalog hierarchy and downloading EPUBs.
  */
-class OpdsBookBrowserActivity final : public Activity {
+class OpdsBookBrowserActivity final : public Activity, private UiAppHost {
  public:
   enum class BrowserState { CHECK_WIFI, WIFI_SELECTION, LOADING, BROWSING, DOWNLOADING, ERROR, SEARCH_INPUT };
 
   explicit OpdsBookBrowserActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, OpdsServer server)
-      : Activity("OpdsBookBrowser", renderer, mappedInput), buttonNavigator(), server(std::move(server)) {}
+      : Activity("OpdsBookBrowser", renderer, mappedInput), UiAppHost(renderer), buttonNavigator(), server(std::move(server)) {}
 
   void onEnter() override;
   void onExit() override;
@@ -29,6 +30,15 @@ class OpdsBookBrowserActivity final : public Activity {
   ButtonNavigator buttonNavigator;
   BrowserState state = BrowserState::LOADING;
   std::vector<OpdsEntry> entries;
+  std::vector<freeink::ui::ListItem> rowItems;
+  freeink::ui::ListNav listNav;
+  static constexpr freeink::ui::ActionId ACTION_ROW = 1;
+  static void rootScreen(UiScreen& screen, void* user);
+  static void onRowEvent(const freeink::ui::ActionEvent& event, void* user);
+  void buildBrowsingScreen(UiScreen& screen);
+  void buildStatusScreen(UiScreen& screen);
+  void rebuildRowItems();
+  void activateSelected();
   std::vector<std::string> navigationHistory;
   std::string currentPath;
   std::string searchTemplate;

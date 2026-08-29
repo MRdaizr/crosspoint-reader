@@ -434,6 +434,7 @@ void AirPageActivity::buildFuiScreen(UiScreen& screen) {
     item.value = fuiRowValues_[static_cast<size_t>(i)].empty()
                      ? nullptr
                      : fuiRowValues_[static_cast<size_t>(i)].c_str();
+    item.icon = {};
     item.actionValue = static_cast<int16_t>(i);
     fuiRows_.push_back(item);
   }
