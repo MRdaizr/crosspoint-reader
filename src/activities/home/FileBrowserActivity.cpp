@@ -20,6 +20,29 @@
 namespace {
 constexpr unsigned long GO_HOME_MS = 1000;
 constexpr size_t NAME_BUFFER_SIZE = 500;
+
+struct FilePrewarmContext {
+  const std::vector<std::string>* files;
+  size_t startIndex;
+  size_t itemCount;
+  const std::string* path;
+};
+
+const char* filePrewarmGetter(const void* context, uint32_t index) {
+  const auto* ctx = static_cast<const FilePrewarmContext*>(context);
+  if (ctx == nullptr) return nullptr;
+  if (index < ctx->itemCount && ctx->files != nullptr) {
+    const size_t fileIndex = ctx->startIndex + static_cast<size_t>(index);
+    if (fileIndex < ctx->files->size()) {
+      // The display name removes the extension, but prewarming the original
+      // stable filename avoids allocating a temporary string per row. Any
+      // extra ASCII extension glyphs are harmless and remain bounded by the
+      // SD font's page cache limit.
+      return (*ctx->files)[fileIndex].c_str();
+    }
+  }
+  return ctx->path != nullptr ? ctx->path->c_str() : nullptr;
+}
 }  // namespace
 
 void FileBrowserActivity::loadFiles() {
@@ -420,15 +443,26 @@ void FileBrowserActivity::render(RenderLock&&) {
       pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing - pathReserved;
   const int pageItems = std::max(1, UITheme::getNumberOfItemsPerPage(renderer, true, false, true, false, pathReserved));
   const int pageStartIndex = files.empty() ? 0 : static_cast<int>(selectorIndex) / pageItems * pageItems;
-  std::string visibleText;
-  for (int i = pageStartIndex; i < static_cast<int>(files.size()) && i < pageStartIndex + pageItems; i++) {
-    visibleText += getFileName(files[i]);
-    visibleText += '\n';
+  const int visibleCount = std::max(0, std::min(static_cast<int>(files.size()) - pageStartIndex, pageItems));
+
+  // Prefer the small font selected for the path when it is already an SD
+  // fallback. Otherwise inspect only the visible filenames to find the shared
+  // CJK font. This avoids constructing a concatenated page-sized string.
+  int fileTitleFontId = renderer.isSdCardFont(pathFontId) ? pathFontId : 0;
+  for (int i = 0; fileTitleFontId == 0 && i < visibleCount; i++) {
+    const auto displayName = getFileName(files[pageStartIndex + i]);
+    const int candidate = DynamicFont::fontForCjkText(renderer, displayName.c_str(), 0);
+    if (renderer.isSdCardFont(candidate)) fileTitleFontId = candidate;
   }
-  visibleText += basepath;
-  visibleText += "\n\xe2\x80\xa6";  // ellipsis used by truncatedText() and path truncation
-  const int fileTitleFontId = DynamicFont::fontForCjkText(renderer, visibleText.c_str(), 0);
-  DynamicFont::prewarmIfSdFont(renderer, fileTitleFontId, visibleText);
+
+  FilePrewarmContext prewarmContext{&files, static_cast<size_t>(pageStartIndex),
+                                    static_cast<size_t>(visibleCount), &basepath};
+  if (renderer.isSdCardFont(fileTitleFontId)) {
+    DynamicFont::prewarmIfSdFont(renderer, fileTitleFontId, filePrewarmGetter, &prewarmContext,
+                                 static_cast<uint32_t>(visibleCount + 1));
+    // Both list truncation and the left-truncated path use U+2026.
+    DynamicFont::prewarmIfSdFont(renderer, fileTitleFontId, "\xe2\x80\xa6");
+  }
 
   if (files.empty()) {
     const char* emptyMsg = (mode == Mode::PickFirmware) ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND);

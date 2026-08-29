@@ -4,12 +4,39 @@
 #include <I18n.h>
 
 #include <algorithm>
+#include <string>
 
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/DynamicFont.h"
+
+namespace {
+// The TOC is backed by an SD-card LUT, so getTocItem() returns a temporary
+// value. Keep one bounded scratch string in the getter context instead of
+// concatenating the entire look-ahead window into a second large allocation.
+// FontCacheManager consumes each returned string synchronously.
+struct ChapterPrewarmContext {
+  const Epub* epub;
+  int startIndex;
+  int itemCount;
+  std::string scratch;
+};
+
+const char* chapterPrewarmGetter(const void* context, uint32_t index) {
+  auto* ctx = static_cast<ChapterPrewarmContext*>(const_cast<void*>(context));
+  if (ctx == nullptr || ctx->epub == nullptr || index >= static_cast<uint32_t>(ctx->itemCount)) {
+    return nullptr;
+  }
+
+  const auto item = ctx->epub->getTocItem(ctx->startIndex + static_cast<int>(index));
+  // Indentation is made of ASCII spaces and is already covered by the UI
+  // font. Prewarm the actual title, which is where CJK fallback glyphs occur.
+  ctx->scratch = item.title;
+  return ctx->scratch.c_str();
+}
+}  // namespace
 
 int EpubReaderChapterSelectionActivity::getTotalItems() const { return epub->getTocItemsCount(); }
 
@@ -96,16 +123,29 @@ void EpubReaderChapterSelectionActivity::render(RenderLock&&) {
   // of synchronously rereading the SD font for every newly exposed row.
   const int prewarmStartIndex = std::max(0, pageStartIndex - pageItems);
   const int prewarmEndIndex = std::min(totalItems, pageStartIndex + pageItems * 2);
-  std::string visibleText;
+
+  // Resolve the SD fallback from the first CJK title in the window. The
+  // previous implementation built one concatenated string for this pass;
+  // that allocation grew with the whole TOC window and was the main source of
+  // heap pressure on long CJK books.
+  int chapterTitleFontId = 0;
   for (int i = prewarmStartIndex; i < prewarmEndIndex; i++) {
-    auto item = epub->getTocItem(i);
-    visibleText.append((item.level - 1) * 2, ' ');
-    visibleText += item.title;
-    visibleText += '\n';
+    const auto item = epub->getTocItem(i);
+    const int candidate = DynamicFont::fontForCjkText(renderer, item.title.c_str(), 0);
+    if (renderer.isSdCardFont(candidate)) {
+      chapterTitleFontId = candidate;
+      break;
+    }
   }
-  visibleText += "\xe2\x80\xa6";
-  const int chapterTitleFontId = DynamicFont::fontForCjkText(renderer, visibleText.c_str(), 0);
-  DynamicFont::prewarmIfSdFont(renderer, chapterTitleFontId, visibleText);
+
+  const int prewarmCount = std::max(0, prewarmEndIndex - prewarmStartIndex);
+  if (chapterTitleFontId != 0 && prewarmCount > 0) {
+    ChapterPrewarmContext prewarmContext{epub.get(), prewarmStartIndex, prewarmCount, {}};
+    DynamicFont::prewarmIfSdFont(renderer, chapterTitleFontId, chapterPrewarmGetter, &prewarmContext,
+                                 static_cast<uint32_t>(prewarmCount));
+    // GUI.drawList() truncates long labels with an ellipsis.
+    DynamicFont::prewarmIfSdFont(renderer, chapterTitleFontId, "\xe2\x80\xa6");
+  }
 
   GUI.drawList(renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, totalItems, selectorIndex,
                [this](int index) {
