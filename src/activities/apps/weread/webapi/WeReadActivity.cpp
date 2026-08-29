@@ -97,6 +97,9 @@ constexpr int kMinimumDisclaimerActionGap = 4;
 constexpr int kManageEntryCount = static_cast<int>(sizeof(kManageEntries) / sizeof(kManageEntries[0]));
 constexpr int kDetailCoverWidth = 96;
 constexpr int kDetailCoverHeight = 140;
+// RoundedRaff/crossmux detail actions use the same card geometry as the
+// ordinary selectable list: 42px rows, 6px cadence gap and 20px corners.
+constexpr int kWeReadActionRowRadius = 20;
 constexpr int kPortraitShelfColumns = 1;
 constexpr int kPortraitShelfRows = 1;
 constexpr int kLandscapeShelfColumns = 1;
@@ -712,21 +715,43 @@ void WeReadActivity::buildFuiScreen(UiScreen& screen) {
   fuiDetailProps_.action = ACTION_FUI_DETAIL;
   fuiDetailProps_.inputMask = fui::InputTouch;
   fuiDetailProps_.labelText = screen.theme().bodyText;
-  fuiDetailProps_.valueText = screen.theme().smallText;
-  fuiDetailProps_.valueInset = 8;
-  // The legacy detail renderer paints action rows edge-to-edge before FUI
-  // draws its list.  Keep the FUI row band edge-to-edge too, otherwise the
-  // old black selection can remain as an 8px strip at either side of the new
-  // selected row during a full repaint.
-  fuiDetailProps_.rowInset = 0;
+  // crossmux uses the same UI-12 face for the trailing value, but regular
+  // weight.  The title keeps the theme's bold body style.
+  fuiDetailProps_.valueText = screen.theme().bodyText;
+  fuiDetailProps_.valueText.bold = false;
+  // sidePadding is the inset inside each card; valueInset is extra space
+  // beyond it.  crossmux reserves exactly one 20px side inset, so no extra
+  // value inset is needed here.
+  fuiDetailProps_.valueInset = 0;
+  fuiDetailProps_.sidePadding = static_cast<int16_t>(metrics.contentSidePadding);
+  fuiDetailProps_.rowInset = static_cast<int16_t>(metrics.contentSidePadding);
+  fuiDetailProps_.rowRadius = kWeReadActionRowRadius;
+
+  // Keep the FUI full render identical to the legacy selection-only repaint:
+  // white rounded cards for normal rows and black rounded cards with white
+  // text for the selected row.  Explicit styles also prevent the active
+  // RoundedRaff LightPill token from changing this page's crossmux-compatible
+  // action treatment.
+  fui::StyleSet detailRowStyles;
+  detailRowStyles.explicitlySet = true;
+  detailRowStyles.normal.background = fui::Paint::solid(fui::Color::White);
+  detailRowStyles.normal.foreground = fui::Paint::solid(fui::Color::Black);
+  detailRowStyles.selected.background = fui::Paint::solid(fui::Color::Black);
+  detailRowStyles.selected.foreground = fui::Paint::solid(fui::Color::White);
+  detailRowStyles.selected.radius = kWeReadActionRowRadius;
+  detailRowStyles.focused = detailRowStyles.selected;
+  detailRowStyles.active = detailRowStyles.selected;
+  detailRowStyles.disabled = detailRowStyles.normal;
+  fuiDetailProps_.rowStyles = detailRowStyles;
   const int selected = detailSelected_.load();
   fuiDetailProps_.selectedIndex = selected >= static_cast<int>(DetailAction::Read)
                                       ? static_cast<int16_t>(selected - 1)
                                       : -1;
-  fuiDetailProps_.rowHeight = static_cast<int16_t>(std::max(1, actions.height / kDetailListActionCount));
-  fuiDetailProps_.rowGap = 0;
+  fuiDetailProps_.rowHeight = static_cast<int16_t>(metrics.listRowHeight);
+  fuiDetailProps_.rowGap = static_cast<int16_t>(metrics.listRowGap);
   fuiDetailNav_.selected = std::clamp(selected - 1, 0, kDetailListActionCount - 1);
-  fuiDetailNav_.syncToProps(screen.body(), fuiDetailProps_.rowHeight, 0, kDetailListActionCount, fuiDetailProps_);
+  fuiDetailNav_.syncToProps(screen.body(), fuiDetailProps_.rowHeight, fuiDetailProps_.rowGap,
+                            kDetailListActionCount, fuiDetailProps_);
   // Introduction is drawn above this list and uses its own selection marker;
   // keep every action row unselected while that entry is active.
   if (selected < static_cast<int>(DetailAction::Read)) fuiDetailProps_.selectedIndex = -1;
@@ -2483,13 +2508,24 @@ void WeReadActivity::drawShelfGrid(const Rect& content, const int selectedIndex,
 
 void WeReadActivity::drawDetailActions(const Rect& actions, const int selectedIndex, const bool cached,
                                        const bool policyChanged) {
-  const int rowHeight = std::max(1, actions.height / kDetailListActionCount);
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int rowHeight = std::max(1, metrics.listRowHeight);
+  const int rowGap = std::max(0, metrics.listRowGap);
+  const int cardInset = std::max(0, metrics.contentSidePadding);
+  const int cardX = actions.x + cardInset;
+  const int cardWidth = std::max(1, actions.width - cardInset * 2);
+  constexpr int kTextInset = 20;
+  constexpr int kValueGap = 20;
+  constexpr int kMinTitleWidth = 40;
+  const int actionsBottom = actions.y + std::max(0, actions.height);
   for (int index = 0; index < kDetailListActionCount; ++index) {
     const auto action = static_cast<DetailAction>(index + 1);
     const bool selected = selectedIndex == static_cast<int>(action);
-    const bool enabled = detailActionEnabled(action);
-    const int y = actions.y + index * rowHeight;
-    if (selected) renderer.fillRect(actions.x, y, actions.width, rowHeight, true);
+    const int y = actions.y + index * (rowHeight + rowGap);
+    if (y >= actionsBottom) break;
+    const int drawnHeight = std::min(rowHeight, actionsBottom - y);
+    renderer.fillRoundedRect(cardX, y, cardWidth, drawnHeight, kWeReadActionRowRadius,
+                             selected ? Color::Black : Color::White);
 
     const char* label = nullptr;
     const char* value = nullptr;
@@ -2514,18 +2550,26 @@ void WeReadActivity::drawDetailActions(const Rect& actions, const int selectedIn
         break;
     }
     if (!label) continue;
-    // A selected legacy row is filled black.  Its label/value therefore have
-    // to be drawn white; the previous expression selected black text and
-    // made the entire row look solid black.  Unselected disabled rows retain
-    // the existing light/white treatment.
-    const bool black = !selected && enabled;
-    renderer.drawText(UI_10_FONT_ID, actions.x + UITheme::getInstance().getMetrics().contentSidePadding,
-                      y + std::max(0, (rowHeight - renderer.getLineHeight(UI_10_FONT_ID)) / 2), label, black);
+    // The selected card is black, so every selected label/value must be white.
+    // This is intentionally the same foreground rule used by the FUI row
+    // styles above; it also keeps selection-only repaints visually identical.
+    const bool black = !selected;
+    const int titleLineHeight = renderer.getLineHeight(UI_12_FONT_ID);
+    int textAreaWidth = std::max(1, cardWidth - kTextInset * 2);
     if (value && value[0]) {
-      const int valueWidth = renderer.getTextWidth(SMALL_FONT_ID, value);
-      renderer.drawText(SMALL_FONT_ID, actions.x + actions.width - UITheme::getInstance().getMetrics().contentSidePadding - valueWidth,
-                        y + std::max(0, (rowHeight - renderer.getLineHeight(SMALL_FONT_ID)) / 2), value, black);
+      const int maxValueWidth = std::max(0, cardWidth - kTextInset * 2 - kValueGap - kMinTitleWidth);
+      const std::string valueText = renderer.truncatedText(UI_12_FONT_ID, value, maxValueWidth,
+                                                           EpdFontFamily::REGULAR);
+      const int valueWidth = renderer.getTextWidth(UI_12_FONT_ID, valueText.c_str(), EpdFontFamily::REGULAR);
+      renderer.drawText(UI_12_FONT_ID, cardX + cardWidth - kTextInset - valueWidth,
+                        y + std::max(0, (rowHeight - titleLineHeight) / 2), valueText.c_str(), black,
+                        EpdFontFamily::REGULAR);
+      textAreaWidth = std::max(1, textAreaWidth - valueWidth - kValueGap);
     }
+    const std::string title = renderer.truncatedText(UI_12_FONT_ID, label, textAreaWidth, EpdFontFamily::BOLD);
+    renderer.drawText(UI_12_FONT_ID, cardX + kTextInset,
+                      y + std::max(0, (rowHeight - titleLineHeight) / 2), title.c_str(), black,
+                      EpdFontFamily::BOLD);
   }
 }
 
