@@ -99,3 +99,20 @@ ruby -rdigest -e 'puts [
   "./notosans_8_regular.h",
 ].map{|f| Digest::SHA256.hexdigest(File.read(f)).to_i(16) }.sum % (2 ** 32) - (2 ** 31)'
 ))"
+
+cat <<'EOF'
+
+// Font ID 0 is reserved as the "not found" sentinel.
+// Guard against any hash accidentally producing 0.
+static_assert(NOTOSERIF_12_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(NOTOSERIF_14_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(NOTOSERIF_16_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(NOTOSERIF_18_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(NOTOSANS_12_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(NOTOSANS_14_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(NOTOSANS_16_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(NOTOSANS_18_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(UI_10_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(UI_12_FONT_ID != 0, "Font ID collision with sentinel");
+static_assert(SMALL_FONT_ID != 0, "Font ID collision with sentinel");
+EOF

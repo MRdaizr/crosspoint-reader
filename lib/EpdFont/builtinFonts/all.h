@@ -1,5 +1,10 @@
 #pragma once
 
+// UI families (Ubuntu 10/12 and the 8px status font) are generated with the
+// English + Simplified Chinese + Japanese fallback stack.  They remain in the
+// same includes so the existing font IDs and EpdFontFamily mapping continue
+// to be the single source of truth for FUI and legacy UI drawing.
+
 #include <builtinFonts/notoserif_12_bold.h>
 #include <builtinFonts/notoserif_12_bolditalic.h>
 #include <builtinFonts/notoserif_12_italic.h>

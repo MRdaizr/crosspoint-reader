@@ -77,6 +77,32 @@ KOReaderSyncClient::Error KOReaderSyncClient::authenticate() {
   return SERVER_ERROR;
 }
 
+KOReaderSyncClient::Error KOReaderSyncClient::createUser() {
+  lastHttpCode = 0;
+  if (!KOREADER_STORE.hasCredentials()) return NO_CREDENTIALS;
+  const std::string url = KOREADER_STORE.getBaseUrl() + "/users/create";
+  if (insufficientHeap()) return LOW_MEMORY;
+
+  JsonDocument doc;
+  doc["username"] = KOREADER_STORE.getUsername();
+  doc["password"] = KOREADER_STORE.getMd5Password();
+  std::string body;
+  serializeJson(doc, body);
+
+  freeink::SecureHttpClient http;
+  http.setInsecure();
+  if (!http.begin(url)) return NETWORK_ERROR;
+  http.addHeader("Accept", "application/vnd.koreader.v1+json");
+  http.addHeader("Content-Type", "application/json");
+  const int httpCode = http.sendRequest("POST", body);
+  http.end();
+  lastHttpCode = httpCode;
+  if (httpCode <= 0) return NETWORK_ERROR;
+  if (httpCode >= 200 && httpCode < 300) return OK;
+  if (httpCode == 402) return USER_EXISTS;
+  return SERVER_ERROR;
+}
+
 KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& documentHash,
                                                           KOReaderProgress& outProgress) {
   lastHttpCode = 0;
@@ -183,6 +209,8 @@ const char* KOReaderSyncClient::errorString(Error error) {
       return "No progress found";
     case LOW_MEMORY:
       return "Not enough memory for sync — please retry";
+    case USER_EXISTS:
+      return "Username already exists";
     default:
       return "Unknown error";
   }

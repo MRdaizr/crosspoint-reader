@@ -2,19 +2,20 @@
 
 #include <atomic>
 #include <cstdint>
-#include <vector>
 
 #include "../WeReadBackend.h"
 #include "activities/Activity.h"
 #include "components/OptionPopup.h"
+#include "components/UiAppHost.h"
 #include "components/themes/BaseTheme.h"
 #include "util/ButtonNavigator.h"
 
 struct Rect;
 
-class WeReadActivity final : public Activity {
+class WeReadActivity final : public Activity, private UiAppHost {
  public:
-  WeReadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput) : Activity("WeRead", renderer, mappedInput) {}
+  WeReadActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+      : Activity("WeRead", renderer, mappedInput), UiAppHost(renderer) {}
 
   void onEnter() override;
   void onExit() override;
@@ -64,7 +65,6 @@ class WeReadActivity final : public Activity {
   ButtonNavigator buttonNavigator_;
   OptionPopup optionPopup_;
   WeReadClient::Operation operation_;
-  std::vector<TabInfo> mainTabs_;
   mutable HalFile shelfFile_;
   std::atomic<State> state_{State::Disclaimer};
   std::atomic<WeReadClient::Operation::ProgressStage> progressStage_{WeReadClient::Operation::ProgressStage::Chapters};
@@ -124,6 +124,26 @@ class WeReadActivity final : public Activity {
   bool wifiReleasePending_ = false;
   std::atomic<bool> downloadRenderPending_{false};
   std::atomic<bool> stageRenderPending_{false};
+
+  // FUI owns the tab strip, manage list, and detail action list. Shelf art,
+  // streamed text, QR and progress surfaces remain renderer-owned.
+  static constexpr freeink::ui::ActionId ACTION_FUI_TAB = 1;
+  static constexpr freeink::ui::ActionId ACTION_FUI_MANAGE = 2;
+  static constexpr freeink::ui::ActionId ACTION_FUI_DETAIL = 3;
+  static constexpr int kFuiManageCount = 3;
+  static constexpr int kFuiTabCount = 2;
+  static void fuiScreen(UiScreen& screen, void* user);
+  static void onFuiAction(const freeink::ui::ActionEvent& event, void* user);
+  void buildFuiScreen(UiScreen& screen);
+  bool routeFuiTouch();
+  freeink::ui::TabItem fuiMainTabs_[kFuiTabCount]{};
+  freeink::ui::TabBarProps fuiTabProps_{};
+  freeink::ui::ListItem fuiManageItems_[kFuiManageCount]{};
+  freeink::ui::ListProps fuiManageProps_{};
+  freeink::ui::ListNav fuiManageNav_;
+  freeink::ui::ListItem fuiDetailItems_[kDetailListActionCount]{};
+  freeink::ui::ListProps fuiDetailProps_{};
+  freeink::ui::ListNav fuiDetailNav_;
 
   bool refreshShelf();
   bool readShelf(int index, WeReadStore::ShelfRecord& record) const;

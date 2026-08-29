@@ -578,9 +578,24 @@ if kern_map:
     kern_right_class_count = right_class_id - 1
 
     if kern_left_class_count > 255 or kern_right_class_count > 255:
-        print(f"WARNING: kerning class count exceeds uint8_t range "
+        # EpdKernClassEntry stores the class id in uint8_t.  A large CJK
+        # fallback (notably Noto Sans JP) can produce more than 255 distinct
+        # profiles; emitting those ids would silently wrap and corrupt glyph
+        # spacing.  UI CJK text does not need pair kerning, so omit the whole
+        # optional table when it cannot be represented losslessly.  The
+        # renderer falls back to glyph advances, which is deterministic and
+        # safe for both built-in and SD-card fonts.
+        print(f"WARNING: disabling kerning: class count exceeds uint8_t range "
               f"(left={kern_left_class_count}, right={kern_right_class_count})",
               file=sys.stderr)
+        kern_map = {}
+        left_class_map = {}
+        right_class_map = {}
+        kern_left_classes = []
+        kern_right_classes = []
+        kern_matrix = []
+        kern_left_class_count = 0
+        kern_right_class_count = 0
 
     # Build the class x class matrix
     kern_matrix = [0] * (kern_left_class_count * kern_right_class_count)

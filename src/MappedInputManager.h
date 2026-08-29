@@ -59,6 +59,10 @@ class MappedInputManager {
   RowTouch colTouch(int& col, int left, int colStep, int colCount, int yStart, int yEnd,
                     int colWidth = 0) const;
   SwipeDir wasSwipe() const;
+  // Standard X3/X4 boards have no dedicated capacitive Home key. Keep the
+  // ActivityManager hook available for shared FUI code, but do not consume
+  // ordinary swipes as a Home gesture on these boards.
+  bool wasHomeGesture() const { return false; }
   bool isHeld(Button button) const;
   bool wasAnyPressed() const;
   bool wasAnyReleased() const;

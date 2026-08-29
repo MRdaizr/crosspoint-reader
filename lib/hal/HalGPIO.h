@@ -65,6 +65,10 @@ class HalGPIO {
   // the power HAL can retain a safe fallback when runtime probing is
   // inconclusive.
   inline bool isXteinkDevice() const { return deviceIsX3() || deviceIsX4(); }
+  // X3 carries its page buttons on the panel edges, while the standard X4
+  // uses a vertical side rocker.  FUI slider/interval screens use this to
+  // orient their coarse-step hints without exposing BoardConfig to activities.
+  bool hasEdgeSideButtons() const;
 
   // Start button GPIO and setup SPI for screen and SD card
   void begin();

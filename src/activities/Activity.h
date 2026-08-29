@@ -43,6 +43,11 @@ class Activity {
 
   virtual bool skipLoopDelay() { return false; }
   virtual bool preventAutoSleep() { return false; }
+  // Optional gesture hooks used by FUI-hosted screens. Legacy activities may
+  // ignore these; ActivityManager keeps its existing button semantics.
+  virtual bool handleForcedRefresh() { return false; }
+  virtual bool isHomeActivity() const { return false; }
+  virtual bool handleHomeGesture() { return false; }
   // Allow the main loop to reduce CPU frequency after a short period without user input.
   // This is independent from preventAutoSleep(): an activity can stay visible without preventing frequency scaling.
   virtual bool allowPowerSaving() { return false; }

@@ -9,12 +9,16 @@
 
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
+#include "components/UiAppHelpers.h"
 #include "fontIds.h"
-#include "util/DynamicFont.h"
 #include "util/ReadingStatsAnalytics.h"
 #include "util/TimeUtils.h"
 
 namespace {
+namespace fui = freeink::ui;
+
+constexpr fui::ActionId ACTION_FUI_ROW = 1;
+
 const char* viewTitle(const ReadingStatsActivity::View view) {
   switch (view) {
     case ReadingStatsActivity::View::Books: return tr(STR_BOOKS);
@@ -81,6 +85,10 @@ void drawMetric(const GfxRenderer& renderer, int x, int y, int width, const char
 
 void ReadingStatsActivity::onEnter() {
   Activity::onEnter();
+  resetUi();
+  app.on(ACTION_FUI_ROW, &ReadingStatsActivity::onFuiRow, this);
+  app.setScreen(&ReadingStatsActivity::fuiScreen, this);
+  fuiNav_.reset();
   READING_STATS.loadFromFile();
   ACHIEVEMENTS.loadFromFile();
   ACHIEVEMENTS.reconcileFromCurrentStats();
@@ -90,6 +98,148 @@ void ReadingStatsActivity::onEnter() {
   if (!selectedDayOrdinal && !READING_STATS.getReadingDays().empty()) selectedDayOrdinal = READING_STATS.getReadingDays().back().dayOrdinal;
   selectedBookPath.clear();
   requestUpdate(true);
+}
+
+void ReadingStatsActivity::onExit() {
+  closeRouting();
+  fuiRows_.clear();
+  fuiLabels_.clear();
+  fuiValues_.clear();
+  Activity::onExit();
+}
+
+void ReadingStatsActivity::fuiScreen(UiScreen& screen, void* user) {
+  static_cast<ReadingStatsActivity*>(user)->buildFuiScreen(screen);
+}
+
+void ReadingStatsActivity::onFuiRow(const fui::ActionEvent& event, void* user) {
+  auto* self = static_cast<ReadingStatsActivity*>(user);
+  if (event.value < 0) return;
+
+  if (self->view == View::Books) {
+    const auto& books = READING_STATS.getBooks();
+    if (event.value >= static_cast<int>(books.size())) return;
+    self->selectedIndex = event.value;
+    self->selectedBookPath = books[static_cast<size_t>(event.value)].path;
+    self->view = View::BookDetail;
+  } else if (self->view == View::DayDetail) {
+    const auto entries = ReadingStatsAnalytics::getBooksReadOnDay(self->selectedDayOrdinal);
+    if (event.value >= static_cast<int>(entries.size()) || !entries[static_cast<size_t>(event.value)].book) return;
+    self->selectedIndex = event.value;
+    self->selectedBookPath = entries[static_cast<size_t>(event.value)].book->path;
+    self->view = View::BookDetail;
+  } else if (self->view == View::Achievements) {
+    const auto views = ACHIEVEMENTS.buildViews();
+    if (event.value >= static_cast<int>(views.size())) return;
+    self->selectedIndex = event.value;
+  }
+
+  self->fuiNav_.reset(self->selectedIndex);
+  self->closeRouting();
+  self->app.clearTapFlash();
+  self->requestUpdate();
+}
+
+void ReadingStatsActivity::buildFuiScreen(UiScreen& screen) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                       static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+
+  fuiLabels_.clear();
+  fuiValues_.clear();
+
+  if (view == View::Books) {
+    const auto& books = READING_STATS.getBooks();
+    fuiLabels_.reserve(books.size());
+    fuiValues_.reserve(books.size());
+    for (const auto& book : books) {
+      fuiLabels_.push_back(book.title.empty() ? book.path : book.title);
+      fuiValues_.push_back(duration(book.totalReadingMs) + "  " + std::to_string(book.lastProgressPercent) + "%");
+    }
+  } else if (view == View::DayDetail) {
+    const auto entries = ReadingStatsAnalytics::getBooksReadOnDay(selectedDayOrdinal);
+    fuiLabels_.reserve(entries.size());
+    fuiValues_.reserve(entries.size());
+    for (const auto& entry : entries) {
+      fuiLabels_.push_back(entry.book ? (entry.book->title.empty() ? entry.book->path : entry.book->title) : "-");
+      fuiValues_.push_back(duration(entry.readingMs));
+    }
+  } else if (view == View::Achievements) {
+    const auto views = ACHIEVEMENTS.buildViews();
+    fuiLabels_.reserve(views.size());
+    fuiValues_.reserve(views.size());
+    for (const auto& item : views) {
+      if (!item.definition) {
+        fuiLabels_.emplace_back("-");
+        fuiValues_.emplace_back();
+        continue;
+      }
+      fuiLabels_.push_back(item.definition->title);
+      const bool durationAchievement = item.definition->metric == AchievementMetric::TotalReadingMs ||
+                                       item.definition->metric == AchievementMetric::MaxSessionMs;
+      fuiValues_.push_back(durationAchievement
+                               ? duration(item.progress) + " / " + duration(item.definition->target)
+                               : std::to_string(item.progress) + " / " + std::to_string(item.definition->target));
+    }
+  }
+
+  const int count = static_cast<int>(fuiLabels_.size());
+  if (count <= 0) {
+    screen.centeredText(tr(STR_NO_READING_STATS), screen.theme().bodyText);
+    return;
+  }
+
+  fuiRows_.clear();
+  fuiRows_.reserve(static_cast<size_t>(count));
+  for (int i = 0; i < count; ++i) {
+    fui::ListItem item;
+    item.label = fuiLabels_[static_cast<size_t>(i)].c_str();
+    item.value = fuiValues_[static_cast<size_t>(i)].empty() ? nullptr : fuiValues_[static_cast<size_t>(i)].c_str();
+    item.actionValue = static_cast<int16_t>(i);
+    fuiRows_.push_back(item);
+  }
+
+  fui::ListProps props;
+  props.items = fuiRows_.data();
+  props.count = static_cast<uint16_t>(fuiRows_.size());
+  props.action = ACTION_FUI_ROW;
+  props.inputMask = fui::InputTouch;
+  props.labelText = screen.theme().bodyText;
+  props.valueText = screen.theme().smallText;
+  props.valueInset = 8;
+  const int rowHeight = mappedInput.hasTouch()
+                            ? screen.theme().rowHeight
+                            : UITheme::getInstance().getMetrics().listWithSubtitleRowHeight;
+  props.rowHeight = static_cast<int16_t>(rowHeight);
+  selectedIndex = std::clamp(selectedIndex, 0, count - 1);
+  fuiNav_.selected = selectedIndex;
+  fuiNav_.syncToProps(screen.body(), props.rowHeight, screen.theme().listRowGap, count, props);
+  screen.list(props);
+}
+
+bool ReadingStatsActivity::routeFuiTouch() {
+  if (view != View::Books && view != View::DayDetail && view != View::Achievements) return false;
+  const auto route = UiAppHost::routeTouch(mappedInput);
+  if (route.routed) {
+    if (app.invalidated()) requestUpdate();
+    return static_cast<bool>(route.event);
+  }
+
+  // Keep the selection stable while a finger swipe only moves the list
+  // viewport.  This mirrors UiListActivity's paging semantics for stats
+  // lists, which can contain more rows than fit on the e-paper display.
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
+    int count = 0;
+    if (view == View::Books) count = static_cast<int>(READING_STATS.getBooks().size());
+    else if (view == View::DayDetail) count = static_cast<int>(ReadingStatsAnalytics::getBooksReadOnDay(selectedDayOrdinal).size());
+    else count = static_cast<int>(ACHIEVEMENTS.buildViews().size());
+    const int delta = swipe == MappedInputManager::SwipeDir::Up ? fuiNav_.pageRows() : -fuiNav_.pageRows();
+    if (fuiNav_.scrollBy(delta, count)) requestUpdate();
+    return true;
+  }
+  return false;
 }
 
 void ReadingStatsActivity::moveVertical(const int delta) {
@@ -104,6 +254,8 @@ void ReadingStatsActivity::moveVertical(const int delta) {
 }
 
 void ReadingStatsActivity::loop() {
+  if (routeFuiTouch()) return;
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     if (view == View::BookDetail) { view = View::Books; requestUpdate(); return; }
     if (view == View::DayDetail) { view = View::Calendar; requestUpdate(); return; }
@@ -115,7 +267,9 @@ void ReadingStatsActivity::loop() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     if (view == View::Overview) view = View::Books;
     else if (view == View::Books && !READING_STATS.getBooks().empty()) {
-      selectedBookPath = READING_STATS.getBooks()[selectedIndex].path;
+      const auto& books = READING_STATS.getBooks();
+      selectedIndex = std::clamp(selectedIndex, 0, static_cast<int>(books.size()) - 1);
+      selectedBookPath = books[static_cast<size_t>(selectedIndex)].path;
       view = View::BookDetail;
     } else if (view == View::Calendar && selectedDayOrdinal) {
       view = View::DayDetail;
@@ -201,27 +355,6 @@ void ReadingStatsActivity::renderOverview() {
     renderer.drawText(SMALL_FONT_ID, barX, chartY + 180, label);
   }
   drawFooter(tr(STR_BOOKS));
-}
-
-void ReadingStatsActivity::renderBooks() {
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const int top = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int height = renderer.getScreenHeight() - top - metrics.buttonHintsHeight - metrics.verticalSpacing;
-  const auto& books = READING_STATS.getBooks();
-  if (books.empty()) {
-    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, top, tr(STR_NO_READING_STATS));
-    drawFooter();
-    return;
-  }
-  std::string allTitles;
-  for (const auto& book : books) allTitles += book.title + "\n";
-  const int font = DynamicFont::fontForCjkText(renderer, allTitles.c_str(), UI_10_FONT_ID);
-  DynamicFont::prewarmIfSdFont(renderer, font, allTitles);
-  GUI.drawList(renderer, Rect{0, top, renderer.getScreenWidth(), height}, static_cast<int>(books.size()), selectedIndex,
-               [&books](int index) { return books[index].title.empty() ? books[index].path : books[index].title; },
-               [&books](int index) { return duration(books[index].totalReadingMs) + "  " + std::to_string(books[index].lastProgressPercent) + "%"; },
-               nullptr, nullptr, false, nullptr, font);
-  drawFooter();
 }
 
 void ReadingStatsActivity::renderCalendar() {
@@ -406,8 +539,13 @@ void ReadingStatsActivity::render(RenderLock&&) {
   renderer.clearScreen();
   GUI.drawHeader(renderer, Rect{0, UITheme::getInstance().getMetrics().topPadding, renderer.getScreenWidth(),
                                 UITheme::getInstance().getMetrics().headerHeight}, viewTitle(view));
+  if (view == View::Books || view == View::DayDetail || view == View::Achievements) {
+    renderUi();
+    drawFooter(view == View::Books ? tr(STR_BOOK_DETAILS) : "Back");
+    renderer.displayBuffer();
+    return;
+  }
   switch (view) {
-    case View::Books: renderBooks(); break;
     case View::Calendar: renderCalendar(); break;
     case View::DayDetail: renderDayDetail(); break;
     case View::BookDetail: renderBookDetail(); break;

@@ -5,17 +5,28 @@
 
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
+#include "components/UiAppHelpers.h"
+
+namespace fui = freeink::ui;
 
 TxtReaderMenuActivity::TxtReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                              const std::string& title, const int currentPage, const int totalPages,
                                              const int progressPercent, const uint8_t currentOrientation)
-    : Activity("TxtReaderMenu", renderer, mappedInput),
+    : UiListActivity("TxtReaderMenu", renderer, mappedInput),
       menuItems(buildMenuItems()),
       title(title),
       currentPage(currentPage),
       totalPages(totalPages),
       progressPercent(progressPercent),
-      pendingOrientation(currentOrientation) {}
+      pendingOrientation(currentOrientation) {
+  rowItems.reserve(menuItems.size());
+  for (size_t i = 0; i < menuItems.size(); ++i) {
+    fui::ListItem item;
+    item.label = I18N.get(menuItems[i].labelId);
+    item.actionValue = static_cast<int16_t>(i);
+    rowItems.push_back(item);
+  }
+}
 
 std::vector<TxtReaderMenuActivity::MenuItem> TxtReaderMenuActivity::buildMenuItems() {
   return {{MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT},
@@ -25,54 +36,45 @@ std::vector<TxtReaderMenuActivity::MenuItem> TxtReaderMenuActivity::buildMenuIte
 }
 
 void TxtReaderMenuActivity::onEnter() {
-  Activity::onEnter();
-  requestUpdate();
+  UiListActivity::onEnter();
 }
 
 void TxtReaderMenuActivity::onExit() { Activity::onExit(); }
 
-void TxtReaderMenuActivity::loop() {
-  buttonNavigator.onNext([this] {
-    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, static_cast<int>(menuItems.size()));
+void TxtReaderMenuActivity::activateIndex(const int index) {
+  if (index < 0 || index >= listCount()) return;
+  app.clearTapFlash();
+  const auto selectedAction = menuItems[static_cast<size_t>(index)].action;
+  if (selectedAction == MenuAction::ROTATE_SCREEN) {
+    pendingOrientation = static_cast<uint8_t>((pendingOrientation + 1) % orientationLabels.size());
     requestUpdate();
-  });
-
-  buttonNavigator.onPrevious([this] {
-    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, static_cast<int>(menuItems.size()));
-    requestUpdate();
-  });
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    const auto selectedAction = menuItems[selectedIndex].action;
-    if (selectedAction == MenuAction::ROTATE_SCREEN) {
-      pendingOrientation = (pendingOrientation + 1) % orientationLabels.size();
-      requestUpdate();
-      return;
-    }
-
-    setResult(TxtMenuResult{static_cast<int>(selectedAction), pendingOrientation});
-    finish();
     return;
   }
 
+  setResult(TxtMenuResult{static_cast<int>(selectedAction), pendingOrientation});
+  finish();
+}
+
+bool TxtReaderMenuActivity::handleButtons() {
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    if (nav.selected >= 0 && nav.selected < listCount()) activateIndex(nav.selected);
+    return true;
+  }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     ActivityResult result;
     result.isCancelled = true;
     result.data = TxtMenuResult{-1, pendingOrientation};
     setResult(std::move(result));
     finish();
+    return true;
   }
+  return false;
 }
 
-void TxtReaderMenuActivity::render(RenderLock&&) {
-  renderer.clearScreen();
-
-  auto metrics = UITheme::getInstance().getMetrics();
-  Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-
-  GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
-                 title.c_str());
-
+void TxtReaderMenuActivity::drawChrome() {
+  const auto metrics = UITheme::getInstance().getMetrics();
+  const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight}, title.c_str());
   std::string progressLine;
   if (totalPages > 0) {
     progressLine = std::string(tr(STR_CHAPTER_PREFIX)) + std::to_string(currentPage) + "/" +
@@ -83,24 +85,22 @@ void TxtReaderMenuActivity::render(RenderLock&&) {
       renderer,
       Rect{screen.x, screen.y + metrics.topPadding + metrics.headerHeight, screen.width, metrics.tabBarHeight},
       progressLine.c_str());
+}
 
-  const int contentTop =
-      screen.y + metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight + metrics.verticalSpacing;
-  const int contentHeight = screen.height - contentTop - metrics.verticalSpacing;
-
-  GUI.drawList(
-      renderer, Rect{screen.x, contentTop, screen.width, contentHeight}, menuItems.size(), selectedIndex,
-      [this](int index) { return I18N.get(menuItems[index].labelId); }, nullptr, nullptr,
-      [this](int index) {
-        if (menuItems[index].action == MenuAction::ROTATE_SCREEN) {
-          return I18N.get(orientationLabels[pendingOrientation]);
-        }
-        return "";
-      },
-      true);
-
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-
-  renderer.displayBuffer();
+void TxtReaderMenuActivity::buildScreen(UiScreen& screen) {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight), 0,
+                                      static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  if (pendingOrientation < orientationLabels.size()) {
+    rowItems[1].value = I18N.get(orientationLabels[pendingOrientation]);
+  }
+  fui::ListProps props;
+  props.items = rowItems.data();
+  props.count = static_cast<uint16_t>(rowItems.size());
+  props.action = ACTION_ROW;
+  props.inputMask = fui::InputTouch;
+  props.valueInset = 8;
+  syncListViewport(screen, props);
+  screen.list(props);
 }

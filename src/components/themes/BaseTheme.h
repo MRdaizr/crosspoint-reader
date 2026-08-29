@@ -46,11 +46,28 @@ struct ThemeMetrics {
   int contentSidePadding;
   int listRowHeight;
   int listWithSubtitleRowHeight;
+  // FreeInkUI geometry tokens. Legacy drawList callers continue to use the
+  // fields above; FUI screens consume these shape/inset values.
+  int listRowGap = 0;
+  int listRowRadius = 0;
+  int listInset = 0;
+  int listSidePadding = 20;
+  int listSelectionStyle = 0;
+  int listScrollWidth = 4;
+  int listScrollSide = 0;
+  bool listTitleBold = false;
+
+  int headerSidePadding = 18;
+  int headerUnderlineSize = 0;
+  int headerTitleAlign = 1;
+  int headerBatterySide = 0;
+  bool headerBatteryDetached = false;
   int menuRowHeight;
   int menuSpacing;
 
   int tabSpacing;
   int tabBarHeight;
+  bool tabPillFullSlot = false;
 
   int scrollBarWidth;
   int scrollBarRightOffset;
@@ -102,13 +119,54 @@ struct ThemeMetrics {
   bool popupProgressFillInverted;
   bool popupProgressOutlineInverted;
 
+  int optionPopupItemSpacing = 6;
+  int optionPopupInnerPadding = 16;
+  int optionPopupSelectionHPadding = 8;
+  int optionPopupSelectionVPadding = 4;
+  int optionPopupTitleGap = 10;
+  bool optionPopupUseSmallFont = true;
+  bool optionPopupOptionFontBold = true;
+  int optionPopupSelectionRadius = 0;
+  bool optionPopupSelectionLight = false;
+  bool optionPopupDrawAllRows = false;
+  int optionPopupDialogSideMargin = 20;
+  bool optionPopupTitleSeparator = true;
+
+  // FreeInkUI control geometry. Keep these separate from list-row radii:
+  // sheets and slider capsules use a different visual language on Lyra and
+  // RoundedRaff, while Classic remains square.
+  int controlRadius = 0;
+  int sheetRadius = 0;
+  int capsuleRadius = 0;
+
   int textFieldHorizontalPadding;
   int textFieldNormalThickness;
   int textFieldCursorThickness;
   int textFieldLineEndOffset;
 };
 
-enum UIIcon { None = 0, Folder, Text, Image, Book, File, Recent, Settings, Transfer, Library, Wifi, Hotspot, Bookmark };
+enum UIIcon { None = 0, Folder, Text, Image, Book, File, Recent, Settings, Transfer, Library, Wifi, Hotspot, Bookmark, Usb };
+
+// Semantic slots for leading icons on FUI-hosted home and extension menus.
+// Keeping the slot separate from UIIcon lets a theme hide selected entries
+// without making page code depend on a concrete theme or localized labels.
+enum class FuiMenuIconSlot : uint8_t {
+  HomeContinueReading,
+  HomeBrowseFiles,
+  HomeRecents,
+  HomeOpds,
+  HomeFileTransfer,
+  HomeExtensions,
+  HomeSettings,
+  ExtensionsFlashcards,
+  ExtensionsReadingStats,
+  ExtensionsPomodoro,
+  ExtensionsTimer,
+  ExtensionsNtpClock,
+  ExtensionsTodos,
+  ExtensionsWeRead,
+  FlashcardDeckRows,
+};
 
 enum class KeyboardKeyType { Normal, Shift, Mode, Space, Del, Ok, Disabled };
 
@@ -234,6 +292,7 @@ class BaseTheme {
                                const char* secondaryLabel = nullptr, KeyboardKeyType keyType = KeyboardKeyType::Normal,
                                bool inactiveSelection = false) const;
   virtual bool showsFileIcons() const { return false; }
+  virtual bool showsFuiMenuIcon(FuiMenuIconSlot) const { return true; }
 
   // Shared constants and helpers for battery drawing (used by all themes)
   static constexpr int batteryPercentSpacing = 4;

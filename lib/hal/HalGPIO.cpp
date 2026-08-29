@@ -237,6 +237,13 @@ void HalGPIO::begin() {
   inputMgr.begin();
 }
 
+bool HalGPIO::hasEdgeSideButtons() const {
+  // Keep this capability query tied to the runtime-selected X3/X4 profile.
+  // BoardConfig also contains X4 Pro metadata, but Pro is intentionally not
+  // part of this firmware's build and must never be inferred here.
+  return deviceIsX3();
+}
+
 void HalGPIO::update() {
   inputMgr.update();
   const bool connected = isUsbConnected();

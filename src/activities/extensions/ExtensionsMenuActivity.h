@@ -1,17 +1,18 @@
 #pragma once
 
-#include "activities/Activity.h"
-#include "util/ButtonNavigator.h"
+#include "activities/UiListActivity.h"
 
-class ExtensionsMenuActivity final : public Activity {
-  ButtonNavigator buttonNavigator;
-  int selectedIndex = 0;
+class ExtensionsMenuActivity final : public UiListActivity {
+  static constexpr int MENU_ITEMS = 7;
+
+  void buildScreen(UiScreen& screen) override;
+  void activateIndex(int index) override;
+  const char* headerTitle() const override;
 
  public:
   explicit ExtensionsMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("Extensions", renderer, mappedInput) {}
+      : UiListActivity("Extensions", renderer, mappedInput) {}
 
-  void onEnter() override;
-  void loop() override;
-  void render(RenderLock&&) override;
+ private:
+  int listCount() const override { return MENU_ITEMS; }
 };

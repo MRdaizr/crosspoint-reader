@@ -3,17 +3,15 @@
 #include <functional>
 #include <string>
 
-#include "activities/Activity.h"
+#include "activities/UiListActivity.h"
 
-class ButtonRemapActivity final : public Activity {
+class ButtonRemapActivity final : public UiListActivity {
  public:
   explicit ButtonRemapActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("ButtonRemap", renderer, mappedInput) {}
+      : UiListActivity("ButtonRemap", renderer, mappedInput) {}
 
   void onEnter() override;
   void onExit() override;
-  void loop() override;
-  void render(RenderLock&&) override;
 
  private:
   // Rendering task state.
@@ -33,4 +31,12 @@ class ButtonRemapActivity final : public Activity {
   // Labels for UI display.
   const char* getRoleName(uint8_t roleIndex) const;
   const char* getHardwareName(uint8_t buttonIndex) const;
+
+  int listCount() const override { return 4; }
+  void buildScreen(UiScreen& screen) override;
+  void activateIndex(int index) override;
+  bool handleCustomInput() override;
+  bool handleButtons() override;
+  const char* headerTitle() const override;
+  void drawFooter() override;
 };

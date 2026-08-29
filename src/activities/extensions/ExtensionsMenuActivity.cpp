@@ -10,7 +10,9 @@
 #include "TimerActivity.h"
 #include "TodoActivity.h"
 #include "activities/apps/weread/WeReadActivity.h"
+#include "CrossPointSettings.h"
 #include "MappedInputManager.h"
+#include "components/UiAppHelpers.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -23,22 +25,19 @@ const StrId menuDescs[MENU_ITEMS] = {StrId::STR_FLASHCARDS_DESC, StrId::STR_READ
                                      StrId::STR_TODOS_DESC, StrId::STR_WEREAD_DESC};
 const UIIcon menuIcons[MENU_ITEMS] = {UIIcon::Book, UIIcon::Recent, UIIcon::Settings, UIIcon::Settings,
                                       UIIcon::Recent, UIIcon::File, UIIcon::Book};
+const FuiMenuIconSlot menuIconSlots[MENU_ITEMS] = {
+    FuiMenuIconSlot::ExtensionsFlashcards,
+    FuiMenuIconSlot::ExtensionsReadingStats,
+    FuiMenuIconSlot::ExtensionsPomodoro,
+    FuiMenuIconSlot::ExtensionsTimer,
+    FuiMenuIconSlot::ExtensionsNtpClock,
+    FuiMenuIconSlot::ExtensionsTodos,
+    FuiMenuIconSlot::ExtensionsWeRead,
+};
 }  // namespace
 
-void ExtensionsMenuActivity::onEnter() {
-  Activity::onEnter();
-  selectedIndex = 0;
-  requestUpdate();
-}
-
-void ExtensionsMenuActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    onGoHome(HomeMenuItem::EXTENSIONS);
-    return;
-  }
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    switch (selectedIndex) {
+void ExtensionsMenuActivity::activateIndex(const int index) {
+  switch (index) {
       case 0:
         startActivityForResult(std::make_unique<FlashcardDeckListActivity>(renderer, mappedInput), nullptr);
         break;
@@ -62,37 +61,63 @@ void ExtensionsMenuActivity::loop() {
         break;
       default:
         break;
-    }
-    return;
   }
-
-  buttonNavigator.onNextRelease([this] {
-    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, MENU_ITEMS);
-    requestUpdate();
-  });
-  buttonNavigator.onPreviousRelease([this] {
-    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, MENU_ITEMS);
-    requestUpdate();
-  });
 }
 
-void ExtensionsMenuActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+const char* ExtensionsMenuActivity::headerTitle() const { return tr(STR_EXTENSIONS); }
 
+void ExtensionsMenuActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto pageHeight = renderer.getScreenHeight();
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_EXTENSIONS));
-
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing * 2;
-
-  GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, MENU_ITEMS, selectedIndex,
-               [](int index) { return std::string(I18N.get(menuLabels[index])); },
-               [](int index) { return std::string(I18N.get(menuDescs[index])); },
-               [](int index) { return menuIcons[index]; });
-
-  const auto labels = mappedInput.mapLabels(tr(STR_HOME), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer();
+  const auto theme = static_cast<CrossPointSettings::UI_THEME>(SETTINGS.uiTheme);
+  const bool roundedRaffLayout = theme == CrossPointSettings::UI_THEME::ROUNDEDRAFF ||
+                                 theme == CrossPointSettings::UI_THEME::ROUNDEDRAFF_EXT;
+  const bool roundedRaffExtLayout = theme == CrossPointSettings::UI_THEME::ROUNDEDRAFF_EXT;
+  // Keep the extension menu's list band aligned with the legacy File Transfer
+  // menu (NetworkModeSelectionActivity -> GUI.drawList).  GUI.drawList leaves
+  // two vertical spacing units below the rows before the button hints and uses
+  // the theme's content padding for both the card edge and its text inset.
+  // FUI normally inherits its own tighter 8/16px insets and LightPill
+  // selection style, which makes this menu visibly wider and lighter than the
+  // neighbouring File Transfer menu.
+  const int listBottomInset = metrics.buttonHintsHeight + (roundedRaffLayout ? metrics.verticalSpacing * 2 : 0);
+  screen.setContentMargin(freeink::ui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                              static_cast<int16_t>(listBottomInset), 0});
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+  freeink::ui::ListItem items[MENU_ITEMS]{};
+  for (int i = 0; i < MENU_ITEMS; ++i) {
+    items[i].label = I18N.get(menuLabels[i]);
+    // File Transfer's legacy GUI.drawList renders its descriptions below the
+    // title.  Use FUI's subtitle slot for the same two-line row instead of the
+    // trailing value slot, which would place the description on the right.
+    items[i].subtitle = I18N.get(menuDescs[i]);
+    items[i].icon = GUI.showsFuiMenuIcon(menuIconSlots[i]) ? listIconFor(menuIcons[i], 32)
+                                                           : freeink::ui::BitmapRef{};
+    items[i].actionValue = static_cast<int16_t>(i);
+  }
+  freeink::ui::ListProps props;
+  props.items = items;
+  props.count = MENU_ITEMS;
+  props.action = ACTION_ROW;
+  props.inputMask = freeink::ui::InputTouch;
+  props.labelText = screen.theme().bodyText;
+  props.valueInset = 8;
+  if (roundedRaffExtLayout) {
+    // RoundedRaffExtTheme's legacy drawList intentionally uses UI_12 for
+    // extension subtitles.  Bind the same font in FUI instead of its default
+    // small-text slot so the title/description block has the same line rhythm.
+    props.subtitleText = screen.theme().bodyText;
+    props.subtitleText.bold = false;
+  }
+  if (roundedRaffLayout) {
+    props.rowInset = static_cast<int16_t>(metrics.contentSidePadding);
+    props.sidePadding = static_cast<int16_t>(metrics.contentSidePadding);
+    props.rowRadius = 20;
+    props.scrollIndicatorInset = static_cast<int16_t>(metrics.scrollBarRightOffset);
+    // RoundedRaff's GUI list inverts the selected card (black background,
+    // white text).  Supplying explicit styles bypasses the FUI LightPill theme
+    // token while leaving other FUI themes unchanged.
+    props.rowStyles = freeink::ui::defaultListRowStyles();
+  }
+  syncListViewport(screen, props, true);
+  screen.list(props);
 }

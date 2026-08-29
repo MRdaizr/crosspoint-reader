@@ -3,17 +3,19 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "../../Activity.h"
 #include "AirPageConnection.h"
 #include "AirPageImageStore.h"
+#include "components/UiAppHost.h"
 
 struct Rect;
 
-class AirPageActivity final : public Activity {
+class AirPageActivity final : public Activity, private UiAppHost {
  public:
   explicit AirPageActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("AirPage", renderer, mappedInput), connection_(renderer) {}
+      : Activity("AirPage", renderer, mappedInput), UiAppHost(renderer), connection_(renderer) {}
 
   void onEnter() override;
   void onExit() override;
@@ -57,10 +59,19 @@ class AirPageActivity final : public Activity {
   bool consumeInputReleaseBarrier();
   void setAirPageScreen(Screen screen);
 
+  // FUI owns the settings/history list interaction table; QR/image/status
+  // pages continue using their specialised renderer paths.
+  static void fuiScreen(UiScreen& screen, void* user);
+  static void onFuiRow(const freeink::ui::ActionEvent& event, void* user);
+  void buildFuiScreen(UiScreen& screen);
+  bool routeFuiTouch();
+  std::vector<std::string> fuiRowLabels_;
+  std::vector<std::string> fuiRowValues_;
+  std::vector<freeink::ui::ListItem> fuiRows_;
+  freeink::ui::ListNav fuiNav_;
+
   void renderQr(const Rect& viewport);
   void renderStatus(const Rect& viewport, const char* msg);
-  void renderSettings(const Rect& viewport);
-  void renderHistory(const Rect& viewport);
   Rect contentViewport() const;
   const char* noticeText() const;
   const char* connectionText() const;

@@ -3,24 +3,27 @@
 #include <vector>
 
 #include "TodoStore.h"
-#include "activities/Activity.h"
-#include "util/ButtonNavigator.h"
+#include "activities/UiListActivity.h"
 
-class TodoActivity final : public Activity {
+class TodoActivity final : public UiListActivity {
  public:
   explicit TodoActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("Todos", renderer, mappedInput) {}
+      : UiListActivity("Todos", renderer, mappedInput) {}
 
   void onEnter() override;
-  void loop() override;
   bool allowPowerSaving() override { return true; }
-  void render(RenderLock&&) override;
 
  private:
-  ButtonNavigator buttonNavigator;
   std::vector<TodoItem> items;
-  int selectedIndex = 0;
+  std::vector<std::string> rowTitles;
+  std::vector<std::string> rowDates;
+  std::vector<freeink::ui::ListItem> rowItems;
   bool loadFailed = false;
 
   bool reload(uint32_t selectedId = 0);
+  void rebuildRowItems();
+  int listCount() const override { return static_cast<int>(items.size()); }
+  void buildScreen(UiScreen& screen) override;
+  void activateIndex(int index) override;
+  const char* headerTitle() const override;
 };

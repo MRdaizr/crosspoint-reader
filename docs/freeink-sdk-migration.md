@@ -9,7 +9,7 @@ than the retired `open-x4-sdk` fork.
 - SDK commit: `3e4d65159605f2a53d5435824f9c24e62ea80d9e`
 - Upstream migration reference: `ebebc6f2`
 - Supported profiles: standard X3 and X4, selected at runtime
-- Deferred profiles: X4 Pro touch/frontlight/USB MSC/PSRAM and FreeInkUI
+- Deferred profiles: X4 Pro touch/frontlight/USB MSC/PSRAM
 
 The SDK switch does not change EPUB, settings, bookmarks, reading progress or
 image/font cache formats. The current branch's EPUB section version (35) and
@@ -20,10 +20,11 @@ bookmarks and reading progress are kept.
 
 ## HAL boundary
 
-Application code must use `HalDisplay`, `HalGPIO`, `HalPowerManager` and
-`HalStorage`, `HalClock` and `HalTiltSensor`. `HalSdkCompat.h` is the only compatibility boundary for SDK
-type aliases and refresh-mode conversion. Do not include FreeInk headers from
-activities or readers.
+Non-UI application code must use `HalDisplay`, `HalGPIO`, `HalPowerManager`,
+`HalStorage`, `HalClock`, and `HalTiltSensor`. `HalSdkCompat.h` is the
+compatibility boundary for SDK type aliases and refresh-mode conversion. FUI
+screens include FreeInkUI only through `UiAppHost`/`UiListActivity`; readers
+and other legacy activities continue to use the HAL and renderer interfaces.
 
 The display wrapper preserves X3 grayscale preconditioning, plane streaming,
 refresh modes and the legacy `displayWindow()` call. Since windowed refresh is

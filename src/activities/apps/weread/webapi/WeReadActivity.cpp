@@ -26,6 +26,7 @@
 #include "SilentRestart.h"
 #include "WeReadBrowseActivity.h"
 #include "activities/apps/weread/WeReadTouchGeometry.h"
+#include "activities/UiListActivity.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/SubpageLayout.h"
@@ -36,6 +37,8 @@
 #include "util/DynamicFont.h"
 #include "util/TimeUtils.h"
 #include "HalClock.h"
+
+namespace fui = freeink::ui;
 
 namespace {
 
@@ -92,7 +95,6 @@ constexpr int kDisclaimerParagraphCount =
     static_cast<int>(sizeof(kDisclaimerParagraphs) / sizeof(kDisclaimerParagraphs[0]));
 constexpr int kMinimumDisclaimerActionGap = 4;
 constexpr int kManageEntryCount = static_cast<int>(sizeof(kManageEntries) / sizeof(kManageEntries[0]));
-constexpr size_t kMainTabCount = 2;
 constexpr int kDetailCoverWidth = 96;
 constexpr int kDetailCoverHeight = 140;
 constexpr int kPortraitShelfColumns = 1;
@@ -161,11 +163,6 @@ int dynamicShelfTitleHeight(GfxRenderer& renderer) {
   const int sdFontId = sdFontSystem.currentFontId();
   if (!renderer.isSdCardFont(sdFontId)) return builtInHeight;
   return std::max(builtInHeight, renderer.getLineHeight(sdFontId));
-}
-
-int dynamicListTitleFontId(GfxRenderer& renderer, const std::string& visibleText) {
-  const int fontId = dynamicRemoteFontId(renderer, visibleText.c_str(), UI_10_FONT_ID);
-  return renderer.isSdCardFont(fontId) ? fontId : 0;
 }
 
 uint32_t hashText(const std::string& text) {
@@ -333,125 +330,115 @@ void logHeap([[maybe_unused]] const char* phase) {
           static_cast<unsigned>(ESP.getMaxAllocHeap()), static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
 }
 
-class WeReadChapterRangeActivity final : public Activity {
+class WeReadChapterRangeActivity final : public UiListActivity {
  public:
   WeReadChapterRangeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, WeReadClient::Operation& operation,
                              const int chapterCount)
-      : Activity("WeReadChapterRange", renderer, mappedInput), operation_(operation), chapterCount_(chapterCount) {}
+      : UiListActivity("WeReadChapterRange", renderer, mappedInput), operation_(operation), chapterCount_(chapterCount) {}
 
   void onEnter() override {
-    Activity::onEnter();
+    UiListActivity::onEnter();
     logHeap("chapter range selector");
-    requestUpdate();
-  }
-
-  void loop() override {
-    if (readFailed_.load()) {
-      setResult(ActivityResult{});
-      finish();
-      return;
-    }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      ActivityResult result;
-      result.isCancelled = true;
-      setResult(std::move(result));
-      finish();
-      return;
-    }
-
-    const auto& metrics = UITheme::getInstance().getMetrics();
-    const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-    const Rect content = SubpageLayout::contentRect(screen, metrics);
-    const int pageItems = GUI.getListPageItems(content.height, false);
-    int touched = -1;
-    const auto touch = mappedInput.rowTouch(touched, content.y, GUI.getListRowStep(false), chapterCount_, content.x,
-                                            content.x + content.width);
-    if (touch != MappedInputManager::RowTouch::None) {
-      selectedIndex_ = touched;
-      if (touch == MappedInputManager::RowTouch::Tap) {
-        selectCurrent();
-      } else {
-        requestUpdate();
-      }
-      return;
-    }
-    const auto swipe = mappedInput.wasSwipe();
-    if (swipe == MappedInputManager::SwipeDir::Up) {
-      selectedIndex_ = ButtonNavigator::nextPageIndex(selectedIndex_, chapterCount_, std::max(1, pageItems));
-      requestUpdate();
-      return;
-    }
-    if (swipe == MappedInputManager::SwipeDir::Down) {
-      selectedIndex_ = ButtonNavigator::previousPageIndex(selectedIndex_, chapterCount_, std::max(1, pageItems));
-      requestUpdate();
-      return;
-    }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      selectCurrent();
-      return;
-    }
-
-    buttonNavigator_.onNextRelease([this] {
-      selectedIndex_ = ButtonNavigator::nextIndex(selectedIndex_, chapterCount_);
-      requestUpdate();
-    });
-    buttonNavigator_.onPreviousRelease([this] {
-      selectedIndex_ = ButtonNavigator::previousIndex(selectedIndex_, chapterCount_);
-      requestUpdate();
-    });
-    buttonNavigator_.onNextContinuous([this, pageItems] {
-      selectedIndex_ = ButtonNavigator::nextPageIndex(selectedIndex_, chapterCount_, pageItems);
-      requestUpdate();
-    });
-    buttonNavigator_.onPreviousContinuous([this, pageItems] {
-      selectedIndex_ = ButtonNavigator::previousPageIndex(selectedIndex_, chapterCount_, pageItems);
-      requestUpdate();
-    });
-  }
-
-  void render(RenderLock&&) override {
-    renderer.clearScreen();
-
-    const auto& metrics = UITheme::getInstance().getMetrics();
-    const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-    const Rect content = SubpageLayout::contentRect(screen, metrics);
-    const int pageItems = GUI.getListPageItems(content.height, false);
-    GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
-                   I18N.get(stageTitle()));
-
-    const int pageStart = selectedIndex_ / std::max(1, pageItems) * std::max(1, pageItems);
-    std::string visibleTitles;
-    for (int index = pageStart; index < chapterCount_ && index < pageStart + pageItems; ++index) {
-      visibleTitles += rowTitle(index);
-      visibleTitles.push_back('\n');
-    }
-    const int chapterTitleFontId = dynamicListTitleFontId(renderer, visibleTitles);
-
-    GUI.drawList(
-        renderer, content, chapterCount_, selectedIndex_,
-        [this](const int index) { return rowTitle(index); }, nullptr, nullptr,
-        [this](const int index) {
-          return stage_ == Stage::End && index == firstIndex_ ? std::string(tr(STR_WEREAD_CACHE_RANGE_START_MARK))
-                                                              : std::string();
-        },
-        false, [this](const int index) { return stage_ == Stage::End && index < firstIndex_; }, chapterTitleFontId);
-
-    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
   }
 
  private:
+  static constexpr int kMaxWindow = 16;
+
+  int listCount() const override { return chapterCount_; }
+
+  const char* headerTitle() const override { return I18N.get(stageTitle()); }
+
+  void buildScreen(UiScreen& screen) override {
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    screen.setContentMargin(freeink::ui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                                static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+    screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+
+    const int count = std::max(0, chapterCount_);
+    if (count == 0) {
+      screen.centeredText(tr(STR_NO_CHAPTERS), screen.theme().bodyText);
+      return;
+    }
+
+    const int selected = std::clamp(nav.selected, 0, count - 1);
+    nav.selected = selected;
+    freeink::ui::ListProps props;
+    props.count = static_cast<uint16_t>(count);
+    props.action = ACTION_ROW;
+    props.inputMask = freeink::ui::InputTouch;
+    props.labelText = screen.theme().bodyText;
+    props.subtitleText = screen.theme().smallText;
+    props.valueInset = 8;
+    props.rowHeight = static_cast<int16_t>(mappedInput.hasTouch()
+                                               ? screen.theme().rowHeight
+                                               : metrics.listWithSubtitleRowHeight);
+    syncListViewport(screen, props, /*hasSubtitle=*/true);
+
+    const int first = std::clamp(nav.top, 0, std::max(0, count - 1));
+    const int windowCount = std::min({nav.visibleRows, count - first, kMaxWindow});
+    windowLabels_.clear();
+    windowLabels_.resize(static_cast<size_t>(std::max(0, windowCount)));
+    windowItems_.clear();
+    windowItems_.resize(static_cast<size_t>(std::max(0, windowCount)));
+
+    for (int i = 0; i < windowCount; ++i) {
+      const int index = first + i;
+      windowLabels_[static_cast<size_t>(i)] = rowTitle(index);
+      auto& item = windowItems_[static_cast<size_t>(i)];
+      item.label = windowLabels_[static_cast<size_t>(i)].c_str();
+      item.subtitle = stage_ == Stage::End && index == firstIndex_ ? tr(STR_WEREAD_CACHE_RANGE_START_MARK) : nullptr;
+      item.actionValue = static_cast<int16_t>(index);
+      item.enabled = !(stage_ == Stage::End && index < firstIndex_);
+    }
+
+    props.items = windowItems_.data();
+    props.itemsWindowFirst = static_cast<uint16_t>(first);
+    props.itemsWindowCount = static_cast<uint16_t>(std::max(0, windowCount));
+    screen.list(props);
+  }
+
+  void activateIndex(const int index) override {
+    if (index < 0 || index >= chapterCount_) return;
+    if (stage_ == Stage::Start) {
+      firstIndex_ = index;
+      stage_ = Stage::End;
+      nav.reset(index);
+      app.clearTapFlash();
+      requestUpdate();
+      return;
+    }
+    if (index < firstIndex_) return;
+    setResult(ChapterRangeResult{static_cast<uint32_t>(firstIndex_), static_cast<uint32_t>(index)});
+    app.clearTapFlash();
+    finish();
+  }
+
+  bool handleCustomInput() override {
+    if (readFailed_.load()) {
+      setResult(ActivityResult{});
+      finish();
+      return true;
+    }
+    return false;
+  }
+
+  void onBackButton() override {
+    ActivityResult result;
+    result.isCancelled = true;
+    setResult(std::move(result));
+    finish();
+  }
+
   enum class Stage : uint8_t { Start, End };
 
   WeReadClient::Operation& operation_;
-  ButtonNavigator buttonNavigator_;
   WeReadStore::TocRecord rowRecord_;
   std::atomic<bool> readFailed_{false};
   int chapterCount_ = 0;
-  int selectedIndex_ = 0;
   int firstIndex_ = 0;
   Stage stage_ = Stage::Start;
+  std::vector<std::string> windowLabels_;
+  std::vector<freeink::ui::ListItem> windowItems_;
 
   StrId stageTitle() const {
     switch (stage_) {
@@ -476,28 +463,20 @@ class WeReadChapterRangeActivity final : public Activity {
     return text;
   }
 
-  void selectCurrent() {
-    switch (stage_) {
-      case Stage::Start:
-        firstIndex_ = selectedIndex_;
-        stage_ = Stage::End;
-        requestUpdate();
-        return;
-      case Stage::End:
-        if (selectedIndex_ < firstIndex_) return;
-        setResult(ChapterRangeResult{static_cast<uint32_t>(firstIndex_), static_cast<uint32_t>(selectedIndex_)});
-        finish();
-        return;
-    }
-  }
 };
 
-static_assert(sizeof(WeReadChapterRangeActivity) <= 1024, "WeRead chapter selector exceeds its fixed heap budget");
+static_assert(sizeof(WeReadChapterRangeActivity) <= 8 * 1024, "WeRead chapter selector exceeds its fixed heap budget");
 
 }  // namespace
 
 void WeReadActivity::onEnter() {
   Activity::onEnter();
+  resetUi();
+  app.on(ACTION_FUI_TAB, &WeReadActivity::onFuiAction, this);
+  app.on(ACTION_FUI_MANAGE, &WeReadActivity::onFuiAction, this);
+  app.on(ACTION_FUI_DETAIL, &WeReadActivity::onFuiAction, this);
+  fuiManageNav_.reset();
+  fuiDetailNav_.reset();
   if (!WeReadBrowse::clearLegacyWorkspace()) LOG_ERR("WR", "legacy browse workspace cleanup failed");
   NetworkStartup::prepare(renderer);
   disclaimerSelected_ = 0;
@@ -507,12 +486,6 @@ void WeReadActivity::onEnter() {
   shelfFrameInvalidated_.store(true);
   mainTab_.store(MainTab::Shelf);
   mainFocus_.store(MainFocus::Content);
-  // drawTabBar requires a vector; reserve its fixed 16-byte ESP32-C3 payload
-  // once for the Activity lifetime instead of allocating in the render path.
-  mainTabs_.clear();
-  mainTabs_.reserve(kMainTabCount);
-  mainTabs_.push_back({tr(STR_WEREAD_TAB_SHELF), true});
-  mainTabs_.push_back({tr(STR_WEREAD_TAB_MANAGE), false});
   resetShelfCoverLoading();
   detailSelected_.store(0);
   detailFrameSelection_.store(-1);
@@ -567,11 +540,11 @@ void WeReadActivity::enterApp() {
 }
 
 void WeReadActivity::onExit() {
+  closeRouting();
   operation_.reset();
   downloadRenderPending_.store(false);
   stageRenderPending_.store(false);
   if (shelfFile_.isOpen()) shelfFile_.close();
-  std::vector<TabInfo>().swap(mainTabs_);
   if (wifiSessionActive_ && WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(false);
     delay(100);
@@ -581,6 +554,170 @@ void WeReadActivity::onExit() {
   LOG_DBG("WR", "onExit free=%u largest=%u", static_cast<unsigned>(ESP.getFreeHeap()),
           static_cast<unsigned>(ESP.getMaxAllocHeap()));
   Activity::onExit();
+}
+
+void WeReadActivity::fuiScreen(UiScreen& screen, void* user) {
+  static_cast<WeReadActivity*>(user)->buildFuiScreen(screen);
+}
+
+void WeReadActivity::onFuiAction(const fui::ActionEvent& event, void* user) {
+  auto* self = static_cast<WeReadActivity*>(user);
+  if (event.action == ACTION_FUI_TAB) {
+    if (event.value < 0 || event.value >= kFuiTabCount) return;
+    self->mainFocus_.store(MainFocus::Content);
+    self->selectMainTab(event.value == 0 ? MainTab::Shelf : MainTab::Manage);
+    self->app.clearTapFlash();
+    return;
+  }
+  if (event.action == ACTION_FUI_MANAGE) {
+    if (event.value < 0 || event.value >= kManageEntryCount) return;
+    self->manageSelected_ = event.value;
+    self->mainFocus_.store(MainFocus::Content);
+    self->app.clearTapFlash();
+    switch (kManageEntries[event.value].action) {
+      case ManageAction::Refresh:
+        self->showShelfRefreshPopup();
+        return;
+      case ManageAction::ClearCache:
+        self->promptClearCache();
+        return;
+      case ManageAction::Logout:
+        self->promptLogout();
+        return;
+    }
+  }
+  if (event.action == ACTION_FUI_DETAIL) {
+    if (self->state_.load() != State::Detail || event.value < static_cast<int>(DetailAction::Read) ||
+        event.value > static_cast<int>(DetailAction::Images)) return;
+    const auto action = static_cast<DetailAction>(event.value);
+    if (!self->detailActionEnabled(action)) return;
+    self->detailSelected_.store(event.value);
+    self->fuiDetailNav_.selected = event.value - 1;
+    self->app.clearTapFlash();
+    self->activateDetailSelection();
+  }
+}
+
+void WeReadActivity::buildFuiScreen(UiScreen& screen) {
+  const State state = state_.load();
+  const auto& metrics = UITheme::getInstance().getMetrics();
+
+  if (state == State::Home) {
+    screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                        static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+    const fui::Rect tabsRect = screen.takeTop(static_cast<int16_t>(metrics.tabBarHeight));
+    fuiMainTabs_[0] = {};
+    fuiMainTabs_[0].label = tr(STR_WEREAD_TAB_SHELF);
+    fuiMainTabs_[0].value = 0;
+    fuiMainTabs_[0].selected = mainTab_.load() == MainTab::Shelf;
+    fuiMainTabs_[1] = {};
+    fuiMainTabs_[1].label = tr(STR_WEREAD_TAB_MANAGE);
+    fuiMainTabs_[1].value = 1;
+    fuiMainTabs_[1].selected = mainTab_.load() == MainTab::Manage;
+    fuiTabProps_ = {};
+    fuiTabProps_.tabs = fuiMainTabs_;
+    fuiTabProps_.count = kFuiTabCount;
+    fuiTabProps_.action = ACTION_FUI_TAB;
+    fuiTabProps_.inputMask = fui::InputTouch;
+    fuiTabProps_.text = screen.theme().bodyText;
+    fuiTabProps_.layout = fui::TabBarLayout::ContentWidth;
+    fuiTabProps_.gap = static_cast<int16_t>(metrics.tabSpacing);
+    fuiTabProps_.minTouchSize = screen.theme().minTouchSize;
+    fui::tabBar(screen.frame(), tabsRect, fuiTabProps_);
+
+    if (mainTab_.load() != MainTab::Manage) return;
+    screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+    for (int i = 0; i < kManageEntryCount; ++i) {
+      fuiManageItems_[i] = {};
+      fuiManageItems_[i].label = I18N.get(kManageEntries[i].title);
+      fuiManageItems_[i].actionValue = static_cast<int16_t>(i);
+    }
+    fuiManageProps_ = {};
+    fuiManageProps_.items = fuiManageItems_;
+    fuiManageProps_.count = kManageEntryCount;
+    fuiManageProps_.action = ACTION_FUI_MANAGE;
+    fuiManageProps_.inputMask = fui::InputTouch;
+    fuiManageProps_.labelText = screen.theme().bodyText;
+    fuiManageProps_.selectedIndex =
+        mainFocus_.load() == MainFocus::Content ? static_cast<int16_t>(std::clamp(manageSelected_, 0, kManageEntryCount - 1)) : -1;
+    fuiManageProps_.rowHeight = static_cast<int16_t>(mappedInput.hasTouch() ? screen.theme().rowHeight
+                                                                             : metrics.listRowHeight);
+    fuiManageNav_.selected = std::clamp(manageSelected_, 0, kManageEntryCount - 1);
+    fuiManageNav_.syncToProps(screen.body(), fuiManageProps_.rowHeight, screen.theme().listRowGap, kManageEntryCount,
+                              fuiManageProps_);
+    screen.list(fuiManageProps_);
+    return;
+  }
+
+  if (state != State::Detail) return;
+  const Rect content = contentBounds();
+  const Rect actions = detailActionsBounds(content);
+  const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+  const int top = std::max(0, actions.y - safe.y);
+  const int bottom = std::max(0, (safe.y + safe.height) - (actions.y + actions.height));
+  screen.setContentMargin(fui::Insets{static_cast<int16_t>(top), 0, static_cast<int16_t>(bottom), 0});
+
+  const bool cached = detailActionEnabled(DetailAction::Read);
+  const bool policyChanged = cached && detailOptionsKnown_ && detailImagePolicy_ != detailSavedImagePolicy_;
+  const char* labels[kDetailListActionCount] = {
+      cached ? tr(STR_CONTINUE_READING) : tr(STR_WEREAD_ONLINE_READING),
+      !cached ? tr(STR_WEREAD_CACHE_BOOK)
+              : (policyChanged ? I18N.get(StrId::STR_WEREAD_UPDATE_CACHE) : I18N.get(StrId::STR_WEREAD_RECACHE_BOOK)),
+      tr(STR_WEREAD_BROWSE_ENTRY),
+      tr(STR_WEREAD_CACHE_IMAGES),
+  };
+  const char* values[kDetailListActionCount] = {
+      cached ? nullptr : tr(STR_WEREAD_FUTURE_SUPPORT), nullptr, nullptr,
+      I18N.get(detailImagePolicy_ == WeReadStore::ImagePolicy::Embed ? StrId::STR_WEREAD_OPTION_ON
+                                                                       : StrId::STR_WEREAD_OPTION_OFF),
+  };
+  for (int i = 0; i < kDetailListActionCount; ++i) {
+    fuiDetailItems_[i] = {};
+    fuiDetailItems_[i].label = labels[i];
+    fuiDetailItems_[i].value = values[i];
+    fuiDetailItems_[i].actionValue = static_cast<int16_t>(i + 1);
+    fuiDetailItems_[i].enabled = i != 0 || cached;
+  }
+  fuiDetailProps_ = {};
+  fuiDetailProps_.items = fuiDetailItems_;
+  fuiDetailProps_.count = kDetailListActionCount;
+  fuiDetailProps_.action = ACTION_FUI_DETAIL;
+  fuiDetailProps_.inputMask = fui::InputTouch;
+  fuiDetailProps_.labelText = screen.theme().bodyText;
+  fuiDetailProps_.valueText = screen.theme().smallText;
+  fuiDetailProps_.valueInset = 8;
+  const int selected = detailSelected_.load();
+  fuiDetailProps_.selectedIndex = selected >= static_cast<int>(DetailAction::Read)
+                                      ? static_cast<int16_t>(selected - 1)
+                                      : -1;
+  fuiDetailProps_.rowHeight = static_cast<int16_t>(std::max(1, actions.height / kDetailListActionCount));
+  fuiDetailProps_.rowGap = 0;
+  fuiDetailNav_.selected = std::clamp(selected - 1, 0, kDetailListActionCount - 1);
+  fuiDetailNav_.syncToProps(screen.body(), fuiDetailProps_.rowHeight, 0, kDetailListActionCount, fuiDetailProps_);
+  // Introduction is drawn above this list and uses its own selection marker;
+  // keep every action row unselected while that entry is active.
+  if (selected < static_cast<int>(DetailAction::Read)) fuiDetailProps_.selectedIndex = -1;
+  screen.list(fuiDetailProps_);
+}
+
+bool WeReadActivity::routeFuiTouch() {
+  if (optionPopup_.isActive()) return false;
+  const State state = state_.load();
+  if (state != State::Home && state != State::Detail) return false;
+  const auto route = UiAppHost::routeTouch(mappedInput);
+  if (route.routed) {
+    if (app.invalidated()) requestUpdate();
+    if (route.event) return true;
+  }
+  if (state == State::Home && mainTab_.load() == MainTab::Manage) {
+    const auto swipe = mappedInput.wasSwipe();
+    if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
+      const int delta = swipe == MappedInputManager::SwipeDir::Up ? fuiManageNav_.pageRows() : -fuiManageNav_.pageRows();
+      if (fuiManageNav_.scrollBy(delta, kManageEntryCount)) requestUpdate();
+      return true;
+    }
+  }
+  return false;
 }
 
 bool WeReadActivity::refreshShelf() {
@@ -1279,25 +1416,6 @@ void WeReadActivity::handleDetailInput() {
   }
 
   const Rect content = contentBounds();
-  const Rect actions = detailActionsBounds(content);
-  int touchedAction = -1;
-  const auto actionTouch = mappedInput.rowTouch(touchedAction, actions.y, GUI.getListRowStep(false),
-                                                kDetailListActionCount, actions.x, actions.x + actions.width);
-  if (actionTouch != MappedInputManager::RowTouch::None) {
-    const auto action = static_cast<DetailAction>(touchedAction + 1);
-    if (detailActionEnabled(action)) {
-      const int previousSelection = detailSelected_.load();
-      detailSelected_.store(touchedAction + 1);
-      if (previousSelection != detailSelected_.load()) {
-        detailSelectionGeneration_.fetch_add(1);
-        detailSelectionOnlyPending_.store(true);
-        requestUpdate();
-      }
-      if (actionTouch == MappedInputManager::RowTouch::Tap) activateDetailSelection();
-    }
-    return;
-  }
-
   if (detailIntroTruncated_) {
     const Rect introduction = detailIntroductionBounds(content);
     int x = 0;
@@ -1644,6 +1762,7 @@ void WeReadActivity::performLogout() {
 
 void WeReadActivity::selectMainTab(const MainTab tab) {
   if (mainTab_.load() == tab) return;
+  closeRouting();
   resetShelfCoverLoading();
   mainTab_.store(tab);
   requestUpdate();
@@ -1680,23 +1799,6 @@ void WeReadActivity::handleManageInput() {
       return;
     }
   };
-
-  const auto& metrics = UITheme::getInstance().getMetrics();
-  const Rect content = mainContentBounds();
-  int touched = -1;
-  const auto touch = mappedInput.rowTouch(touched, content.y, metrics.menuRowHeight + metrics.menuSpacing,
-                                          kManageEntryCount, content.x, content.x + content.width);
-  if (touch != MappedInputManager::RowTouch::None) {
-    const bool changed = manageSelected_ != touched || mainFocus_.load() != MainFocus::Content;
-    manageSelected_ = touched;
-    mainFocus_.store(MainFocus::Content);
-    if (touch == MappedInputManager::RowTouch::Tap) {
-      activate();
-    } else if (changed) {
-      requestUpdate();
-    }
-    return;
-  }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     activate();
@@ -1740,31 +1842,6 @@ void WeReadActivity::handleMainInput() {
     resetShelfCoverLoading();
     activityManager.goToExtensions();
     return;
-  }
-
-  // Touch tab hit-testing stays local to the legacy theme.  Crossmux's theme
-  // helper is not required for the Extensions-based WeRead entry point.
-  int touchX = 0;
-  int touchY = 0;
-  const bool touchDown = mappedInput.wasScreenTouchDown(touchX, touchY);
-  const bool touchTap = !touchDown && mappedInput.wasScreenTapped(touchX, touchY);
-  if (touchDown || touchTap) {
-    const auto& metrics = UITheme::getInstance().getMetrics();
-    const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-    const Rect tabs{safe.x, safe.y + metrics.topPadding + metrics.headerHeight, safe.width, metrics.tabBarHeight};
-    int tabX = tabs.x + metrics.contentSidePadding;
-    for (size_t index = 0; index < mainTabs_.size(); ++index) {
-      const int textWidth = renderer.getTextWidth(UI_12_FONT_ID, mainTabs_[index].label,
-                                                  mainTabs_[index].selected ? EpdFontFamily::BOLD
-                                                                            : EpdFontFamily::REGULAR);
-      if (touchX >= tabX && touchX < tabX + textWidth && touchY >= tabs.y && touchY < tabs.y + tabs.height) {
-        mainFocus_.store(MainFocus::Content);
-        selectMainTab(index == 0 ? MainTab::Shelf : MainTab::Manage);
-        requestUpdate();
-        return;
-      }
-      tabX += textWidth + metrics.tabSpacing;
-    }
   }
 
   if (mainFocus_.load() == MainFocus::Tabs) {
@@ -2002,6 +2079,8 @@ void WeReadActivity::loop() {
       return;
     }
   }
+
+  if (routeFuiTouch()) return;
 
   const State state = state_.load();
   switch (state) {
@@ -2371,44 +2450,46 @@ void WeReadActivity::drawShelfGrid(const Rect& content, const int selectedIndex,
 
 void WeReadActivity::drawDetailActions(const Rect& actions, const int selectedIndex, const bool cached,
                                        const bool policyChanged) {
-  GUI.drawList(
-      renderer, actions, kDetailListActionCount,
-      selectedIndex == static_cast<int>(DetailAction::Introduction) ? -1 : selectedIndex - 1,
-      [cached, policyChanged](const int index) {
-        switch (static_cast<DetailAction>(index + 1)) {
-          case DetailAction::Introduction:
-            return std::string();
-          case DetailAction::Read:
-            return std::string(I18N.get(cached ? StrId::STR_CONTINUE_READING : StrId::STR_WEREAD_ONLINE_READING));
-          case DetailAction::Cache:
-            if (!cached) return std::string(tr(STR_WEREAD_CACHE_BOOK));
-            return std::string(
-                I18N.get(policyChanged ? StrId::STR_WEREAD_UPDATE_CACHE : StrId::STR_WEREAD_RECACHE_BOOK));
-          case DetailAction::Browse:
-            return std::string(tr(STR_WEREAD_BROWSE_ENTRY));
-          case DetailAction::Images:
-            return std::string(tr(STR_WEREAD_CACHE_IMAGES));
-        }
-        return std::string();
-      },
-      nullptr, nullptr,
-      [this, cached](const int index) {
-        switch (static_cast<DetailAction>(index + 1)) {
-          case DetailAction::Introduction:
-          case DetailAction::Browse:
-          case DetailAction::Cache:
-            return std::string();
-          case DetailAction::Read:
-            return cached ? std::string() : std::string(tr(STR_WEREAD_FUTURE_SUPPORT));
-          case DetailAction::Images:
-            return std::string(I18N.get(detailImagePolicy_ == WeReadStore::ImagePolicy::Embed
-                                            ? StrId::STR_WEREAD_OPTION_ON
-                                            : StrId::STR_WEREAD_OPTION_OFF));
-        }
-        return std::string();
-      },
-      false,
-      [cached](const int index) { return static_cast<DetailAction>(index + 1) == DetailAction::Read && !cached; });
+  const int rowHeight = std::max(1, actions.height / kDetailListActionCount);
+  for (int index = 0; index < kDetailListActionCount; ++index) {
+    const auto action = static_cast<DetailAction>(index + 1);
+    const bool selected = selectedIndex == static_cast<int>(action);
+    const bool enabled = detailActionEnabled(action);
+    const int y = actions.y + index * rowHeight;
+    if (selected) renderer.fillRect(actions.x, y, actions.width, rowHeight, true);
+
+    const char* label = nullptr;
+    const char* value = nullptr;
+    switch (action) {
+      case DetailAction::Read:
+        label = I18N.get(cached ? StrId::STR_CONTINUE_READING : StrId::STR_WEREAD_ONLINE_READING);
+        value = cached ? nullptr : tr(STR_WEREAD_FUTURE_SUPPORT);
+        break;
+      case DetailAction::Cache:
+        label = I18N.get(!cached ? StrId::STR_WEREAD_CACHE_BOOK
+                                 : (policyChanged ? StrId::STR_WEREAD_UPDATE_CACHE : StrId::STR_WEREAD_RECACHE_BOOK));
+        break;
+      case DetailAction::Browse:
+        label = tr(STR_WEREAD_BROWSE_ENTRY);
+        break;
+      case DetailAction::Images:
+        label = tr(STR_WEREAD_CACHE_IMAGES);
+        value = I18N.get(detailImagePolicy_ == WeReadStore::ImagePolicy::Embed ? StrId::STR_WEREAD_OPTION_ON
+                                                                                : StrId::STR_WEREAD_OPTION_OFF);
+        break;
+      case DetailAction::Introduction:
+        break;
+    }
+    if (!label) continue;
+    const bool black = selected || enabled;
+    renderer.drawText(UI_10_FONT_ID, actions.x + UITheme::getInstance().getMetrics().contentSidePadding,
+                      y + std::max(0, (rowHeight - renderer.getLineHeight(UI_10_FONT_ID)) / 2), label, black);
+    if (value && value[0]) {
+      const int valueWidth = renderer.getTextWidth(SMALL_FONT_ID, value);
+      renderer.drawText(SMALL_FONT_ID, actions.x + actions.width - UITheme::getInstance().getMetrics().contentSidePadding - valueWidth,
+                        y + std::max(0, (rowHeight - renderer.getLineHeight(SMALL_FONT_ID)) / 2), value, black);
+    }
+  }
 }
 
 Rect WeReadActivity::detailSelectionMarkerBounds(const Rect& content) const {
@@ -2672,13 +2753,6 @@ void WeReadActivity::render(RenderLock&&) {
   }
   const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
   GUI.drawHeader(renderer, Rect{safe.x, safe.y + metrics.topPadding, safe.width, metrics.headerHeight}, header);
-  if (state == State::Home) {
-    mainTabs_[0].selected = mainTab == MainTab::Shelf;
-    mainTabs_[1].selected = mainTab == MainTab::Manage;
-    GUI.drawTabBar(renderer,
-                   Rect{safe.x, safe.y + metrics.topPadding + metrics.headerHeight, safe.width, metrics.tabBarHeight},
-                   mainTabs_, mainFocus == MainFocus::Tabs);
-  }
 
   switch (state) {
     case State::Disclaimer:
@@ -2695,9 +2769,6 @@ void WeReadActivity::render(RenderLock&&) {
           }
           break;
         case MainTab::Manage:
-          GUI.drawButtonMenu(
-              renderer, content, kManageEntryCount, mainFocus == MainFocus::Content ? manageSelected_ : -1,
-              [](const int index) { return std::string(I18N.get(kManageEntries[index].title)); }, nullptr);
           break;
       }
       break;
@@ -2851,6 +2922,12 @@ void WeReadActivity::render(RenderLock&&) {
       GUI.drawPopup(renderer, tr(STR_WEREAD_LOADING));
       break;
   }
+
+  // The FUI layer owns the tab strip and the compact action lists.  The shelf
+  // grid, cover art, streamed introduction and progress/QR surfaces above
+  // continue to use the existing renderer so their buffering and pagination
+  // remain unchanged.
+  if (state == State::Home || state == State::Detail) renderUi();
 
   const char* back = "";
   const char* confirm = "";

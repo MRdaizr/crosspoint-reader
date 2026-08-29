@@ -14,7 +14,7 @@ namespace {
 std::string scheduledAtText(const TodoItem& item) {
   if (item.scheduledAt.empty()) return tr(STR_NOT_SET);
   std::string value = item.scheduledAt;
-  value[10] = ' ';
+  if (value.size() > 10) value[10] = ' ';
   return value;
 }
 }  // namespace
@@ -23,97 +23,78 @@ bool TodoActivity::reload(const uint32_t selectedId) {
   loadFailed = !TODO_STORE.getItems(items);
   if (loadFailed) {
     items.clear();
-    selectedIndex = 0;
+    rowTitles.clear();
+    rowDates.clear();
+    rowItems.clear();
+    nav.selected = 0;
     return false;
   }
 
-  selectedIndex = 0;
   if (selectedId != 0) {
     for (size_t i = 0; i < items.size(); ++i) {
       if (items[i].id == selectedId) {
-        selectedIndex = static_cast<int>(i);
+        nav.selected = static_cast<int>(i);
         break;
       }
     }
   }
+  rebuildRowItems();
   return true;
 }
 
-void TodoActivity::onEnter() {
-  Activity::onEnter();
-  reload();
-  requestUpdate(true);
+void TodoActivity::rebuildRowItems() {
+  rowTitles.resize(items.size());
+  rowDates.resize(items.size());
+  rowItems.clear();
+  rowItems.reserve(items.size());
+  for (size_t i = 0; i < items.size(); ++i) {
+    rowTitles[i] = std::string(items[i].completed ? "[x] " : "[ ] ") + items[i].title;
+    rowDates[i] = scheduledAtText(items[i]);
+    freeink::ui::ListItem item;
+    item.label = rowTitles[i].c_str();
+    item.value = rowDates[i].c_str();
+    item.actionValue = static_cast<int16_t>(i);
+    item.state = freeink::ui::StateNormal;
+    rowItems.push_back(item);
+  }
 }
 
-void TodoActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    finish();
-    return;
-  }
+void TodoActivity::onEnter() {
+  reload();
+  UiListActivity::onEnter();
+}
 
-  const int itemCount = static_cast<int>(items.size());
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) && itemCount > 0) {
-    const uint32_t id = items[selectedIndex].id;
+void TodoActivity::activateIndex(const int index) {
+  if (index >= 0 && index < static_cast<int>(items.size())) {
+    const uint32_t id = items[index].id;
     TodoItem changed;
     if (TODO_STORE.toggle(id, changed)) reload(id);
     else reload();
-    requestUpdate();
-    return;
   }
-
-  if (itemCount <= 0) return;
-  buttonNavigator.onNextRelease([this, itemCount] {
-    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, itemCount);
-    requestUpdate();
-  });
-  buttonNavigator.onPreviousRelease([this, itemCount] {
-    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, itemCount);
-    requestUpdate();
-  });
+  app.clearTapFlash();
+  requestUpdate();
 }
 
-void TodoActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+const char* TodoActivity::headerTitle() const { return tr(STR_TODOS); }
 
+void TodoActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int pageWidth = renderer.getScreenWidth();
-  const int pageHeight = renderer.getScreenHeight();
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_TODOS));
-
+  screen.setContentMargin(freeink::ui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                              static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   if (loadFailed) {
-    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, tr(STR_TODOS_LOAD_FAILED));
+    screen.centeredText(tr(STR_TODOS_LOAD_FAILED), screen.theme().bodyText);
   } else if (items.empty()) {
-    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, tr(STR_NO_TODOS));
+    screen.centeredText(tr(STR_NO_TODOS), screen.theme().bodyText);
   } else {
-    std::string allTitles;
-    for (const auto& item : items) {
-      allTitles += item.title;
-      allTitles += '\n';
-    }
-    const int fontId = DynamicFont::fontForCjkText(renderer, allTitles.c_str(), 0);
-    DynamicFont::prewarmIfSdFont(renderer, fontId, allTitles);
-    const ListRowLayout layout = GUI.getListRowLayout(renderer, contentHeight, fontId, true);
-    const int first = selectedIndex / layout.pageItems * layout.pageItems;
-
-    GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, static_cast<int>(items.size()), selectedIndex,
-                 [this](int index) { return std::string("    ") + items[index].title; },
-                 [this](int index) { return scheduledAtText(items[index]); }, nullptr, nullptr, false,
-                 [this](int index) { return items[index].completed; }, fontId);
-
-    for (int index = first; index < static_cast<int>(items.size()) && index < first + layout.pageItems; ++index) {
-      const int rowY = contentTop + (index - first) * layout.rowStep;
-      const bool selected = index == selectedIndex;
-      const int boxSize = 13;
-      const int boxX = metrics.contentSidePadding;
-      const int boxY = rowY + layout.titleOffsetY + (layout.titleLineHeight - boxSize) / 2;
-      if (items[index].completed) renderer.fillRect(boxX, boxY, boxSize, boxSize, !selected);
-      else renderer.drawRect(boxX, boxY, boxSize, boxSize, !selected);
-    }
+    freeink::ui::ListProps props;
+    props.items = rowItems.data();
+    props.count = static_cast<uint16_t>(rowItems.size());
+    props.action = ACTION_ROW;
+    props.inputMask = freeink::ui::InputTouch;
+    props.labelText = screen.theme().bodyText;
+    props.subtitleText = screen.theme().smallText;
+    syncListViewport(screen, props, true);
+    screen.list(props);
   }
-
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_TOGGLE), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer();
 }

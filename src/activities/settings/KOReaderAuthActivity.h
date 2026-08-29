@@ -10,8 +10,11 @@
  */
 class KOReaderAuthActivity final : public Activity {
  public:
-  explicit KOReaderAuthActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("KOReaderAuth", renderer, mappedInput) {}
+  enum class Mode { AUTHENTICATE, SIGN_UP };
+
+  explicit KOReaderAuthActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                Mode mode = Mode::AUTHENTICATE)
+      : Activity("KOReaderAuth", renderer, mappedInput), mode(mode) {}
 
   void onEnter() override;
   void onExit() override;
@@ -22,6 +25,7 @@ class KOReaderAuthActivity final : public Activity {
  private:
   enum State { WIFI_SELECTION, CONNECTING, AUTHENTICATING, SUCCESS, FAILED };
 
+  Mode mode = Mode::AUTHENTICATE;
   State state = WIFI_SELECTION;
   std::string statusMessage;
   std::string errorMessage;

@@ -17,8 +17,9 @@
 #include "components/SubpageLayout.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/DynamicFont.h"
 #include "util/QrUtils.h"
+
+namespace fui = freeink::ui;
 
 namespace {
 
@@ -78,12 +79,19 @@ constexpr StrId kMenuTitles[] = {
 };
 constexpr size_t kDetailLineBytes = 192;
 
-static_assert(sizeof(WeReadBrowseActivity) <= 2 * 1024, "WeRead browse activity exceeds its fixed heap budget");
+// The bounded FUI row window adds a small amount of resident state, but keeps
+// large shelves off the heap. Keep a guard so future additions do not turn
+// this stateful network page into an unbounded activity object.
+static_assert(sizeof(WeReadBrowseActivity) <= 6 * 1024, "WeRead browse activity exceeds its fixed heap budget");
 
 }  // namespace
 
 void WeReadBrowseActivity::onEnter() {
   Activity::onEnter();
+  resetUi();
+  app.on(ACTION_FUI_ROW, &WeReadBrowseActivity::onFuiRow, this);
+  app.setScreen(&WeReadBrowseActivity::fuiScreen, this);
+  fuiNav_.reset();
   operation_.reset();
   wifiReleasePending_ = false;
   if (reloadCache()) {
@@ -95,11 +103,122 @@ void WeReadBrowseActivity::onEnter() {
 }
 
 void WeReadBrowseActivity::onExit() {
+  closeFuiRouting();
+  for (int i = 0; i < kMaxFuiWindow; ++i) {
+    fuiWindowLabels_[i].clear();
+    fuiWindowSubtitles_[i].clear();
+    fuiWindowItems_[i] = {};
+  }
   operation_.reset();
   closePage();
   // ActivityManager invokes onExit() while holding RenderLock.
   releaseReaderFont();
   Activity::onExit();
+}
+
+void WeReadBrowseActivity::fuiScreen(UiScreen& screen, void* user) {
+  static_cast<WeReadBrowseActivity*>(user)->buildFuiScreen(screen);
+}
+
+void WeReadBrowseActivity::onFuiRow(const fui::ActionEvent& event, void* user) {
+  auto* self = static_cast<WeReadBrowseActivity*>(user);
+  if (event.value < 0) return;
+
+  if (self->state_ == State::Menu) {
+    if (event.value >= kMenuCount) return;
+    self->menuSelected_ = event.value;
+    self->fuiNav_.selected = event.value;
+    self->app.clearTapFlash();
+    self->closeFuiRouting();
+    self->activateMenu();
+  } else if (self->state_ == State::List) {
+    const int count = self->pageItemCount();
+    if (event.value >= count) return;
+    self->listSelected_ = event.value;
+    self->fuiNav_.selected = event.value;
+    self->app.clearTapFlash();
+    self->closeFuiRouting();
+    self->activateList();
+  }
+}
+
+void WeReadBrowseActivity::buildFuiScreen(UiScreen& screen) {
+  if (state_ != State::Menu && state_ != State::List) return;
+
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                      static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
+
+  const bool listState = state_ == State::List;
+  const int count = listState ? pageItemCount() : kMenuCount;
+  fuiStateCount_ = count;
+  if (count <= 0) {
+    screen.centeredText(tr(STR_WEREAD_BROWSE_EMPTY), screen.theme().bodyText);
+    return;
+  }
+
+  int selected = listState ? listSelected_ : menuSelected_;
+  selected = std::clamp(selected, 0, count - 1);
+  if (listState) listSelected_ = selected;
+  else menuSelected_ = selected;
+
+  fuiListProps_ = {};
+  fuiListProps_.count = static_cast<uint16_t>(count);
+  fuiListProps_.action = ACTION_FUI_ROW;
+  fuiListProps_.inputMask = fui::InputTouch;
+  fuiListProps_.labelText = screen.theme().bodyText;
+  if (listState) {
+    fuiListProps_.subtitleText = screen.theme().smallText;
+    fuiListProps_.valueText = screen.theme().smallText;
+  }
+  fuiListProps_.valueInset = 8;
+  const int16_t rowHeight = mappedInput.hasTouch()
+                                ? screen.theme().rowHeight
+                                : static_cast<int16_t>(listState ? metrics.listWithSubtitleRowHeight
+                                                                  : metrics.listRowHeight);
+  fuiListProps_.rowHeight = rowHeight;
+  fuiNav_.selected = selected;
+  fuiNav_.syncToProps(screen.body(), rowHeight, screen.theme().listRowGap, count, fuiListProps_);
+
+  const int first = std::clamp(fuiNav_.top, 0, std::max(0, count - 1));
+  const int windowCount = std::min({fuiNav_.visibleRows, count - first, kMaxFuiWindow});
+  for (int i = 0; i < windowCount; ++i) {
+    const int index = first + i;
+    if (listState) {
+      fuiWindowLabels_[i] = rowTitle(index);
+      fuiWindowSubtitles_[i] = rowSubtitle(index);
+    } else {
+      fuiWindowLabels_[i] = I18N.get(kMenuTitles[index]);
+      fuiWindowSubtitles_[i].clear();
+    }
+    fuiWindowItems_[i] = {};
+    fuiWindowItems_[i].label = fuiWindowLabels_[i].c_str();
+    fuiWindowItems_[i].subtitle = fuiWindowSubtitles_[i].empty() ? nullptr : fuiWindowSubtitles_[i].c_str();
+    fuiWindowItems_[i].actionValue = static_cast<int16_t>(index);
+  }
+  fuiListProps_.items = fuiWindowItems_;
+  fuiListProps_.itemsWindowFirst = static_cast<uint16_t>(first);
+  fuiListProps_.itemsWindowCount = static_cast<uint16_t>(std::max(0, windowCount));
+  screen.list(fuiListProps_);
+}
+
+bool WeReadBrowseActivity::routeFuiTouch() {
+  if (state_ != State::Menu && state_ != State::List) return false;
+  const auto touch = routeTouch(mappedInput);
+  if (touch.routed) {
+    if (app.invalidated()) requestUpdate();
+    // A raw release (for example the end of a swipe) has no FUI action and
+    // must fall through to the swipe classifier below.
+    if (touch.event) return true;
+  }
+
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe != MappedInputManager::SwipeDir::Up && swipe != MappedInputManager::SwipeDir::Down) return false;
+  const int count = state_ == State::Menu ? kMenuCount : pageItemCount();
+  const int delta = swipe == MappedInputManager::SwipeDir::Up ? fuiNav_.pageRows() : -fuiNav_.pageRows();
+  if (fuiNav_.scrollBy(delta, count)) requestUpdate();
+  return true;
 }
 
 bool WeReadBrowseActivity::preventAutoSleep() { return state_ == State::Loading; }
@@ -237,6 +356,7 @@ void WeReadBrowseActivity::connectThenCache() {
 }
 
 void WeReadBrowseActivity::startCache() {
+  closeFuiRouting();
   closePage();
   qrReady_ = false;
   error_ = WeReadClient::Error::Ok;
@@ -315,6 +435,8 @@ void WeReadBrowseActivity::activateMenu() {
       return;
   }
   listSelected_ = 0;
+  closeFuiRouting();
+  fuiNav_.reset();
   if (!openPage(0)) {
     hasCache_ = false;
     connectThenCache();
@@ -326,6 +448,8 @@ void WeReadBrowseActivity::activateMenu() {
 
 void WeReadBrowseActivity::activateList() {
   if (listSelected_ == static_cast<int>(pageHeader_.count)) {
+    closeFuiRouting();
+    fuiNav_.reset();
     listSelected_ = 0;
     if (!openPage(currentPage_ + 1)) {
       error_ = WeReadClient::Error::SdCard;
@@ -335,6 +459,7 @@ void WeReadBrowseActivity::activateList() {
     return;
   }
   if (!readRecord(static_cast<uint32_t>(listSelected_), selectedRecord_)) {
+    closeFuiRouting();
     error_ = WeReadClient::Error::SdCard;
     state_ = State::Error;
     requestUpdate();
@@ -352,6 +477,7 @@ void WeReadBrowseActivity::releaseReaderFont() {
 }
 
 void WeReadBrowseActivity::openDetail() {
+  closeFuiRouting();
   {
     RenderLock renderBarrier(*this);
     if (!readerFontReady_) {
@@ -484,25 +610,16 @@ void WeReadBrowseActivity::drawDetail(const Rect& content) {
 }
 
 void WeReadBrowseActivity::handleMenuInput() {
-  const Rect content = contentBounds();
-  int touched = -1;
-  const auto touch = mappedInput.rowTouch(touched, content.y, GUI.getListRowStep(false), kMenuCount, content.x,
-                                          content.x + content.width);
-  if (touch != MappedInputManager::RowTouch::None) {
-    menuSelected_ = touched;
-    if (touch == MappedInputManager::RowTouch::Tap) {
-      activateMenu();
-    } else {
-      requestUpdate();
-    }
-    return;
-  }
   navigator_.onNextRelease([this] {
     menuSelected_ = ButtonNavigator::nextIndex(menuSelected_, kMenuCount);
+    fuiNav_.selected = menuSelected_;
+    fuiNav_.follow(kMenuCount);
     requestUpdate();
   });
   navigator_.onPreviousRelease([this] {
     menuSelected_ = ButtonNavigator::previousIndex(menuSelected_, kMenuCount);
+    fuiNav_.selected = menuSelected_;
+    fuiNav_.follow(kMenuCount);
     requestUpdate();
   });
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
@@ -521,45 +638,29 @@ void WeReadBrowseActivity::handleListInput() {
     }
     return;
   }
-  const int pageItems = UITheme::getNumberOfItemsPerPage(renderer, true, false, true, true);
-  int touched = -1;
-  if (mappedInput.wasListItemTouchedDown(touched, count, listSelected_, contentBounds().y, contentBounds().height, true)) {
-    if (listSelected_ != touched) {
-      listSelected_ = touched;
-      requestUpdate();
-    }
-    return;
-  }
-  if (mappedInput.wasListItemTapped(touched, count, listSelected_, contentBounds().y, contentBounds().height, true)) {
-    listSelected_ = touched;
-    activateList();
-    return;
-  }
-  const auto swipe = mappedInput.wasSwipe();
-  if (swipe == MappedInputManager::SwipeDir::Up) {
-    listSelected_ = ButtonNavigator::nextPageIndex(listSelected_, count, pageItems);
-    requestUpdate();
-    return;
-  }
-  if (swipe == MappedInputManager::SwipeDir::Down) {
-    listSelected_ = ButtonNavigator::previousPageIndex(listSelected_, count, pageItems);
-    requestUpdate();
-    return;
-  }
+  const int pageItems = std::max(1, fuiNav_.pageRows());
   navigator_.onNextRelease([this, count] {
     listSelected_ = ButtonNavigator::nextIndex(listSelected_, count);
+    fuiNav_.selected = listSelected_;
+    fuiNav_.follow(count);
     requestUpdate();
   });
   navigator_.onPreviousRelease([this, count] {
     listSelected_ = ButtonNavigator::previousIndex(listSelected_, count);
+    fuiNav_.selected = listSelected_;
+    fuiNav_.follow(count);
     requestUpdate();
   });
   navigator_.onNextContinuous([this, count, pageItems] {
     listSelected_ = ButtonNavigator::nextPageIndex(listSelected_, count, pageItems);
+    fuiNav_.selected = listSelected_;
+    fuiNav_.follow(count);
     requestUpdate();
   });
   navigator_.onPreviousContinuous([this, count, pageItems] {
     listSelected_ = ButtonNavigator::previousPageIndex(listSelected_, count, pageItems);
+    fuiNav_.selected = listSelected_;
+    fuiNav_.follow(count);
     requestUpdate();
   });
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
@@ -567,8 +668,12 @@ void WeReadBrowseActivity::handleListInput() {
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     if (currentPage_ > 0 && openPage(currentPage_ - 1)) {
       listSelected_ = std::max(0, pageItemCount() - 1);
+      fuiNav_.selected = listSelected_;
+      fuiNav_.follow(pageItemCount());
     } else {
       closePage();
+      closeFuiRouting();
+      fuiNav_.reset();
       state_ = State::Menu;
     }
     requestUpdate();
@@ -653,6 +758,8 @@ void WeReadBrowseActivity::loop() {
     return;
   }
 
+  if (routeFuiTouch()) return;
+
   switch (state_) {
     case State::Menu:
       handleMenuInput();
@@ -685,9 +792,7 @@ void WeReadBrowseActivity::render(RenderLock&&) {
   const Rect content = contentBounds();
   switch (state_) {
     case State::Menu:
-      GUI.drawList(
-          renderer, content, kMenuCount, menuSelected_,
-          [](const int index) { return std::string(I18N.get(kMenuTitles[index])); }, nullptr);
+      renderUi();
       break;
     case State::Loading:
       if (qrReady_) {
@@ -705,19 +810,7 @@ void WeReadBrowseActivity::render(RenderLock&&) {
       if (pageHeader_.count == 0 && pageItemCount() == 0) {
         GUI.drawPopup(renderer, tr(STR_WEREAD_BROWSE_EMPTY));
       } else {
-        const int pageItems = std::max(1, UITheme::getNumberOfItemsPerPage(renderer, true, false, true, true));
-        const int pageStart = listSelected_ / pageItems * pageItems;
-        std::string visibleTitles;
-        for (int index = pageStart; index < pageItemCount() && index < pageStart + pageItems; ++index) {
-          visibleTitles += rowTitle(index);
-          visibleTitles.push_back('\n');
-        }
-        const int titleFontCandidate = DynamicFont::fontForCjkText(renderer, visibleTitles.c_str(), UI_10_FONT_ID);
-        DynamicFont::prewarmIfSdFont(renderer, titleFontCandidate, visibleTitles);
-        const int titleFontId = renderer.isSdCardFont(titleFontCandidate) ? titleFontCandidate : 0;
-        GUI.drawList(
-            renderer, content, pageItemCount(), listSelected_, [this](const int index) { return rowTitle(index); },
-            [this](const int index) { return rowSubtitle(index); }, nullptr, nullptr, false, nullptr, titleFontId);
+        renderUi();
       }
       const bool reviewsLimited = kind_ == WeReadBrowse::Kind::PopularReviews &&
                                   currentPage_ + 1 == cache_.pageCounts[WeReadBrowse::kindIndex(kind_)] &&

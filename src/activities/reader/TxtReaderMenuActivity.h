@@ -5,10 +5,9 @@
 #include <string>
 #include <vector>
 
-#include "activities/Activity.h"
-#include "util/ButtonNavigator.h"
+#include "activities/UiListActivity.h"
 
-class TxtReaderMenuActivity final : public Activity {
+class TxtReaderMenuActivity final : public UiListActivity {
  public:
   enum class MenuAction { GO_TO_PERCENT, ROTATE_SCREEN, SCREENSHOT, GO_HOME };
 
@@ -17,8 +16,6 @@ class TxtReaderMenuActivity final : public Activity {
 
   void onEnter() override;
   void onExit() override;
-  void loop() override;
-  void render(RenderLock&&) override;
 
  private:
   struct MenuItem {
@@ -28,9 +25,15 @@ class TxtReaderMenuActivity final : public Activity {
 
   static std::vector<MenuItem> buildMenuItems();
 
+  int listCount() const override { return static_cast<int>(menuItems.size()); }
+  void buildScreen(UiScreen& screen) override;
+  void activateIndex(int index) override;
+  bool handleButtons() override;
+  void drawChrome() override;
+  const char* headerTitle() const override { return title.c_str(); }
+
   const std::vector<MenuItem> menuItems;
-  int selectedIndex = 0;
-  ButtonNavigator buttonNavigator;
+  std::vector<freeink::ui::ListItem> rowItems;
   std::string title;
   int currentPage = 0;
   int totalPages = 0;

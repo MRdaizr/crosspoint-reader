@@ -1,15 +1,17 @@
 #pragma once
 #include <functional>
+#include <string>
 #include <vector>
 
 #include "./FileBrowserActivity.h"
 #include "activities/Activity.h"
+#include "components/UiAppHost.h"
 #include "util/ButtonNavigator.h"
 
 struct RecentBook;
 struct Rect;
 
-class HomeActivity final : public Activity {
+class HomeActivity final : public Activity, private UiAppHost {
   ButtonNavigator buttonNavigator;
   int selectorIndex = 0;
   bool recentsLoading = false;
@@ -29,6 +31,17 @@ class HomeActivity final : public Activity {
   int coverRectH = 0;
   std::vector<RecentBook> recentBooks;
   const HomeMenuItem initialMenuItem;
+
+  static constexpr freeink::ui::ActionId ACTION_FUI_MENU = 1;
+  static void fuiScreen(UiScreen& screen, void* user);
+  static void onFuiMenu(const freeink::ui::ActionEvent& event, void* user);
+  void buildFuiScreen(UiScreen& screen);
+  bool routeFuiTouch();
+  void activateSelected();
+  std::vector<std::string> fuiMenuLabels;
+  std::vector<freeink::ui::ListItem> fuiMenuItems;
+  freeink::ui::ListProps fuiMenuProps{};
+  freeink::ui::ListNav fuiNav;
 
   // Convert HomeMenuItem to menu index (used in onEnter)
   static int menuItemToIndex(HomeMenuItem item, bool hasOpdsUrl) {
@@ -67,6 +80,9 @@ class HomeActivity final : public Activity {
   void onExtensionsOpen();
 
   int getMenuItemCount() const;
+  int getMenuListCount() const;
+  int menuSelectionIndex() const;
+  int selectionIndexForMenuRow(int row) const;
   bool storeCoverBuffer();    // Store frame buffer for cover image
   bool restoreCoverBuffer();  // Restore frame buffer from stored cover
   void freeCoverBuffer();     // Free the stored cover buffer
@@ -76,9 +92,10 @@ class HomeActivity final : public Activity {
  public:
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                         HomeMenuItem initialMenuItemValue = HomeMenuItem::NONE)
-      : Activity("Home", renderer, mappedInput), initialMenuItem(initialMenuItemValue) {}
+      : Activity("Home", renderer, mappedInput), UiAppHost(renderer), initialMenuItem(initialMenuItemValue) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  bool isHomeActivity() const override { return true; }
 };

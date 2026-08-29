@@ -10,6 +10,7 @@
 
 #include "FlashcardReviewActivity.h"
 #include "MappedInputManager.h"
+#include "components/UiAppHelpers.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
@@ -23,6 +24,7 @@ void FlashcardDeckListActivity::loadDecks() {
 
   auto root = Storage.open(FLASHCARDS_DIR);
   if (!root || !root.isDirectory() || !fileNameBuffer) {
+    rowItems.clear();
     return;
   }
 
@@ -36,74 +38,58 @@ void FlashcardDeckListActivity::loadDecks() {
   }
   root.close();
   std::sort(decks.begin(), decks.end());
+  rebuildRowItems();
+}
+
+void FlashcardDeckListActivity::rebuildRowItems() {
+  rowItems.clear();
+  rowItems.reserve(decks.size());
+  for (size_t i = 0; i < decks.size(); ++i) {
+    freeink::ui::ListItem item;
+    item.label = decks[i].c_str();
+    item.icon = GUI.showsFuiMenuIcon(FuiMenuIconSlot::FlashcardDeckRows) ? listIconFor(UIIcon::File)
+                                                                          : freeink::ui::BitmapRef{};
+    item.actionValue = static_cast<int16_t>(i);
+    rowItems.push_back(item);
+  }
 }
 
 void FlashcardDeckListActivity::onEnter() {
-  Activity::onEnter();
   fileNameBuffer = makeUniqueNoThrow<char[]>(NAME_BUFFER_SIZE);
-  selectedIndex = 0;
   loadDecks();
-  requestUpdate();
+  UiListActivity::onEnter();
 }
 
 void FlashcardDeckListActivity::onExit() {
   Activity::onExit();
   decks.clear();
+  rowItems.clear();
   fileNameBuffer.reset();
 }
 
-void FlashcardDeckListActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    finish();
-    return;
-  }
-
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (decks.empty()) return;
-    std::string path = std::string(FLASHCARDS_DIR) + "/" + decks[selectedIndex];
+void FlashcardDeckListActivity::activateIndex(const int index) {
+    if (index < 0 || index >= static_cast<int>(decks.size())) return;
+    std::string path = std::string(FLASHCARDS_DIR) + "/" + decks[index];
     startActivityForResult(std::make_unique<FlashcardReviewActivity>(renderer, mappedInput, std::move(path)), nullptr);
-    return;
-  }
-
-  const int pageItems = UITheme::getInstance().getNumberOfItemsPerPage(renderer, true, false, true, true);
-  const int listSize = static_cast<int>(decks.size());
-  buttonNavigator.onNextRelease([this, listSize] {
-    selectedIndex = ButtonNavigator::nextIndex(selectedIndex, listSize);
-    requestUpdate();
-  });
-  buttonNavigator.onPreviousRelease([this, listSize] {
-    selectedIndex = ButtonNavigator::previousIndex(selectedIndex, listSize);
-    requestUpdate();
-  });
-  buttonNavigator.onNextContinuous([this, listSize, pageItems] {
-    selectedIndex = ButtonNavigator::nextPageIndex(selectedIndex, listSize, pageItems);
-    requestUpdate();
-  });
-  buttonNavigator.onPreviousContinuous([this, listSize, pageItems] {
-    selectedIndex = ButtonNavigator::previousPageIndex(selectedIndex, listSize, pageItems);
-    requestUpdate();
-  });
 }
 
-void FlashcardDeckListActivity::render(RenderLock&&) {
-  renderer.clearScreen();
+const char* FlashcardDeckListActivity::headerTitle() const { return tr(STR_FLASHCARDS); }
 
+void FlashcardDeckListActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const auto pageWidth = renderer.getScreenWidth();
-  const auto pageHeight = renderer.getScreenHeight();
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, pageWidth, metrics.headerHeight}, tr(STR_FLASHCARDS));
-
-  const int contentTop = metrics.topPadding + metrics.headerHeight + metrics.verticalSpacing;
-  const int contentHeight = pageHeight - contentTop - metrics.buttonHintsHeight - metrics.verticalSpacing;
+  screen.setContentMargin(freeink::ui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
+                                              static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   if (decks.empty()) {
-    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 20, tr(STR_NO_FLASHCARD_DECKS));
-    renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, contentTop + 45, "/flashcards/*.csv");
+    screen.centeredText(tr(STR_NO_FLASHCARD_DECKS), screen.theme().bodyText);
   } else {
-    GUI.drawList(renderer, Rect{0, contentTop, pageWidth, contentHeight}, static_cast<int>(decks.size()), selectedIndex,
-                 [this](int index) { return decks[index]; }, nullptr, [](int) { return UIIcon::File; });
+    freeink::ui::ListProps props;
+    props.items = rowItems.data();
+    props.count = static_cast<uint16_t>(rowItems.size());
+    props.action = ACTION_ROW;
+    props.inputMask = freeink::ui::InputTouch;
+    props.labelText = screen.theme().bodyText;
+    syncListViewport(screen, props);
+    screen.list(props);
   }
-
-  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer();
 }

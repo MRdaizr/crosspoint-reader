@@ -59,6 +59,17 @@ void ActivityManager::renderTaskLoop() {
 
 void ActivityManager::loop() {
   if (currentActivity) {
+    // A bottom-edge swipe is the touch equivalent of the hardware Home/Back
+    // escape. FUI-hosted menus can consume it to return their result (for
+    // example the reader menu must cancel rather than discard its pending
+    // orientation), while ordinary screens return to the home activity.
+    if (!currentActivity->isHomeActivity() && mappedInput.wasHomeGesture()) {
+      if (currentActivity->handleHomeGesture()) {
+        return;
+      }
+      goHome();
+      return;
+    }
     // Note: do not hold a lock here, the loop() method must be responsible for acquire one if needed
     currentActivity->loop();
   }

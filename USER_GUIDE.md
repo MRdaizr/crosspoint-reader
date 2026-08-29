@@ -568,7 +568,7 @@ CrossPoint renders text using the following Unicode character blocks, enabling s
 * **Cyrillic Script (Standard and Extended):** Covers Russian, Ukrainian, Belarusian, Bulgarian, Serbian, Macedonian, Kazakh, Kyrgyz, Mongolian, and others.
 * **Vietnamese:** Supported via extended Latin glyph coverage in the built-in reader fonts.
 
-What is not supported with built-in reader fonts: Chinese, Japanese, Korean, Arabic, Greek, Hebrew, and Farsi. The UI includes a small Simplified Chinese glyph subset for translated interface text, but **CJK book text, Hebrew, Greek, and other extended scripts should be enabled by installing custom SD card fonts** — see [Custom Fonts (SD Card)](#38-custom-fonts-sd-card).
+The built-in UI family also includes Simplified Chinese and Japanese kana, punctuation, full-width forms, and common UI kanji. The reader's general-purpose book fonts remain intentionally compact: **CJK book text beyond the UI subset, Korean, Arabic, Greek, Hebrew, and other extended scripts should be enabled by installing custom SD card fonts** — see [Custom Fonts (SD Card)](#38-custom-fonts-sd-card).
 
 ---
 

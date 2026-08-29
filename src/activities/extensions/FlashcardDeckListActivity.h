@@ -4,24 +4,24 @@
 #include <string>
 #include <vector>
 
-#include "activities/Activity.h"
-#include "util/ButtonNavigator.h"
+#include "activities/UiListActivity.h"
 
-class FlashcardDeckListActivity final : public Activity {
+class FlashcardDeckListActivity final : public UiListActivity {
   static constexpr size_t NAME_BUFFER_SIZE = 256;
-  ButtonNavigator buttonNavigator;
   std::vector<std::string> decks;
+  std::vector<freeink::ui::ListItem> rowItems;
   std::unique_ptr<char[]> fileNameBuffer;
-  int selectedIndex = 0;
-
   void loadDecks();
+  void rebuildRowItems();
+  int listCount() const override { return static_cast<int>(decks.size()); }
+  void buildScreen(UiScreen& screen) override;
+  void activateIndex(int index) override;
+  const char* headerTitle() const override;
 
  public:
   explicit FlashcardDeckListActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("FlashcardDecks", renderer, mappedInput) {}
+      : UiListActivity("FlashcardDecks", renderer, mappedInput) {}
 
   void onEnter() override;
   void onExit() override;
-  void loop() override;
-  void render(RenderLock&&) override;
 };
