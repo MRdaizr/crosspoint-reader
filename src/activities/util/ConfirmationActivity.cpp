@@ -6,8 +6,9 @@
 #include "components/UITheme.h"
 
 ConfirmationActivity::ConfirmationActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                                           const std::string& heading, const std::string& body)
-    : Activity("Confirmation", renderer, mappedInput), heading(heading), body(body) {}
+                                           const std::string& heading, const std::string& body,
+                                           const BodyPlacement bodyPlacement)
+    : Activity("Confirmation", renderer, mappedInput), heading(heading), body(body), bodyPlacement(bodyPlacement) {}
 
 void ConfirmationActivity::onEnter() {
   Activity::onEnter();
@@ -22,12 +23,18 @@ void ConfirmationActivity::onEnter() {
     safeBody = renderer.truncatedText(fontId, body.c_str(), maxWidth, EpdFontFamily::REGULAR);
   }
 
-  int totalHeight = 0;
-  if (!safeHeading.empty()) totalHeight += lineHeight;
-  if (!safeBody.empty()) totalHeight += lineHeight;
-  if (!safeHeading.empty() && !safeBody.empty()) totalHeight += spacing;
+  // Keep explanatory text in the upper part of the screen so the touch/keys
+  // confirmation popup remains readable and consistently placed.
+  startY = renderer.getScreenHeight() / 6;
 
-  startY = (renderer.getScreenHeight() - totalHeight) / 2;
+  const StrId optionIds[] = {StrId::STR_CANCEL, StrId::STR_CONFIRM};
+  const char* popupTitle = bodyPlacement == BodyPlacement::Page ? safeHeading.c_str() : safeBody.c_str();
+  confirmPopup.show(popupTitle, optionIds, 2, 0, [this](const int index) {
+    ActivityResult result;
+    result.isCancelled = index != 1;
+    setResult(std::move(result));
+    finish();
+  });
 
   requestUpdate(true);
 }
@@ -44,31 +51,21 @@ void ConfirmationActivity::render(RenderLock&& lock) {
   }
 
   // Draw Body
-  if (!safeBody.empty()) {
+  if (bodyPlacement == BodyPlacement::Page && !safeBody.empty()) {
     renderer.drawCenteredText(fontId, currentY, safeBody.c_str(), true, EpdFontFamily::REGULAR);
   }
 
-  // Draw UI Elements
-  const auto labels = mappedInput.mapLabels("", "", I18N.get(StrId::STR_CANCEL), I18N.get(StrId::STR_CONFIRM));
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  if (confirmPopup.processRender(renderer, mappedInput)) return;
 
   renderer.displayBuffer(HalDisplay::RefreshMode::FAST_REFRESH);
 }
 
 void ConfirmationActivity::loop() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
-    ActivityResult res;
-    res.isCancelled = false;
-    setResult(std::move(res));
-    finish();
-    return;
-  }
+  if (confirmPopup.handleInput(renderer, mappedInput, [this] { requestUpdate(); })) return;
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
-    ActivityResult res;
-    res.isCancelled = true;
-    setResult(std::move(res));
-    finish();
-    return;
-  }
+  // Popup dismissed without a selection (Back or outside tap): cancel.
+  ActivityResult result;
+  result.isCancelled = true;
+  setResult(std::move(result));
+  finish();
 }

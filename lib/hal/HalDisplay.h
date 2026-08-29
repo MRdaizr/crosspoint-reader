@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
-#include <EInkDisplay.h>
+
+#include "HalSdkCompat.h"
 
 class HalDisplay {
  public:
@@ -26,10 +27,13 @@ class HalDisplay {
   void begin(bool seamless = false);
 
   // Display dimensions
-  static constexpr uint16_t DISPLAY_WIDTH = EInkDisplay::DISPLAY_WIDTH;
-  static constexpr uint16_t DISPLAY_HEIGHT = EInkDisplay::DISPLAY_HEIGHT;
+  static constexpr uint16_t DISPLAY_WIDTH = hal_sdk::Display::DISPLAY_WIDTH;
+  static constexpr uint16_t DISPLAY_HEIGHT = hal_sdk::Display::DISPLAY_HEIGHT;
   static constexpr uint16_t DISPLAY_WIDTH_BYTES = DISPLAY_WIDTH / 8;
   static constexpr uint32_t BUFFER_SIZE = DISPLAY_WIDTH_BYTES * DISPLAY_HEIGHT;
+  static_assert(DISPLAY_WIDTH > 0 && DISPLAY_HEIGHT > 0, "FreeInk display geometry must be non-zero");
+  static_assert((DISPLAY_WIDTH % 8) == 0, "FreeInk display width must be byte aligned");
+  static_assert(BUFFER_SIZE > 0, "FreeInk display framebuffer size must be non-zero");
 
   // Frame buffer operations
   void clearScreen(uint8_t color = 0xFF) const;
@@ -39,14 +43,28 @@ class HalDisplay {
                             bool fromProgmem = false) const;
 
   void displayBuffer(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
+  // Compatibility wrapper for callers that request a partial update.  The
+  // current FreeInk display driver intentionally keeps windowed refresh
+  // internal, so this falls back to a normal refresh while preserving the
+  // framebuffer and polarity semantics.
   void displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen = false);
+  void displayBufferAsync(RefreshMode mode = RefreshMode::FAST_REFRESH);
+  void waitRefreshComplete();
+  bool supportsAsyncRefresh() const;
   void refreshDisplay(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
+
+  void setInverted(bool inverted);
+  bool toggleInverted();
+  bool isInverted() const;
 
   // Power management
   void deepSleep();
 
   // Access to frame buffer
   uint8_t* getFrameBuffer() const;
+
+  uint8_t* lendFrameBufferStorage(uint32_t* sizeOut);
+  void returnFrameBufferStorage();
 
   // X3 grayscale preconditioning (OEM "AA-pre-BW(mid)" settle pass), windowed
   // to the gray region in physical panel coordinates (no-arg = full frame).
@@ -73,6 +91,7 @@ class HalDisplay {
   // EInkDisplay::writeGrayscalePlaneStrip.
   void writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* rows, uint16_t yStart, uint16_t numRows);
   bool supportsStripGrayscale() const;
+  bool combinesGrayscaleBase() const;
 
   // Runtime geometry passthrough
   uint16_t getDisplayWidth() const;
@@ -81,7 +100,7 @@ class HalDisplay {
   uint32_t getBufferSize() const;
 
  private:
-  EInkDisplay einkDisplay;
+  hal_sdk::Display einkDisplay;
 };
 
 extern HalDisplay display;

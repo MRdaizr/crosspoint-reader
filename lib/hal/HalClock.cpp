@@ -5,50 +5,22 @@
 #include <esp_sntp.h>
 #include <time.h>
 
-#include <cassert>
-
-HalClock halClock;  // Singleton instance
+HalClock halClock;
 
 namespace {
 constexpr time_t MIN_TRUSTED_EPOCH = 1704016800;  // 2024-01-01 at UTC+14
 }
 
-// DS3231 register layout (BCD encoded):
-//   0x00: Seconds  (bits 6-4 = tens, bits 3-0 = ones)
-//   0x01: Minutes  (bits 6-4 = tens, bits 3-0 = ones)
-//   0x02: Hours    (bit 6 = 12/24 mode, bits 5-4 = tens, bits 3-0 = ones)
-
-static uint8_t bcdToDec(uint8_t bcd) { return ((bcd >> 4) * 10) + (bcd & 0x0F); }
-static uint8_t decToBcd(uint8_t dec) { return ((dec / 10) << 4) | (dec % 10); }
-
 void HalClock::begin() {
-  if (!gpio.deviceIsX3()) {
-    _available = false;
-    return;
+  // FreeInk selects the active board profile before this call. The SDK RTC
+  // wrapper handles the X3 DS3231 bus and reports unavailable on X4.
+  _available = _sdkRtc.begin();
+  LOG_INF("CLK", _available ? "SDK RTC found" : "RTC not found");
+  if (_available) {
+    uint8_t hour = 0;
+    uint8_t minute = 0;
+    getTime(hour, minute);
   }
-
-  // I2C is already initialised by HalPowerManager::begin() for X3.
-  // Probe the DS3231 by reading the seconds register.
-  Wire.beginTransmission(I2C_ADDR_DS3231);
-  Wire.write(DS3231_SEC_REG);
-  if (Wire.endTransmission(false) != 0) {
-    LOG_INF("CLK", "DS3231 RTC not found");
-    _available = false;
-    return;
-  }
-  Wire.requestFrom(I2C_ADDR_DS3231, (uint8_t)1);
-  if (Wire.available() < 1) {
-    _available = false;
-    return;
-  }
-  Wire.read();  // discard — just testing connectivity
-
-  _available = true;
-  LOG_INF("CLK", "DS3231 RTC found");
-
-  // Prime the cache with an initial read
-  uint8_t h, m;
-  getTime(h, m);
 }
 
 bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
@@ -61,18 +33,8 @@ bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
     return true;
   }
 
-  // Read 3 bytes starting at register 0x00: seconds, minutes, hours
-  Wire.beginTransmission(I2C_ADDR_DS3231);
-  Wire.write(DS3231_SEC_REG);
-  if (Wire.endTransmission(false) != 0) {
-    if (!_hasCachedTime) return false;
-    _lastPollMs = now;
-    hour = _cachedHour;
-    minute = _cachedMinute;
-    return true;
-  }
-  Wire.requestFrom(I2C_ADDR_DS3231, (uint8_t)3);
-  if (Wire.available() < 3) {
+  Rtc::DateTime dateTime;
+  if (!_sdkRtc.now(dateTime)) {
     if (!_hasCachedTime) return false;
     _lastPollMs = now;
     hour = _cachedHour;
@@ -80,25 +42,10 @@ bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
     return true;
   }
 
-  Wire.read();  // seconds — not needed
-  const uint8_t rawMin = Wire.read();
-  const uint8_t rawHour = Wire.read();
-
-  _cachedMinute = bcdToDec(rawMin & 0x7F);
-  // Handle 12/24h mode: bit 6 high = 12h mode
-  if (rawHour & 0x40) {
-    // 12h mode: bit 5 = PM, bits 4-0 = hours (1-12)
-    uint8_t h12 = bcdToDec(rawHour & 0x1F);
-    bool pm = rawHour & 0x20;
-    if (h12 == 12) h12 = 0;
-    _cachedHour = pm ? (h12 + 12) : h12;
-  } else {
-    // 24h mode: bits 5-0 = hours (0-23)
-    _cachedHour = bcdToDec(rawHour & 0x3F);
-  }
+  _cachedHour = dateTime.hour;
+  _cachedMinute = dateTime.minute;
   _lastPollMs = now;
   _hasCachedTime = true;
-
   hour = _cachedHour;
   minute = _cachedMinute;
   return true;
@@ -106,16 +53,13 @@ bool HalClock::getTime(uint8_t& hour, uint8_t& minute) const {
 
 bool HalClock::formatTime(char* buf, size_t bufSize, uint8_t utcOffsetQuarterHoursBiased, bool use12Hour) const {
   if (bufSize < (use12Hour ? 9u : 6u)) return false;
-  uint8_t h, m;
+  uint8_t h = 0;
+  uint8_t m = 0;
   if (!getTime(h, m)) return false;
 
-  // Apply UTC offset: convert biased value to signed quarter-hours.
-  // Clamp against corrupted persisted values so display time can't drift outside [-12:00, +14:00].
   if (utcOffsetQuarterHoursBiased > 104) utcOffsetQuarterHoursBiased = 104;
-  int offsetQuarterHours = static_cast<int>(utcOffsetQuarterHoursBiased) - 48;
+  const int offsetQuarterHours = static_cast<int>(utcOffsetQuarterHoursBiased) - 48;
   int totalMinutes = static_cast<int>(h) * 60 + static_cast<int>(m) + offsetQuarterHours * 15;
-
-  // Wrap around 24 hours
   totalMinutes = ((totalMinutes % 1440) + 1440) % 1440;
 
   const int hour24 = totalMinutes / 60;
@@ -132,20 +76,18 @@ bool HalClock::formatTime(char* buf, size_t bufSize, uint8_t utcOffsetQuarterHou
 }
 
 bool HalClock::writeTimeToRTC(uint8_t hour, uint8_t minute, uint8_t second) {
-  assert(hour < 24);
-  assert(minute < 60);
-  assert(second < 60);
-  Wire.beginTransmission(I2C_ADDR_DS3231);
-  Wire.write(DS3231_SEC_REG);    // Start at register 0x00
-  Wire.write(decToBcd(second));  // 0x00: Seconds
-  Wire.write(decToBcd(minute));  // 0x01: Minutes
-  Wire.write(decToBcd(hour));    // 0x02: Hours (24h mode, bit 6 = 0)
-  if (Wire.endTransmission() != 0) {
-    LOG_ERR("CLK", "Failed to write time to DS3231");
+  if (!_available || hour >= 24 || minute >= 60 || second >= 60) return false;
+
+  Rtc::DateTime dateTime;
+  if (!_sdkRtc.now(dateTime)) return false;
+  dateTime.hour = hour;
+  dateTime.minute = minute;
+  dateTime.second = second;
+  if (!_sdkRtc.set(dateTime)) {
+    LOG_ERR("CLK", "Failed to write time through FreeInk RTC");
     return false;
   }
 
-  // Invalidate cache so next read fetches fresh data
   _lastPollMs = 0;
   _cachedHour = hour;
   _cachedMinute = minute;
@@ -160,9 +102,6 @@ bool HalClock::syncFromNTP() {
   }
 
   LOG_INF("CLK", "Starting NTP sync...");
-  // System time is also used on X4, which does not have the X3 DS3231 RTC.
-  // Configure SNTP directly instead of using configTzTime(): the latter also
-  // changes the process-wide timezone and can affect the standby clock UI.
   if (esp_sntp_enabled()) esp_sntp_stop();
   esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
   esp_sntp_setservername(0, "ntp.aliyun.com");
@@ -170,18 +109,16 @@ bool HalClock::syncFromNTP() {
   esp_sntp_setservername(2, "time.nist.gov");
   esp_sntp_init();
 
-  // Wait for SNTP sync to complete (up to 15 seconds). A successful system
-  // clock sync is sufficient for network request signing; writing the RTC is
-  // an optional persistence improvement on X3.
   constexpr int maxAttempts = 150;
-  for (int i = 0; i < maxAttempts; i++) {
+  for (int i = 0; i < maxAttempts; ++i) {
     if (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED && hasValidTime()) {
-      time_t now = time(nullptr);
-      struct tm timeinfo{};
-      gmtime_r(&now, &timeinfo);
+      const time_t current = time(nullptr);
+      struct tm timeInfo {};
+      gmtime_r(&current, &timeInfo);
 
-      if (_available && writeTimeToRTC(timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec)) {
-        LOG_INF("CLK", "RTC set to %02d:%02d:%02d UTC", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+      if (_available && writeTimeToRTC(static_cast<uint8_t>(timeInfo.tm_hour), static_cast<uint8_t>(timeInfo.tm_min),
+                                       static_cast<uint8_t>(timeInfo.tm_sec))) {
+        LOG_INF("CLK", "RTC set to %02d:%02d:%02d UTC", timeInfo.tm_hour, timeInfo.tm_min, timeInfo.tm_sec);
       } else if (_available) {
         LOG_ERR("CLK", "System time synced, but RTC write failed");
       } else {

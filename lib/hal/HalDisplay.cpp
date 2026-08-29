@@ -45,15 +45,15 @@ void HalDisplay::drawImageTransparent(const uint8_t* imageData, uint16_t x, uint
   einkDisplay.drawImageTransparent(imageData, x, y, w, h, fromProgmem);
 }
 
-EInkDisplay::RefreshMode convertRefreshMode(HalDisplay::RefreshMode mode) {
+hal_sdk::Display::RefreshMode convertRefreshMode(HalDisplay::RefreshMode mode) {
   switch (mode) {
     case HalDisplay::FULL_REFRESH:
-      return EInkDisplay::FULL_REFRESH;
+      return hal_sdk::Display::FULL_REFRESH;
     case HalDisplay::HALF_REFRESH:
-      return EInkDisplay::HALF_REFRESH;
+      return hal_sdk::Display::HALF_REFRESH;
     case HalDisplay::FAST_REFRESH:
     default:
-      return EInkDisplay::FAST_REFRESH;
+      return hal_sdk::Display::FAST_REFRESH;
   }
 }
 
@@ -67,8 +67,27 @@ void HalDisplay::displayBuffer(HalDisplay::RefreshMode mode, bool turnOffScreen)
 
 void HalDisplay::displayWindow(const uint16_t x, const uint16_t y, const uint16_t w, const uint16_t h,
                                const bool turnOffScreen) {
-  einkDisplay.displayWindow(x, y, w, h, turnOffScreen);
+  // FreeInk keeps the experimental windowed command out of the public
+  // display API.  Keep the firmware-level method for progress-bar callers and
+  // use a regular refresh as a safe fallback instead of depending on a removed
+  // SDK symbol.  The framebuffer already contains the intended window update.
+  (void)x;
+  (void)y;
+  (void)w;
+  (void)h;
+  einkDisplay.refreshDisplay(hal_sdk::Display::FAST_REFRESH, turnOffScreen);
 }
+
+void HalDisplay::displayBufferAsync(HalDisplay::RefreshMode mode) {
+  if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
+    einkDisplay.requestResync(1);
+  }
+  einkDisplay.displayBufferAsyncNoShadow(convertRefreshMode(mode));
+}
+
+void HalDisplay::waitRefreshComplete() { einkDisplay.waitRefreshComplete(); }
+
+bool HalDisplay::supportsAsyncRefresh() const { return einkDisplay.supportsAsyncRefresh(); }
 
 void HalDisplay::refreshDisplay(HalDisplay::RefreshMode mode, bool turnOffScreen) {
   if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
@@ -78,9 +97,19 @@ void HalDisplay::refreshDisplay(HalDisplay::RefreshMode mode, bool turnOffScreen
   einkDisplay.refreshDisplay(convertRefreshMode(mode), turnOffScreen);
 }
 
+void HalDisplay::setInverted(bool inverted) { einkDisplay.setInverted(inverted); }
+
+bool HalDisplay::toggleInverted() { return einkDisplay.toggleInverted(); }
+
+bool HalDisplay::isInverted() const { return einkDisplay.isInverted(); }
+
 void HalDisplay::deepSleep() { einkDisplay.deepSleep(); }
 
 uint8_t* HalDisplay::getFrameBuffer() const { return einkDisplay.getFrameBuffer(); }
+
+uint8_t* HalDisplay::lendFrameBufferStorage(uint32_t* sizeOut) { return einkDisplay.lendBuildStorage(sizeOut); }
+
+void HalDisplay::returnFrameBufferStorage() { einkDisplay.returnBuildStorage(); }
 
 void HalDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer) {
   einkDisplay.copyGrayscaleBuffers(lsbBuffer, msbBuffer);
@@ -121,6 +150,8 @@ void HalDisplay::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* rows, ui
 }
 
 bool HalDisplay::supportsStripGrayscale() const { return einkDisplay.supportsStripGrayscale(); }
+
+bool HalDisplay::combinesGrayscaleBase() const { return einkDisplay.combinesGrayscaleBase(); }
 
 uint16_t HalDisplay::getDisplayWidth() const { return einkDisplay.getDisplayWidth(); }
 

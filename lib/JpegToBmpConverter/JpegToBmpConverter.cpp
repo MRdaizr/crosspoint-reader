@@ -1,5 +1,6 @@
 #include "JpegToBmpConverter.h"
 
+#include <BuildScratch.h>
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <JPEGDEC.h>
@@ -8,6 +9,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <new>
 
 #include "BitmapHelpers.h"
 
@@ -483,26 +485,42 @@ bool JpegToBmpConverter::jpegFileToBmpStreamInternal(HalFile& jpegFile, Print& b
                                                      int targetHeight, bool oneBit, bool crop) {
   LOG_DBG("JPG", "Converting JPEG to %s BMP (target: %dx%d)", oneBit ? "1-bit" : "2-bit", targetWidth, targetHeight);
 
-  if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
+  // During a cover build the renderer lends its framebuffer storage. Reuse
+  // that stable block for JPEGDEC so the decoder does not compete with the
+  // remaining heap or fragment it across repeated shelf refreshes.
+  uint8_t* decoderScratch = buildscratch::claim(JPEG_DECODER_SIZE);
+  if (!decoderScratch && ESP.getFreeHeap() < MIN_FREE_HEAP) {
     LOG_ERR("JPG", "Not enough heap for JPEG decoder (%u free, need %u)", ESP.getFreeHeap(), MIN_FREE_HEAP);
     return false;
   }
 
   s_jpegFile = &jpegFile;
 
-  const auto jpeg = makeUniqueNoThrow<JPEGDEC>();
-  if (!jpeg) {
+  std::unique_ptr<JPEGDEC> heapJpeg;
+  JPEGDEC* jpeg = nullptr;
+  if (decoderScratch != nullptr) {
+    jpeg = ::new (static_cast<void*>(decoderScratch)) JPEGDEC();
+  } else {
+    heapJpeg = makeUniqueNoThrow<JPEGDEC>();
+    jpeg = heapJpeg.get();
+  }
+  if (jpeg == nullptr) {
     LOG_ERR("JPG", "OOM: JPEG decoder");
     return false;
   }
+
+  const ScopedCleanup releaseDecoderScratch{[jpeg, decoderScratch]() {
+    if (decoderScratch == nullptr) return;
+    jpeg->~JPEGDEC();
+    buildscratch::release(decoderScratch);
+  }};
+  const ScopedCleanup cleanup{[jpeg]() { jpeg->close(); }};
 
   int rc = jpeg->open("", bmpJpegOpen, bmpJpegClose, bmpJpegRead, bmpJpegSeek, bmpDrawCallback);
   if (rc != 1) {
     LOG_ERR("JPG", "JPEG open failed (err=%d)", jpeg->getLastError());
     return false;
   }
-
-  const ScopedCleanup cleanup{[&jpeg]() { jpeg->close(); }};
 
   const int srcWidth = jpeg->getWidth();
   const int srcHeight = jpeg->getHeight();

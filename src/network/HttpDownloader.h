@@ -6,8 +6,9 @@
 
 /**
  * HTTP client utility for fetching content and downloading files. Built on
- * esp_http_client: https is verified against the CA bundle, plain http is
- * used for local servers (transport is chosen from the URL scheme).
+ * FreeInk SecureHttpClient/wolfSSL is used in the standard build; the
+ * esp_http_client implementation remains the fallback when wolfSSL is not
+ * enabled. Plain http is used for local servers.
  */
 class HttpDownloader {
  public:

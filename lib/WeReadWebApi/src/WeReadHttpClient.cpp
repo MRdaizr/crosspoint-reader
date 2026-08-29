@@ -11,8 +11,6 @@
 #include <strings.h>
 
 #include <limits>
-#else
-#include <esp_crt_bundle.h>
 #endif
 
 namespace {
@@ -459,7 +457,7 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
     if (esp_http_client_set_url(client, url) != ESP_OK || esp_http_client_set_method(client, method) != ESP_OK ||
         esp_http_client_set_timeout_ms(client, options.timeoutMs) != ESP_OK ||
         esp_http_client_set_user_data(client, &eventContext) != ESP_OK) {
-      LOG_ERR("HTTP", "verified request reuse setup failed");
+      LOG_ERR("HTTP", "request reuse setup failed");
       cleanupClient(client);
       return WeReadHttpClient::Result::NetworkError;
     }
@@ -469,7 +467,15 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
     config.buffer_size = HTTP_RX_BUF;
     config.buffer_size_tx = HTTP_TX_BUF;
     config.timeout_ms = options.timeoutMs;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
+    // Keep this transport consistent with the wolfSSL path above.  Verifying
+    // the full CA chain exceeds the X4's available internal heap during some
+    // WeRead handshakes (the PK signature check then fails before HTTP is
+    // sent).  TLS still encrypts the connection, but the peer is intentionally
+    // not authenticated; callers must only use this client on trusted networks.
+    // ESP-TLS requires this explicit opt-out when no CA/certificate source is
+    // supplied; leaving it false makes esp_tls reject the configuration before
+    // it even attempts the handshake.
+    config.skip_cert_common_name_check = true;
     config.method = method;
     config.keep_alive_enable = false;
     config.event_handler = onRequestEvent;
@@ -477,7 +483,7 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
 
     client = esp_http_client_init(&config);
     if (!client) {
-      LOG_ERR("HTTP", "verified request init failed");
+      LOG_ERR("HTTP", "request init failed");
       return WeReadHttpClient::Result::NetworkError;
     }
   }
@@ -502,7 +508,7 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
 
   esp_err_t err = esp_http_client_open(client, static_cast<int>(options.bodySize));
   if (err != ESP_OK) {
-    LOG_ERR("HTTP", "verified request open failed: %s", esp_err_to_name(err));
+    LOG_ERR("HTTP", "request open failed: %s", esp_err_to_name(err));
     cleanupClient(client);
     return WeReadHttpClient::Result::NetworkError;
   }
@@ -512,7 +518,7 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
     const int written = esp_http_client_write(client, reinterpret_cast<const char*>(options.body + sent),
                                               static_cast<int>(options.bodySize - sent));
     if (written <= 0) {
-      LOG_ERR("HTTP", "verified request body write failed after %u bytes", static_cast<unsigned>(sent));
+      LOG_ERR("HTTP", "request body write failed after %u bytes", static_cast<unsigned>(sent));
       cleanupClient(client);
       return WeReadHttpClient::Result::NetworkError;
     }
@@ -520,7 +526,7 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
   }
 
   if (esp_http_client_fetch_headers(client) < 0) {
-    LOG_ERR("HTTP", "verified request header read failed");
+    LOG_ERR("HTTP", "request header read failed");
     cleanupClient(client);
     return WeReadHttpClient::Result::NetworkError;
   }
@@ -530,7 +536,7 @@ WeReadHttpClient::Result runRequest(const char* url, const WeReadHttpClient::Req
     const int got = esp_http_client_read(client, reinterpret_cast<char*>(options.readBuffer),
                                          static_cast<int>(options.readBufferSize));
     if (got < 0) {
-      LOG_ERR("HTTP", "verified request read failed");
+      LOG_ERR("HTTP", "request read failed");
       cleanupClient(client);
       return WeReadHttpClient::Result::NetworkError;
     }

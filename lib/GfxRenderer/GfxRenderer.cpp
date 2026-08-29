@@ -9,6 +9,7 @@
 
 #include <algorithm>
 
+#include <BuildScratch.h>
 #include "FontCacheManager.h"
 
 namespace {
@@ -1436,6 +1437,36 @@ void GfxRenderer::displayWindow(const int x, const int y, const int width, const
                         static_cast<uint16_t>(height), fadingFix);
 }
 
+void GfxRenderer::releaseFrameBufferForBuild() {
+  if (frameBuffer == nullptr) return;
+  uint32_t size = 0;
+  uint8_t* scratch = display.lendFrameBufferStorage(&size);
+  frameBuffer = nullptr;
+  if (scratch != nullptr) buildscratch::lend(scratch, size);
+}
+
+bool GfxRenderer::restoreFrameBufferAfterBuild() {
+  buildscratch::reclaim();
+  display.returnFrameBufferStorage();
+  frameBuffer = display.getFrameBuffer();
+  return frameBuffer != nullptr;
+}
+
+GfxRenderer::FrameBufferLoan::FrameBufferLoan(GfxRenderer& renderer) : renderer_(renderer) {
+  if (!renderer_.hasFrameBuffer()) return;
+  renderer_.releaseFrameBufferForBuild();
+  active_ = true;
+}
+
+void GfxRenderer::FrameBufferLoan::end() {
+  if (!active_) return;
+  active_ = false;
+  if (!renderer_.restoreFrameBufferAfterBuild()) {
+    LOG_ERR("GFX", "Framebuffer restore failed");
+    ESP.restart();
+  }
+}
+
 std::string GfxRenderer::truncatedText(const int fontId, const char* text, const int maxWidth,
                                        const EpdFontFamily::Style style) const {
   if (!text || maxWidth <= 0) return "";
@@ -1547,6 +1578,32 @@ int GfxRenderer::getScreenHeight() const {
       return panelHeight;
   }
   return panelWidth;
+}
+
+void GfxRenderer::tapToLogical(float nx, float ny, int& outX, int& outY) const {
+  int phyX = static_cast<int>(nx * panelWidth);
+  int phyY = static_cast<int>(ny * panelHeight);
+  phyX = std::clamp(phyX, 0, static_cast<int>(panelWidth) - 1);
+  phyY = std::clamp(phyY, 0, static_cast<int>(panelHeight) - 1);
+  switch (orientation) {
+    case Portrait:
+      outX = panelHeight - 1 - phyY;
+      outY = phyX;
+      break;
+    case PortraitInverted:
+      outX = phyY;
+      outY = panelWidth - 1 - phyX;
+      break;
+    case LandscapeClockwise:
+      outX = panelWidth - 1 - phyX;
+      outY = panelHeight - 1 - phyY;
+      break;
+    case LandscapeCounterClockwise:
+    default:
+      outX = phyX;
+      outY = phyY;
+      break;
+  }
 }
 
 // Translate a logical rect through rotateCoordinates and take the bounding

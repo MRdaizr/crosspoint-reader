@@ -345,6 +345,7 @@ void WeReadBrowseActivity::activateList() {
 
 void WeReadBrowseActivity::releaseReaderFont() {
   if (!readerFontReady_) return;
+  sdFontSystem.releaseLoadedFont(renderer);
   if (auto* fontCache = renderer.getFontCacheManager()) fontCache->clearCache();
   readerFontId_ = 0;
   readerFontReady_ = false;
@@ -457,7 +458,18 @@ void WeReadBrowseActivity::drawDetail(const Rect& content) {
     return true;
   };
 
-  const bool bodyReady = drawBody();
+  bool bodyReady = true;
+  auto* fontCache = renderer.getFontCacheManager();
+  if (fontCache != nullptr && fontCache->needsPrewarmScan(readerFontId_)) {
+    auto prewarmScope = fontCache->createPrewarmScope();
+    bodyReady = drawBody();
+    if (bodyReady) {
+      prewarmScope.endScanAndPrewarm();
+      bodyReady = drawBody();
+    }
+  } else {
+    bodyReady = drawBody();
+  }
   if (!bodyReady) {
     GUI.drawPopup(renderer, tr(STR_WEREAD_DETAIL_UNAVAILABLE));
     return;
@@ -472,6 +484,19 @@ void WeReadBrowseActivity::drawDetail(const Rect& content) {
 }
 
 void WeReadBrowseActivity::handleMenuInput() {
+  const Rect content = contentBounds();
+  int touched = -1;
+  const auto touch = mappedInput.rowTouch(touched, content.y, GUI.getListRowStep(false), kMenuCount, content.x,
+                                          content.x + content.width);
+  if (touch != MappedInputManager::RowTouch::None) {
+    menuSelected_ = touched;
+    if (touch == MappedInputManager::RowTouch::Tap) {
+      activateMenu();
+    } else {
+      requestUpdate();
+    }
+    return;
+  }
   navigator_.onNextRelease([this] {
     menuSelected_ = ButtonNavigator::nextIndex(menuSelected_, kMenuCount);
     requestUpdate();
@@ -497,6 +522,30 @@ void WeReadBrowseActivity::handleListInput() {
     return;
   }
   const int pageItems = UITheme::getNumberOfItemsPerPage(renderer, true, false, true, true);
+  int touched = -1;
+  if (mappedInput.wasListItemTouchedDown(touched, count, listSelected_, contentBounds().y, contentBounds().height, true)) {
+    if (listSelected_ != touched) {
+      listSelected_ = touched;
+      requestUpdate();
+    }
+    return;
+  }
+  if (mappedInput.wasListItemTapped(touched, count, listSelected_, contentBounds().y, contentBounds().height, true)) {
+    listSelected_ = touched;
+    activateList();
+    return;
+  }
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up) {
+    listSelected_ = ButtonNavigator::nextPageIndex(listSelected_, count, pageItems);
+    requestUpdate();
+    return;
+  }
+  if (swipe == MappedInputManager::SwipeDir::Down) {
+    listSelected_ = ButtonNavigator::previousPageIndex(listSelected_, count, pageItems);
+    requestUpdate();
+    return;
+  }
   navigator_.onNextRelease([this, count] {
     listSelected_ = ButtonNavigator::nextIndex(listSelected_, count);
     requestUpdate();
@@ -539,6 +588,15 @@ void WeReadBrowseActivity::handleDetailInput() {
       requestUpdate();
     }
   };
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up) {
+    next();
+    return;
+  }
+  if (swipe == MappedInputManager::SwipeDir::Down) {
+    previous();
+    return;
+  }
   navigator_.onNextRelease(next);
   navigator_.onPreviousRelease(previous);
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
@@ -548,7 +606,9 @@ void WeReadBrowseActivity::handleDetailInput() {
 }
 
 void WeReadBrowseActivity::handleErrorInput() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  int x = 0;
+  int y = 0;
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || mappedInput.wasScreenTapped(x, y)) {
     connectThenCache();
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     operation_.reset();

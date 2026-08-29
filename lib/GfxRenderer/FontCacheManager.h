@@ -23,6 +23,9 @@ class FontCacheManager {
                     uint8_t styleMask = 0x0F);
   void logStats(const char* label = "render");
   void resetStats();
+  // True when a render may touch compressed/SD glyphs that benefit from a
+  // scan pass before drawing (used by Browse detail pages).
+  bool needsPrewarmScan(int fontId) const;
 
   // Scan-mode API: called by GfxRenderer::drawText() during scan pass
   bool isScanning() const;

@@ -599,7 +599,8 @@ void loop() {
   // CPU frequency scaling while their static screen remains visible.
   static unsigned long lastActivityTime = millis();
   static unsigned long lastUserActivityTime = millis();
-  const bool userActivity = gpio.wasAnyPressed() || gpio.wasAnyReleased() || halTiltSensor.hadActivity();
+  const bool userActivity = gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() ||
+                            halTiltSensor.hadActivity();
   if (userActivity) {
     lastActivityTime = millis();
     lastUserActivityTime = lastActivityTime;

@@ -3,6 +3,8 @@
 #include <Arduino.h>
 #include <InputManager.h>
 
+#include "HalSdkCompat.h"
+
 // Display SPI pins (custom pins for XteinkX4, not hardware SPI defaults)
 #define EPD_SCLK 8   // SPI Clock
 #define EPD_MOSI 10  // SPI MOSI (Master Out Slave In)
@@ -58,6 +60,11 @@ class HalGPIO {
   // Inline device type helpers for cleaner downstream checks
   inline bool deviceIsX3() const { return _deviceType == DeviceType::X3; }
   inline bool deviceIsX4() const { return _deviceType == DeviceType::X4; }
+  // True for the two Xteink profiles supported by this firmware.  This is
+  // intentionally separate from the compile-time FREEINK_DEVICE_* flags so
+  // the power HAL can retain a safe fallback when runtime probing is
+  // inconclusive.
+  inline bool isXteinkDevice() const { return deviceIsX3() || deviceIsX4(); }
 
   // Start button GPIO and setup SPI for screen and SD card
   void begin();
@@ -71,6 +78,21 @@ class HalGPIO {
   bool wasAnyReleased() const;
   unsigned long getHeldTime() const;
   unsigned long getPowerButtonHeldTime() const;
+
+  // Touch input is provided by the official FreeInk InputManager.  These
+  // wrappers keep the rest of the firmware on the HAL boundary and remain
+  // inert on boards/builds without a touch controller.
+  bool hasTouch() const;
+  bool wasTouchTap(float& nx, float& ny) const;
+  bool wasTouchDown(float& nx, float& ny) const;
+  bool wasTouchReleased() const;
+  bool isTouchTapCandidate(float& nx, float& ny, unsigned long& heldMs) const;
+  bool isTouchHeldAt(float& nx, float& ny) const;
+  bool wasTouchLongPress(float& nx, float& ny) const;
+  void suppressTouchContact();
+  unsigned long lastTouchHeldMs() const;
+  bool wasSwipe(float& nxStart, float& nyStart, float& nxEnd, float& nyEnd) const;
+  bool wasTouchActivity() const;
 
   // Setup wake up GPIO and enter deep sleep
   void startDeepSleep();

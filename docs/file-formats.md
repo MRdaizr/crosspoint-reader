@@ -4,6 +4,11 @@ These formats describe the SD-card cache files under `/.crosspoint/epub_<hash>/`
 All POD fields are written in the ESP32 little-endian representation used by
 `Serialization.h`; strings are length-prefixed UTF-8.
 
+The migration from `open-x4-sdk` to `freeink-sdk` does not alter these cache
+layouts. Cache invalidation continues to be controlled by each format's own
+version field (including the current section and CSS versions); SDK updates
+must not reuse those version numbers.
+
 ## `book.bin`
 
 ### Version 10

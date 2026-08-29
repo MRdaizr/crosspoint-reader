@@ -1,8 +1,10 @@
 #include <HalGPIO.h>
+#include <BoardConfig.h>
 #include <Logging.h>
 #include <Preferences.h>
 #include <SPI.h>
 #include <Wire.h>
+#include <XteinkDetect.h>
 #include <esp_sleep.h>
 
 // Global HalGPIO instance
@@ -162,6 +164,26 @@ HalGPIO::DeviceType detectDeviceTypeWithFingerprint() {
     return nvsToDeviceType(cachedValue);
   }
 
+  // Prefer FreeInk's canonical two-pass Xteink probe. It also understands
+  // controller variants that cannot be distinguished reliably from the
+  // peripheral-only probe below. Keep the legacy I2C fingerprint as a
+  // compatibility fallback for older X3 batches and emulator builds.
+#if defined(FREEINK_DEVICE_X3) && defined(FREEINK_DEVICE_X4)
+  uint8_t freeinkScore1 = 0;
+  uint8_t freeinkScore2 = 0;
+  const freeink::XteinkVerdict verdict = freeink::detectXteinkVerdict(&freeinkScore1, &freeinkScore2);
+  LOG_INF("HW", "FreeInk Xteink probe scores: pass1=%u pass2=%u verdict=%u", freeinkScore1, freeinkScore2,
+          static_cast<unsigned>(verdict));
+  if (verdict == freeink::XteinkVerdict::X3Confirmed) {
+    writeNvsDeviceValue(NVS_KEY_DEV_CACHED, NvsDeviceValue::X3);
+    return HalGPIO::DeviceType::X3;
+  }
+  if (verdict == freeink::XteinkVerdict::X4Confirmed) {
+    writeNvsDeviceValue(NVS_KEY_DEV_CACHED, NvsDeviceValue::X4);
+    return HalGPIO::DeviceType::X4;
+  }
+#endif
+
   // No cache yet: run active X3 fingerprint probe and persist result.
   const X3GPIO::X3ProbeResult pass1 = X3GPIO::runX3ProbePass();
   delay(2);
@@ -191,15 +213,28 @@ HalGPIO::DeviceType detectDeviceTypeWithFingerprint() {
 }  // namespace
 
 void HalGPIO::begin() {
-  inputMgr.begin();
-  SPI.begin(EPD_SCLK, SPI_MISO, EPD_MOSI, EPD_CS);
-
   _deviceType = detectDeviceTypeWithFingerprint();
+
+  // Select the board profile before the display and SD buses take ownership of
+  // the pins.  The runtime detector remains authoritative for this combined
+  // X3/X4 binary; BoardConfig supplies FreeInk's battery and power metadata.
+  BoardConfig::selectDevice(deviceIsX3() ? BoardConfig::Board::XteinkX3 : BoardConfig::Board::XteinkX4);
+  freeink::applyXteinkDisplayController();
+  if (deviceIsX3() && BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::UC8279) {
+    BoardConfig::selectDevice(BoardConfig::Board::XteinkX3Uc8279);
+  }
+
+  SPI.begin(EPD_SCLK, SPI_MISO, EPD_MOSI, EPD_CS);
 
   if (deviceIsX4()) {
     pinMode(BAT_GPIO0, INPUT);
     pinMode(UART0_RXD, INPUT);
   }
+
+  // InputManager reads BoardConfig::ACTIVE for the power/button pins.  It
+  // must be initialized after runtime X3/X4 selection, otherwise a combined
+  // binary can latch the default profile's key map on first boot.
+  inputMgr.begin();
 }
 
 void HalGPIO::update() {
@@ -225,6 +260,107 @@ unsigned long HalGPIO::getHeldTime() const { return inputMgr.getHeldTime(); }
 
 unsigned long HalGPIO::getPowerButtonHeldTime() const { return inputMgr.getPowerButtonHeldTime(); }
 
+bool HalGPIO::hasTouch() const {
+#if CROSSPOINT_EMULATED == 0
+  return inputMgr.hasTouch();
+#else
+  return false;
+#endif
+}
+
+bool HalGPIO::wasTouchTap(float& nx, float& ny) const {
+#if CROSSPOINT_EMULATED == 0
+  return inputMgr.wasTouchTap(nx, ny);
+#else
+  (void)nx;
+  (void)ny;
+  return false;
+#endif
+}
+
+bool HalGPIO::wasTouchDown(float& nx, float& ny) const {
+#if CROSSPOINT_EMULATED == 0
+  return inputMgr.wasTouchPressedAt(nx, ny);
+#else
+  (void)nx;
+  (void)ny;
+  return false;
+#endif
+}
+
+bool HalGPIO::wasTouchReleased() const {
+#if CROSSPOINT_EMULATED == 0
+  return inputMgr.wasTouchReleased();
+#else
+  return false;
+#endif
+}
+
+bool HalGPIO::isTouchTapCandidate(float& nx, float& ny, unsigned long& heldMs) const {
+#if CROSSPOINT_EMULATED == 0
+  return inputMgr.isTouchTapCandidate(nx, ny, heldMs);
+#else
+  (void)nx;
+  (void)ny;
+  (void)heldMs;
+  return false;
+#endif
+}
+
+bool HalGPIO::isTouchHeldAt(float& nx, float& ny) const {
+#if CROSSPOINT_EMULATED == 0
+  return inputMgr.isTouchHeldAt(nx, ny);
+#else
+  (void)nx;
+  (void)ny;
+  return false;
+#endif
+}
+
+bool HalGPIO::wasTouchLongPress(float& nx, float& ny) const {
+#if CROSSPOINT_EMULATED == 0
+  return inputMgr.wasTouchLongPress(nx, ny);
+#else
+  (void)nx;
+  (void)ny;
+  return false;
+#endif
+}
+
+void HalGPIO::suppressTouchContact() {
+#if CROSSPOINT_EMULATED == 0
+  inputMgr.suppressTouchContact();
+#endif
+}
+
+unsigned long HalGPIO::lastTouchHeldMs() const {
+#if CROSSPOINT_EMULATED == 0
+  return inputMgr.lastTouchHeldMs();
+#else
+  return 0;
+#endif
+}
+
+bool HalGPIO::wasSwipe(float& nxStart, float& nyStart, float& nxEnd, float& nyEnd) const {
+#if CROSSPOINT_EMULATED == 0
+  return inputMgr.wasSwipe(nxStart, nyStart, nxEnd, nyEnd);
+#else
+  (void)nxStart;
+  (void)nyStart;
+  (void)nxEnd;
+  (void)nyEnd;
+  return false;
+#endif
+}
+
+bool HalGPIO::wasTouchActivity() const {
+#if CROSSPOINT_EMULATED == 0
+  return inputMgr.wasTouchActivity();
+#else
+  return false;
+#endif
+}
+
 void HalGPIO::startDeepSleep() {
   // Ensure that the power button has been released to avoid immediately turning back on if you're holding it
   while (inputMgr.isPressed(BTN_POWER)) {
@@ -232,7 +368,11 @@ void HalGPIO::startDeepSleep() {
     inputMgr.update();
   }
   // Arm the wakeup trigger *after* the button is released
-  esp_deep_sleep_enable_gpio_wakeup(1ULL << InputManager::POWER_BUTTON_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
+  const int8_t powerPin = BoardConfig::ACTIVE.input.power;
+  if (powerPin < 0) {
+    return;
+  }
+  esp_deep_sleep_enable_gpio_wakeup(1ULL << static_cast<uint8_t>(powerPin), ESP_GPIO_WAKEUP_GPIO_LOW);
   // Enter Deep Sleep
   esp_deep_sleep_start();
 }

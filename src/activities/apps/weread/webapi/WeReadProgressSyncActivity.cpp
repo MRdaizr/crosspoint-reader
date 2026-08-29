@@ -367,6 +367,23 @@ void WeReadProgressSyncActivity::loop() {
         returnToReader();
         return;
       }
+      const auto& metrics = UITheme::getInstance().getMetrics();
+      const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+      const Rect content = SubpageLayout::contentRect(screen, metrics);
+      const int optionStep = metrics.menuRowHeight + metrics.menuSpacing;
+      const int optionTop = content.y + content.height - optionStep * 2;
+      int touchedOption = -1;
+      const auto touch = mappedInput.rowTouch(touchedOption, optionTop, optionStep, 2, content.x,
+                                              content.x + content.width, metrics.menuRowHeight);
+      if (touch != MappedInputManager::RowTouch::None) {
+        selectedDirection_ = touchedOption == 0 ? DirectionOption::ApplyRemote : DirectionOption::UploadLocal;
+        if (touch == MappedInputManager::RowTouch::Tap) {
+          beginSelectedDirection();
+        } else {
+          requestUpdate();
+        }
+        return;
+      }
       if (mappedInput.wasReleased(MappedInputManager::Button::NavPrevious) ||
           mappedInput.wasReleased(MappedInputManager::Button::NavNext)) {
         selectedDirection_ = selectedDirection_ == DirectionOption::ApplyRemote ? DirectionOption::UploadLocal
@@ -381,8 +398,10 @@ void WeReadProgressSyncActivity::loop() {
     }
     case State::Success:
     case State::LoginRequired: {
+      int x = 0;
+      int y = 0;
       if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
-          mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+          mappedInput.wasReleased(MappedInputManager::Button::Confirm) || mappedInput.wasScreenTapped(x, y)) {
         returnToReader();
       }
       return;
@@ -393,7 +412,9 @@ void WeReadProgressSyncActivity::loop() {
         return;
       }
       {
-        if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) &&
+        int x = 0;
+        int y = 0;
+        if ((mappedInput.wasReleased(MappedInputManager::Button::Confirm) || mappedInput.wasScreenTapped(x, y)) &&
             (error_ == WeReadClient::Error::Network || error_ == WeReadClient::Error::Clock ||
              error_ == WeReadClient::Error::Unavailable)) {
           state_ = State::Starting;

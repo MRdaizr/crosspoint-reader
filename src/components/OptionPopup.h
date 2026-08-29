@@ -12,9 +12,8 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
-// Button-only modal option picker used by the WeRead screens. The target
-// firmware has no touch input, so keep the interaction deliberately aligned
-// with the existing NavPrevious/NavNext/Confirm/Back mapping.
+// Modal option picker used by the WeRead screens. It accepts both touch and
+// the existing NavPrevious/NavNext/Confirm/Back mapping.
 class OptionPopup {
  public:
   void show(StrId titleId, const StrId* optionIds, const int optionCount, const int currentIndex,
@@ -25,13 +24,55 @@ class OptionPopup {
     finishShow(currentIndex, std::move(onSelect));
   }
 
-  bool handleInput(MappedInputManager& input, const std::function<void()>& requestUpdate) {
+  void show(const char* title, const StrId* optionIds, const int optionCount, const int currentIndex,
+            std::function<void(int)> onSelect) {
+    title_ = title ? title : "";
+    options_.clear();
+    for (int i = 0; i < optionCount; ++i) options_.emplace_back(I18N.get(optionIds[i]));
+    finishShow(currentIndex, std::move(onSelect));
+  }
+
+  bool handleInput(GfxRenderer& renderer, MappedInputManager& input, const std::function<void()>& requestUpdate) {
     if (!active_) return false;
 
     const int count = static_cast<int>(options_.size());
     if (count <= 0) {
       active_ = false;
       return true;
+    }
+    const int rowHeight = renderer.getLineHeight(UI_10_FONT_ID) + 16;
+    const int dialogWidth = std::min(renderer.getScreenWidth() - 30, 400);
+    const int dialogHeight = renderer.getLineHeight(UI_12_FONT_ID) + 20 + rowHeight * count;
+    const int dialogX = std::max(0, (renderer.getScreenWidth() - dialogWidth) / 2);
+    const int dialogY = std::max(0, (renderer.getScreenHeight() - dialogHeight) / 2);
+    int touchX = 0;
+    int touchY = 0;
+    const bool touchDown = input.wasScreenTouchDown(touchX, touchY);
+    const bool touchTap = !touchDown && input.wasScreenTapped(touchX, touchY);
+    if (touchDown || touchTap) {
+      const bool inside = touchX >= dialogX && touchX < dialogX + dialogWidth && touchY >= dialogY &&
+                          touchY < dialogY + dialogHeight;
+      if (inside) {
+        const int firstRowY = dialogY + renderer.getLineHeight(UI_12_FONT_ID) + 20;
+        if (touchY >= firstRowY) {
+          const int index = (touchY - firstRowY) / rowHeight;
+          if (index >= 0 && index < count) {
+            selected_ = index;
+            if (touchTap) {
+              active_ = false;
+              if (onSelect_) onSelect_(selected_);
+            }
+            requestUpdate();
+            return true;
+          }
+        }
+        return true;
+      }
+      if (touchTap) {
+        active_ = false;
+        requestUpdate();
+        return true;
+      }
     }
     if (input.wasReleased(MappedInputManager::Button::NavPrevious)) {
       selected_ = (selected_ + count - 1) % count;

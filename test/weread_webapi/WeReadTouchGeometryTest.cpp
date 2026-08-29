@@ -17,6 +17,12 @@ TEST(WeReadTouchGeometry, MapsSingleBookPageAndRejectsGaps) {
       .availableWidth = 440,
   };
 
+  // The migrated WeRead shelf intentionally remains the firmware's 1×1
+  // layout; touch support must not silently adopt crossmux's multi-cover grid.
+  EXPECT_EQ(layout.columns, 1);
+  EXPECT_EQ(layout.rows, 1);
+  EXPECT_EQ(layout.itemsPerPage, 1);
+
   EXPECT_EQ(weReadShelfIndexFromPoint(content, layout, 0, 3, 190, 350), 0);
   EXPECT_EQ(weReadShelfIndexFromPoint(content, layout, 1, 3, 190, 350), 1);
   EXPECT_EQ(weReadShelfIndexFromPoint(content, layout, 0, 3, 100, 350), -1);

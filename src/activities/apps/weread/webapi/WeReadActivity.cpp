@@ -363,6 +363,29 @@ class WeReadChapterRangeActivity final : public Activity {
     const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
     const Rect content = SubpageLayout::contentRect(screen, metrics);
     const int pageItems = GUI.getListPageItems(content.height, false);
+    int touched = -1;
+    const auto touch = mappedInput.rowTouch(touched, content.y, GUI.getListRowStep(false), chapterCount_, content.x,
+                                            content.x + content.width);
+    if (touch != MappedInputManager::RowTouch::None) {
+      selectedIndex_ = touched;
+      if (touch == MappedInputManager::RowTouch::Tap) {
+        selectCurrent();
+      } else {
+        requestUpdate();
+      }
+      return;
+    }
+    const auto swipe = mappedInput.wasSwipe();
+    if (swipe == MappedInputManager::SwipeDir::Up) {
+      selectedIndex_ = ButtonNavigator::nextPageIndex(selectedIndex_, chapterCount_, std::max(1, pageItems));
+      requestUpdate();
+      return;
+    }
+    if (swipe == MappedInputManager::SwipeDir::Down) {
+      selectedIndex_ = ButtonNavigator::previousPageIndex(selectedIndex_, chapterCount_, std::max(1, pageItems));
+      requestUpdate();
+      return;
+    }
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       selectCurrent();
       return;
@@ -775,7 +798,10 @@ WeReadClient::Operation::Event WeReadActivity::stepOperation() {
     introPreviewPrewarmLength_ = 0;
     introPreviewPrewarmFontId_ = 0;
   }
-  // Cover conversion claims JPEGDEC from the lent 48KB framebuffer.
+  // Cover conversion claims the JPEG/PNG decoder workspace from the lent
+  // framebuffer, avoiding another large contiguous allocation on the C3.
+  std::optional<GfxRenderer::FrameBufferLoan> coverScratch;
+  if (operation_.needsCoverConversionScratch()) coverScratch.emplace(renderer);
   struct WorkContext {
     WeReadActivity* activity;
     RenderLock* renderBarrier;
@@ -1252,6 +1278,48 @@ void WeReadActivity::handleDetailInput() {
     return;
   }
 
+  const Rect content = contentBounds();
+  const Rect actions = detailActionsBounds(content);
+  int touchedAction = -1;
+  const auto actionTouch = mappedInput.rowTouch(touchedAction, actions.y, GUI.getListRowStep(false),
+                                                kDetailListActionCount, actions.x, actions.x + actions.width);
+  if (actionTouch != MappedInputManager::RowTouch::None) {
+    const auto action = static_cast<DetailAction>(touchedAction + 1);
+    if (detailActionEnabled(action)) {
+      const int previousSelection = detailSelected_.load();
+      detailSelected_.store(touchedAction + 1);
+      if (previousSelection != detailSelected_.load()) {
+        detailSelectionGeneration_.fetch_add(1);
+        detailSelectionOnlyPending_.store(true);
+        requestUpdate();
+      }
+      if (actionTouch == MappedInputManager::RowTouch::Tap) activateDetailSelection();
+    }
+    return;
+  }
+
+  if (detailIntroTruncated_) {
+    const Rect introduction = detailIntroductionBounds(content);
+    int x = 0;
+    int y = 0;
+    if (mappedInput.wasScreenTouchDown(x, y) && x >= introduction.x && x < introduction.x + introduction.width &&
+        y >= introduction.y && y < introduction.y + introduction.height) {
+      if (detailSelected_.load() != static_cast<int>(DetailAction::Introduction)) {
+        detailSelected_.store(static_cast<int>(DetailAction::Introduction));
+        detailSelectionGeneration_.fetch_add(1);
+        detailSelectionOnlyPending_.store(true);
+        requestUpdate();
+      }
+      return;
+    }
+    if (mappedInput.wasScreenTapped(x, y) && x >= introduction.x && x < introduction.x + introduction.width &&
+        y >= introduction.y && y < introduction.y + introduction.height) {
+      detailSelected_.store(static_cast<int>(DetailAction::Introduction));
+      activateDetailSelection();
+      return;
+    }
+  }
+
   buttonNavigator_.onNext([this] {
     const int previousSelection = detailSelected_.load();
     moveDetailSelection(1);
@@ -1294,6 +1362,15 @@ void WeReadActivity::handleIntroductionInput() {
       requestUpdate();
     }
   };
+  const auto swipe = mappedInput.wasSwipe();
+  if (swipe == MappedInputManager::SwipeDir::Up) {
+    next();
+    return;
+  }
+  if (swipe == MappedInputManager::SwipeDir::Down) {
+    previous();
+    return;
+  }
   buttonNavigator_.onNext(next);
   buttonNavigator_.onPrevious(previous);
 }
@@ -1454,6 +1531,27 @@ void WeReadActivity::activateDisclaimerSelection() {
 }
 
 void WeReadActivity::handleDisclaimerInput() {
+  const Rect actions = disclaimerActionsBounds();
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int gap = disclaimerActionGap(actions.width, metrics.verticalSpacing);
+  const int buttonWidth = std::max(1, (actions.width - gap) / kDisclaimerActionCount);
+  int touched = -1;
+  switch (mappedInput.colTouch(touched, actions.x, buttonWidth + gap, kDisclaimerActionCount, actions.y,
+                               actions.y + actions.height, buttonWidth)) {
+    case MappedInputManager::RowTouch::Tap:
+      disclaimerSelected_ = touched;
+      activateDisclaimerSelection();
+      return;
+    case MappedInputManager::RowTouch::Down:
+      if (disclaimerSelected_ != touched) {
+        disclaimerSelected_ = touched;
+        requestUpdate();
+      }
+      return;
+    case MappedInputManager::RowTouch::None:
+      break;
+  }
+
   buttonNavigator_.onNextRelease([this] {
     disclaimerSelected_ = ButtonNavigator::nextIndex(disclaimerSelected_, kDisclaimerActionCount);
     requestUpdate();
@@ -1579,9 +1677,26 @@ void WeReadActivity::handleManageInput() {
         return;
       case ManageAction::Logout:
         promptLogout();
-        return;
+      return;
     }
   };
+
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const Rect content = mainContentBounds();
+  int touched = -1;
+  const auto touch = mappedInput.rowTouch(touched, content.y, metrics.menuRowHeight + metrics.menuSpacing,
+                                          kManageEntryCount, content.x, content.x + content.width);
+  if (touch != MappedInputManager::RowTouch::None) {
+    const bool changed = manageSelected_ != touched || mainFocus_.load() != MainFocus::Content;
+    manageSelected_ = touched;
+    mainFocus_.store(MainFocus::Content);
+    if (touch == MappedInputManager::RowTouch::Tap) {
+      activate();
+    } else if (changed) {
+      requestUpdate();
+    }
+    return;
+  }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     activate();
@@ -1625,6 +1740,31 @@ void WeReadActivity::handleMainInput() {
     resetShelfCoverLoading();
     activityManager.goToExtensions();
     return;
+  }
+
+  // Touch tab hit-testing stays local to the legacy theme.  Crossmux's theme
+  // helper is not required for the Extensions-based WeRead entry point.
+  int touchX = 0;
+  int touchY = 0;
+  const bool touchDown = mappedInput.wasScreenTouchDown(touchX, touchY);
+  const bool touchTap = !touchDown && mappedInput.wasScreenTapped(touchX, touchY);
+  if (touchDown || touchTap) {
+    const auto& metrics = UITheme::getInstance().getMetrics();
+    const Rect safe = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
+    const Rect tabs{safe.x, safe.y + metrics.topPadding + metrics.headerHeight, safe.width, metrics.tabBarHeight};
+    int tabX = tabs.x + metrics.contentSidePadding;
+    for (size_t index = 0; index < mainTabs_.size(); ++index) {
+      const int textWidth = renderer.getTextWidth(UI_12_FONT_ID, mainTabs_[index].label,
+                                                  mainTabs_[index].selected ? EpdFontFamily::BOLD
+                                                                            : EpdFontFamily::REGULAR);
+      if (touchX >= tabX && touchX < tabX + textWidth && touchY >= tabs.y && touchY < tabs.y + tabs.height) {
+        mainFocus_.store(MainFocus::Content);
+        selectMainTab(index == 0 ? MainTab::Shelf : MainTab::Manage);
+        requestUpdate();
+        return;
+      }
+      tabX += textWidth + metrics.tabSpacing;
+    }
   }
 
   if (mainFocus_.load() == MainFocus::Tabs) {
@@ -1709,6 +1849,38 @@ void WeReadActivity::handleShelfInput() {
     }
   }
 
+  // Keep the existing single-book shelf geometry.  Touch only changes the
+  // selected item or activates it; it does not introduce the crossmux grid.
+  const Rect content = mainContentBounds();
+  int x = 0;
+  int y = 0;
+  if (mappedInput.wasScreenTouchDown(x, y)) {
+    const int touched = weReadShelfIndexFromPoint(content, layout, shelfSelected_.load(), count, x, y);
+    if (touched >= 0) {
+      moveShelfSelection(touched, itemsPerPage);
+      return;
+    }
+  }
+  if (mappedInput.wasScreenTapped(x, y)) {
+    const int touched = weReadShelfIndexFromPoint(content, layout, shelfSelected_.load(), count, x, y);
+    if (touched >= 0) {
+      moveShelfSelection(touched, itemsPerPage);
+      resetShelfCoverLoading();
+      activateSelected();
+      return;
+    }
+  }
+
+  const auto swipe = mappedInput.wasSwipe();
+  if (count > 0 && (swipe == MappedInputManager::SwipeDir::Left || swipe == MappedInputManager::SwipeDir::Right)) {
+    const int selected = shelfSelected_.load();
+    const int target = swipe == MappedInputManager::SwipeDir::Left
+                           ? ButtonNavigator::nextPageIndex(selected, count, itemsPerPage)
+                           : ButtonNavigator::previousPageIndex(selected, count, itemsPerPage);
+    moveShelfSelection(target, itemsPerPage);
+    return;
+  }
+
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     resetShelfCoverLoading();
     activateSelected();
@@ -1739,7 +1911,9 @@ bool WeReadActivity::syncClockForRetry() {
 }
 
 void WeReadActivity::handleErrorInput() {
-  const bool confirm = mappedInput.wasReleased(MappedInputManager::Button::Confirm);
+  int x = 0;
+  int y = 0;
+  const bool confirm = mappedInput.wasReleased(MappedInputManager::Button::Confirm) || mappedInput.wasScreenTapped(x, y);
   if (error_ == WeReadClient::Error::WholeBookOnly) {
     if (confirm) {
       operation_.reset();
@@ -1793,7 +1967,9 @@ void WeReadActivity::handleErrorInput() {
 }
 
 void WeReadActivity::handleLogoutErrorInput() {
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+  int x = 0;
+  int y = 0;
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || mappedInput.wasScreenTapped(x, y)) {
     performLogout();
   } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
     state_.store(State::Home);
@@ -1811,7 +1987,7 @@ void WeReadActivity::loop() {
     return;
   }
 
-  if (optionPopup_.handleInput(mappedInput, [this] { requestUpdate(); })) {
+  if (optionPopup_.handleInput(renderer, mappedInput, [this] { requestUpdate(); })) {
     optionPopupClosing_ = !optionPopup_.isActive();
     return;
   }
@@ -1854,15 +2030,19 @@ void WeReadActivity::loop() {
       handleLogoutErrorInput();
       return;
     case State::CacheCleared: {
+      int x = 0;
+      int y = 0;
       if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) ||
-          mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+          mappedInput.wasReleased(MappedInputManager::Button::Back) || mappedInput.wasScreenTapped(x, y)) {
         state_.store(State::Home);
         requestUpdate();
       }
       return;
     }
     case State::CacheClearError: {
-      if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      int x = 0;
+      int y = 0;
+      if (mappedInput.wasReleased(MappedInputManager::Button::Confirm) || mappedInput.wasScreenTapped(x, y)) {
         performClearCache();
       } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
         state_.store(State::Home);
@@ -2425,7 +2605,7 @@ void WeReadActivity::render(RenderLock&&) {
   downloadRenderPending_.store(false);
   stageRenderPending_.store(false);
   if (optionPopup_.processRender(renderer, mappedInput)) {
-    // OptionPopup clears and owns the framebuffer while it is visible. The
+    // OptionPopup owns the visible modal frame while it is active. The
     // underlying detail frame must be rebuilt when the popup closes.
     detailFrameValid_.store(false);
     return;

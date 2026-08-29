@@ -28,6 +28,16 @@ CI enforces formatting, static analysis, and build checks.
 Use clang-format 21+ locally to match CI.
 If `clang-format` is missing or too old locally, see [Getting Started](./getting-started.md).
 
+The firmware pins `freeink-sdk` as a git submodule. After a fresh checkout,
+initialize it before running PlatformIO:
+
+```sh
+git submodule update --init --recursive
+```
+
+The standard `default` environment builds the combined X3/X4 image. X4 Pro
+touch, frontlight and USB-MSC profiles are intentionally outside this target.
+
 ## 4) Open the PR
 
 - Use a semantic title (example: `fix: avoid crash when opening malformed epub`)

@@ -1,9 +1,11 @@
 #include "PngToBmpConverter.h"
 
+#include <BuildScratch.h>
 #include <HalDisplay.h>
 #include <HalStorage.h>
 #include <InflateReader.h>
 #include <Logging.h>
+#include <Memory.h>
 
 #include <cstdio>
 #include <cstring>
@@ -508,13 +510,28 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
   ctx.rawRowBytes = rawRowBytes;
   ctx.paletteSize = 0;
 
-  // Allocate scanline buffers
-  ctx.currentRow = static_cast<uint8_t*>(malloc(rawRowBytes));
-  ctx.previousRow = static_cast<uint8_t*>(calloc(rawRowBytes, 1));
+  // A lent framebuffer is a useful stable scratch arena during cover
+  // conversion. Keep both PNG scanline buffers together when it is large
+  // enough; otherwise retain the existing fallible heap path.
+  const size_t scanlineBytes = static_cast<size_t>(rawRowBytes) * 2;
+  uint8_t* scanlineScratch = buildscratch::claim(scanlineBytes);
+  const ScopedCleanup releaseScanlineScratch{[scanlineScratch]() {
+    if (scanlineScratch != nullptr) buildscratch::release(scanlineScratch);
+  }};
+  if (scanlineScratch != nullptr) {
+    ctx.currentRow = scanlineScratch;
+    ctx.previousRow = scanlineScratch + rawRowBytes;
+    memset(ctx.previousRow, 0, rawRowBytes);
+  } else {
+    ctx.currentRow = static_cast<uint8_t*>(malloc(rawRowBytes));
+    ctx.previousRow = static_cast<uint8_t*>(calloc(rawRowBytes, 1));
+  }
   if (!ctx.currentRow || !ctx.previousRow) {
     LOG_ERR("PNG", "Failed to allocate scanline buffers (%u bytes each)", rawRowBytes);
-    free(ctx.currentRow);
-    free(ctx.previousRow);
+    if (scanlineScratch == nullptr) {
+      free(ctx.currentRow);
+      free(ctx.previousRow);
+    }
     return false;
   }
 
@@ -550,16 +567,20 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
 
   if (!foundIdat) {
     LOG_ERR("PNG", "No IDAT chunk found");
-    free(ctx.currentRow);
-    free(ctx.previousRow);
+    if (scanlineScratch == nullptr) {
+      free(ctx.currentRow);
+      free(ctx.previousRow);
+    }
     return false;
   }
 
   // Initialize streaming decompressor with 32KB ring buffer for back-reference history
   if (!ctx.reader.init(true)) {
     LOG_ERR("PNG", "Failed to init inflate reader");
-    free(ctx.currentRow);
-    free(ctx.previousRow);
+    if (scanlineScratch == nullptr) {
+      free(ctx.currentRow);
+      free(ctx.previousRow);
+    }
     return false;
   }
   ctx.reader.setReadCallback(pngIdatReadCallback);
@@ -614,8 +635,10 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
   auto* rowBuffer = static_cast<uint8_t*>(malloc(bytesPerRow));
   if (!rowBuffer) {
     LOG_ERR("PNG", "Failed to allocate row buffer");
-    free(ctx.currentRow);
-    free(ctx.previousRow);
+    if (scanlineScratch == nullptr) {
+      free(ctx.currentRow);
+      free(ctx.previousRow);
+    }
     return false;
   }
 
@@ -657,8 +680,10 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
     delete fsDitherer;
     delete atkinson1BitDitherer;
     free(rowBuffer);
-    free(ctx.currentRow);
-    free(ctx.previousRow);
+    if (scanlineScratch == nullptr) {
+      free(ctx.currentRow);
+      free(ctx.previousRow);
+    }
     return false;
   }
 
@@ -811,8 +836,10 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
   delete fsDitherer;
   delete atkinson1BitDitherer;
   free(rowBuffer);
-  free(ctx.currentRow);
-  free(ctx.previousRow);
+  if (scanlineScratch == nullptr) {
+    free(ctx.currentRow);
+    free(ctx.previousRow);
+  }
 
   if (success) {
     LOG_DBG("PNG", "Successfully converted PNG to BMP");

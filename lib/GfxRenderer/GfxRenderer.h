@@ -135,6 +135,9 @@ class GfxRenderer {
   // Screen ops
   int getScreenWidth() const;
   int getScreenHeight() const;
+  // Convert a normalized touch coordinate in the panel-native frame to the
+  // current logical orientation used by activities.
+  void tapToLogical(float nx, float ny, int& outX, int& outY) const;
   void displayBuffer(HalDisplay::RefreshMode refreshMode = HalDisplay::FAST_REFRESH) const;
   // Display only a byte-aligned rectangular region of the framebuffer.
   void displayWindow(int x, int y, int width, int height) const;
@@ -248,6 +251,27 @@ class GfxRenderer {
   bool storeBwBuffer();    // Returns true if buffer was stored successfully
   void restoreBwBuffer();  // Restore and free the stored buffer
   void cleanupGrayscaleWithFrameBuffer() const;
+
+  // Temporarily lend the framebuffer allocation to a cover/image converter.
+  // While a loan is active getFrameBuffer() is null and drawing/refreshing is
+  // intentionally unavailable.  The RAII wrapper restores the allocation on
+  // every return path and keeps nested loans inert.
+  void releaseFrameBufferForBuild();
+  bool restoreFrameBufferAfterBuild();
+  bool hasFrameBuffer() const { return frameBuffer != nullptr; }
+
+  class FrameBufferLoan {
+   public:
+    explicit FrameBufferLoan(GfxRenderer& renderer);
+    ~FrameBufferLoan() { end(); }
+    FrameBufferLoan(const FrameBufferLoan&) = delete;
+    FrameBufferLoan& operator=(const FrameBufferLoan&) = delete;
+    void end();
+
+   private:
+    GfxRenderer& renderer_;
+    bool active_ = false;
+  };
 
   // Font helpers
   const uint8_t* getGlyphBitmap(const EpdFontData* fontData, const EpdGlyph* glyph) const;
