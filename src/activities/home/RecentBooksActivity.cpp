@@ -18,6 +18,23 @@
 namespace {
 // Hold threshold for the long-press "remove from list" action (firmware convention).
 constexpr unsigned long LONG_PRESS_MS = 1000;
+
+struct RecentBooksTextContext {
+  const std::vector<RecentBook>* books;
+  int startIndex;
+};
+
+const char* recentBookTitleGetter(const void* context, uint32_t index) {
+  const auto* ctx = static_cast<const RecentBooksTextContext*>(context);
+  const size_t itemIndex = static_cast<size_t>(ctx->startIndex) + index;
+  return itemIndex < ctx->books->size() ? (*ctx->books)[itemIndex].title.c_str() : nullptr;
+}
+
+const char* recentBookAuthorGetter(const void* context, uint32_t index) {
+  const auto* ctx = static_cast<const RecentBooksTextContext*>(context);
+  const size_t itemIndex = static_cast<size_t>(ctx->startIndex) + index;
+  return itemIndex < ctx->books->size() ? (*ctx->books)[itemIndex].author.c_str() : nullptr;
+}
 }  // namespace
 
 void RecentBooksActivity::loadRecentBooks() { recentBooks = RECENT_BOOKS.getBooks(); }
@@ -150,7 +167,29 @@ void RecentBooksActivity::render(RenderLock&&) {
     }
     visibleText += "\xe2\x80\xa6";  // ellipsis used by truncatedText()
     const int recentTitleFontId = DynamicFont::fontForCjkText(renderer, visibleText.c_str(), 0);
-    DynamicFont::prewarmIfSdFont(renderer, recentTitleFontId, visibleText);
+    const int visibleCount = std::min(static_cast<int>(recentBooks.size()) - pageStartIndex, pageItems);
+    const RecentBooksTextContext prewarmContext{&recentBooks, pageStartIndex};
+    DynamicFont::prewarmIfSdFont(renderer, recentTitleFontId, recentBookTitleGetter, &prewarmContext,
+                                 static_cast<uint32_t>(std::max(0, visibleCount)));
+    // The renderer truncates titles with an ellipsis; keep that glyph resident
+    // without rebuilding the title batch.
+    DynamicFont::prewarmIfSdFont(renderer, recentTitleFontId, "\xe2\x80\xa6");
+
+    // BaseTheme draws authors as per-row subtitles. Batch them first so those
+    // row callbacks become resident-cache subset hits instead of repeatedly
+    // reopening the .cpfont file.
+    int recentAuthorFontId = 0;
+    for (int i = pageStartIndex; i < pageStartIndex + visibleCount; i++) {
+      const int candidate = DynamicFont::fontForCjkText(renderer, recentBooks[i].author.c_str(), SMALL_FONT_ID);
+      if (renderer.isSdCardFont(candidate)) {
+        recentAuthorFontId = candidate;
+        break;
+      }
+    }
+    if (recentAuthorFontId != 0) {
+      DynamicFont::prewarmIfSdFont(renderer, recentAuthorFontId, recentBookAuthorGetter, &prewarmContext,
+                                   static_cast<uint32_t>(visibleCount));
+    }
 
     GUI.drawList(
         renderer, Rect{0, contentTop, pageWidth, contentHeight}, recentBooks.size(), selectorIndex,

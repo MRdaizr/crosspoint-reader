@@ -10,6 +10,8 @@ class SdCardFont;
 
 class FontCacheManager {
  public:
+  using TextGetter = const char* (*)(const void* ctx, uint32_t index);
+
   FontCacheManager(const std::map<int, EpdFontFamily>& fontMap, const std::map<int, SdCardFont*>& sdCardFonts);
 
   void setFontDecompressor(FontDecompressor* d);
@@ -17,6 +19,8 @@ class FontCacheManager {
   void clearCache();
   void releaseSdFontCaches();
   void prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F);
+  void prewarmCache(int fontId, TextGetter getter, const void* ctx, uint32_t textCount,
+                    uint8_t styleMask = 0x0F);
   void logStats(const char* label = "render");
   void resetStats();
 

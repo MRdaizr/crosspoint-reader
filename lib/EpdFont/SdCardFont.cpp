@@ -68,6 +68,8 @@ bool collectUniqueCodepoints(const char* text, uint32_t* codepoints, uint32_t& c
 const char* asCStr(const std::string& s) { return s.c_str(); }
 const char* asCStr(const char* s) { return s; }
 
+const char* singleTextGetter(const void* ctx, uint32_t) { return static_cast<const char*>(ctx); }
+
 }  // namespace
 
 SdCardFont::~SdCardFont() { freeAll(); }
@@ -669,13 +671,20 @@ int32_t SdCardFont::findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) 
 // --- Prewarm ---
 
 int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOnly) {
-  if (!loaded_) return -1;
+  if (utf8Text == nullptr) return -1;
+  return prewarm(&singleTextGetter, utf8Text, 1, styleMask, metadataOnly);
+}
+
+int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, uint8_t styleMask, bool metadataOnly) {
+  if (!loaded_ || getter == nullptr) return -1;
   styleMask = resolveStyleMask(styleMask);
-  if (styleMask == 0) return 0;
+  if (styleMask == 0 || textCount == 0) return 0;
 
   unsigned long startMs = millis();
 
-  // Step 1: Extract unique codepoints from UTF-8 text (shared across all styles).
+  // Step 1: Extract unique codepoints from all strings (shared across all
+  // styles). Keeping the strings separate avoids a large temporary
+  // concatenation on heap-tight list screens.
   // Dedup uses O(n^2) linear scan — worst case is MAX_PAGE_GLYPHS (512) unique codepoints
   // = ~131K comparisons, but in practice pages contain far fewer unique codepoints so the
   // actual cost is much lower. This is dwarfed by SD I/O that follows. Alternatives (hash
@@ -688,20 +697,37 @@ int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOn
   }
   uint32_t cpCount = 0;
 
-  const unsigned char* p = reinterpret_cast<const unsigned char*>(utf8Text);
-  while (*p && cpCount < MAX_PAGE_GLYPHS) {
-    uint32_t cp = utf8NextCodepoint(&p);
-    if (cp == 0) break;
+  for (uint32_t textIndex = 0; textIndex < textCount && cpCount < MAX_PAGE_GLYPHS; textIndex++) {
+    const char* text = getter(ctx, textIndex);
+    if (text == nullptr || *text == '\0') continue;
+    collectUniqueCodepoints(text, codepoints.get(), cpCount, MAX_PAGE_GLYPHS);
+  }
 
-    bool found = false;
-    for (uint32_t i = 0; i < cpCount; i++) {
-      if (codepoints[i] == cp) {
-        found = true;
-        break;
-      }
+  // Keep glyphs already resident in the mini cache when another list row is
+  // prewarmed. Without this union, each row would discard the previous row's
+  // CJK glyphs and force another SD read on the next repaint. Be conservative
+  // when the union would exceed the bounded page budget: rebuilding the new
+  // request is safer than growing an unbounded temporary buffer.
+  for (uint8_t si = 0; si < MAX_STYLES && cpCount < MAX_PAGE_GLYPHS; si++) {
+    if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
+    const auto& s = styles_[si];
+    if (s.miniGlyphCount == 0 || s.miniIntervals == nullptr ||
+        cpCount + s.miniGlyphCount > MAX_PAGE_GLYPHS) {
+      continue;
     }
-    if (!found) {
-      codepoints[cpCount++] = cp;
+    for (uint32_t interval = 0; interval < s.miniIntervalCount && cpCount < MAX_PAGE_GLYPHS; interval++) {
+      const auto& range = s.miniIntervals[interval];
+      for (uint32_t cp = range.first; cp <= range.last && cpCount < MAX_PAGE_GLYPHS; cp++) {
+        bool found = false;
+        for (uint32_t i = 0; i < cpCount; i++) {
+          if (codepoints[i] == cp) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) codepoints[cpCount++] = cp;
+        if (cp == UINT32_MAX) break;
+      }
     }
   }
 
@@ -796,6 +822,31 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
     }
   }
   int missed = static_cast<int>(cpCount - validCount);
+
+  // A subset hit can be served directly from the resident mini. This is the
+  // common path after a list batch prewarm: row-by-row draw calls still ask to
+  // prewarm their own strings, but no SD reads or cache rebuild are needed.
+  if (validCount > 0 && s.miniGlyphCount > 0 && s.miniIntervals != nullptr &&
+      (metadataOnly || s.miniBitmap != nullptr)) {
+    bool allResident = true;
+    for (uint32_t i = 0; i < validCount && allResident; i++) {
+      const uint32_t cp = mappings[i].codepoint;
+      bool covered = false;
+      for (uint32_t interval = 0; interval < s.miniIntervalCount; interval++) {
+        const auto& range = s.miniIntervals[interval];
+        if (cp < range.first) break;
+        if (cp <= range.last) {
+          covered = true;
+          break;
+        }
+      }
+      if (!covered) allResident = false;
+    }
+    if (allResident) {
+      delete[] mappings;
+      return missed;
+    }
+  }
 
   if (validCount == 0) {
     freeStyleMiniData(s);

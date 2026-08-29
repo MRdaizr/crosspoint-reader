@@ -77,6 +77,22 @@ void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t st
   }
 }
 
+void FontCacheManager::prewarmCache(int fontId, TextGetter getter, const void* ctx, uint32_t textCount,
+                                    uint8_t styleMask) {
+  if (getter == nullptr || textCount == 0) return;
+
+  // Batch extraction is currently meaningful for SD fonts, which are the
+  // fallback path used by CJK list screens. Built-in compressed fonts retain
+  // the existing single-string prewarm API and never need a concatenated copy.
+  auto it = sdCardFonts_.find(fontId);
+  if (it == sdCardFonts_.end()) return;
+
+  const int missed = it->second->prewarm(getter, ctx, textCount, styleMask);
+  if (missed > 0) {
+    LOG_DBG("FCM", "prewarmCache(SD batch): %d glyph(s) not found (styleMask=0x%02X)", missed, styleMask);
+  }
+}
+
 void FontCacheManager::logStats(const char* label) {
   if (fontDecompressor_) fontDecompressor_->logStats(label);
   for (auto& [id, font] : sdCardFonts_) {

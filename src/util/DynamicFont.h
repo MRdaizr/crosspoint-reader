@@ -5,6 +5,7 @@
 #include <Logging.h>
 #include <Utf8.h>
 
+#include <cstdint>
 #include <string>
 
 #include "SdCardFontSystem.h"
@@ -51,6 +52,14 @@ inline void prewarmIfSdFont(const GfxRenderer& renderer, int fontId, const std::
   if (text.empty() || !renderer.isSdCardFont(fontId)) return;
   if (auto* fontCache = renderer.getFontCacheManager()) {
     fontCache->prewarmCache(fontId, text.c_str(), styleMask);
+  }
+}
+
+inline void prewarmIfSdFont(const GfxRenderer& renderer, int fontId, FontCacheManager::TextGetter getter,
+                            const void* ctx, uint32_t textCount, uint8_t styleMask = 0x01) {
+  if (getter == nullptr || textCount == 0 || !renderer.isSdCardFont(fontId)) return;
+  if (auto* fontCache = renderer.getFontCacheManager()) {
+    fontCache->prewarmCache(fontId, getter, ctx, textCount, styleMask);
   }
 }
 

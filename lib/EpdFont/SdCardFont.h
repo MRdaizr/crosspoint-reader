@@ -23,6 +23,7 @@ class SdCardFont {
  public:
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
   static constexpr uint8_t MAX_STYLES = 4;
+  using TextGetter = const char* (*)(const void* ctx, uint32_t index);
 
   SdCardFont() = default;
   ~SdCardFont();
@@ -44,6 +45,12 @@ class SdCardFont {
   // When metadataOnly=true, only glyph metrics are loaded (no bitmap data).
   // Returns number of glyphs that couldn't be loaded (0 on full success).
   int prewarm(const char* utf8Text, uint8_t styleMask = 0x0F, bool metadataOnly = false);
+
+  // Batch variant used by list screens. Strings are fetched one at a time so
+  // callers do not need to concatenate a large temporary buffer on the
+  // heap. Unique codepoints are still bounded by MAX_PAGE_GLYPHS.
+  int prewarm(TextGetter getter, const void* ctx, uint32_t textCount, uint8_t styleMask = 0x0F,
+              bool metadataOnly = false);
 
   // Build a compact advance-only table for layout measurement.
   // Extracts ALL unique codepoints from words (no MAX_PAGE_GLYPHS cap),
