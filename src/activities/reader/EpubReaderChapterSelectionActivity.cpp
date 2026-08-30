@@ -9,6 +9,7 @@
 #include "MappedInputManager.h"
 #include "SdCardFontSystem.h"
 #include "components/UITheme.h"
+#include "fontIds.h"
 #include "util/DynamicFont.h"
 
 namespace fui = freeink::ui;
@@ -43,8 +44,21 @@ void EpubReaderChapterSelectionActivity::activateIndex(const int index) {
   finish();
 }
 
+void EpubReaderChapterSelectionActivity::onBackButton() {
+  ActivityResult result;
+  result.isCancelled = true;
+  setResult(std::move(result));
+  finish();
+}
+
 void EpubReaderChapterSelectionActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
+  const int bodyFontId = DynamicFont::fontForSdCardText(renderer, UI_12_FONT_ID);
+  const int listFontId = DynamicFont::fontForSdCardText(renderer, UI_10_FONT_ID);
+  const bool usingSdFont = renderer.isSdCardFont(listFontId);
+  uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_BODY, bodyFontId);
+  uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_SMALL, listFontId);
+
   screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
                                       static_cast<int16_t>(metrics.buttonHintsHeight), 0});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
@@ -76,5 +90,16 @@ void EpubReaderChapterSelectionActivity::buildScreen(UiScreen& screen) {
   props.labelText = screen.theme().smallText;
   props.labelText.maxLines = 2;
   syncListViewport(screen, props);
+
+  if (usingSdFont) {
+    const int first = std::clamp(nav.top, 0, static_cast<int>(rowLabels.size()));
+    const int count = std::min(static_cast<int>(rowLabels.size()) - first, std::max(1, nav.visibleRows));
+    for (int i = 0; i < count; ++i) {
+      const size_t row = static_cast<size_t>(first + i);
+      DynamicFont::prewarmIfSdFont(renderer, listFontId, rowLabels[row]);
+    }
+    DynamicFont::prewarmIfSdFont(renderer, listFontId, "\xe2\x80\xa6");
+  }
+
   screen.list(props);
 }

@@ -32,5 +32,6 @@ class EpubReaderChapterSelectionActivity final : public UiListActivity {
   int listCount() const override { return getTotalItems(); }
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
+  void onBackButton() override;
   const char* headerTitle() const override { return tr(STR_SELECT_CHAPTER); }
 };

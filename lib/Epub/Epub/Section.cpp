@@ -1222,7 +1222,11 @@ std::optional<uint16_t> Section::getCachedPageCount() const {
 std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) const {
   if (buildActive && buildParser) {
     for (const auto& entry : buildParser->getAnchors()) {
-      if (entry.first == anchor) return entry.second;
+      // The parser records an anchor as soon as it sees the element, but its
+      // page is not readable until that page-complete callback has flushed the
+      // serialized page and LUT entry.  Do not expose a future page to a
+      // caller that would immediately fail to load it.
+      if (entry.first == anchor && entry.second < builtPageCount) return entry.second;
     }
   }
   HalFile f;
