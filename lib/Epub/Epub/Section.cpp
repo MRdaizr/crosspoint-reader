@@ -1375,16 +1375,22 @@ std::optional<uint32_t> Section::getVisibleTextOffsetForPage(const uint16_t page
   return offset;
 }
 
-std::optional<uint16_t> Section::getPageForVisibleTextOffset(const uint32_t offset) const {
-  if (buildActive) {
-    if (!buildLut.empty()) {
-      uint16_t result = 0;
-      for (uint16_t i = 0; i < buildLut.size(); ++i) {
-        if (buildLut[i].visibleTextOffset > offset) break;
-        result = i;
-      }
-      if (offset <= buildLut.back().visibleTextOffset) return result;
+std::optional<uint16_t> Section::getPageForVisibleTextOffset(const uint32_t offset,
+                                                             const bool preferFirstAtOffset) const {
+  const auto findInEntries = [offset, preferFirstAtOffset](const auto& entries) -> std::optional<uint16_t> {
+    if (entries.empty()) return std::nullopt;
+    uint16_t result = 0;
+    for (size_t i = 0; i < entries.size(); ++i) {
+      const uint32_t pageOffset = entries[i].visibleTextOffset;
+      if (preferFirstAtOffset && pageOffset == offset) return static_cast<uint16_t>(i);
+      if (pageOffset > offset) break;
+      result = static_cast<uint16_t>(i);
     }
+    return result;
+  };
+
+  if (buildActive) {
+    if (!buildLut.empty() && offset <= buildLut.back().visibleTextOffset) return findInEntries(buildLut);
     if (!partial_) return std::nullopt;
   }
 
@@ -1424,6 +1430,10 @@ std::optional<uint16_t> Section::getPageForVisibleTextOffset(const uint32_t offs
   for (uint16_t i = 0; i < cachedPageCount; ++i) {
     uint32_t pageOffset = 0;
     serialization::readPod(f, pageOffset);
+    if (preferFirstAtOffset && pageOffset == offset) {
+      f.close();
+      return i;
+    }
     if (pageOffset > offset) break;
     result = i;
   }

@@ -31,6 +31,11 @@ class EpubReaderActivity final : public ReaderActivity {
   int cachedChapterTotalPageCount = 0;
   char wereadBookId_[64] = {};
   std::optional<uint32_t> cachedVisibleTextOffset;
+  // Offset of the page currently on screen. It remains stable across a
+  // re-pagination so bookmarks and KOReader sync can rebase by content rather
+  // than by the old page number.
+  std::optional<uint32_t> currentPageVisibleOffset;
+  std::optional<uint32_t> pendingOffsetJump;
   int lastSavedSpineIndex = -1;
   int lastSavedPage = -1;
   int lastSavedPageCount = -1;
@@ -102,6 +107,7 @@ class EpubReaderActivity final : public ReaderActivity {
   bool launchKOReaderSync();
   bool launchWeReadSync();
   void applyCachedVisibleTextOffset();
+  void rememberCurrentContentOffset();
   // Session-start resume/reflow state is authoritative only until the first
   // landing page. Explicit navigation must clear it so a background build
   // cannot move the reader back to the old position.

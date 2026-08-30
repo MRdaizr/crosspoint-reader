@@ -79,7 +79,7 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   void performSync();
   void performUpload();
   void ensureEpubLoaded();
-  void saveProgressAndReturn(int spineIndex, int page);
+  void saveProgressAndReturn(int spineIndex, int page, std::optional<uint32_t> visibleTextOffset = std::nullopt);
   void returnToReader();
 
   static constexpr freeink::ui::ActionId ACTION_ROW = 1;

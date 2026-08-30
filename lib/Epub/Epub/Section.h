@@ -123,6 +123,8 @@ class Section {
   // Exact zero-based visible Unicode-codepoint offset for a rendered page.
   std::optional<uint32_t> getVisibleTextOffsetForPage(uint16_t page) const;
 
-  // Resolve an exact visible-text offset to the page containing it.
-  std::optional<uint16_t> getPageForVisibleTextOffset(uint32_t offset) const;
+  // Resolve an exact visible-text offset to the page containing it. When
+  // preferFirstAtOffset is true, ties caused by zero-width content (for
+  // example an image-only page) select the first page at that offset.
+  std::optional<uint16_t> getPageForVisibleTextOffset(uint32_t offset, bool preferFirstAtOffset = false) const;
 };

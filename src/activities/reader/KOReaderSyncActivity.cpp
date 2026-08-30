@@ -88,11 +88,17 @@ void KOReaderSyncActivity::ensureEpubLoaded() {
   }
 }
 
-void KOReaderSyncActivity::saveProgressAndReturn(int spineIndex, int page) {
+void KOReaderSyncActivity::saveProgressAndReturn(const int spineIndex, const int page,
+                                                 std::optional<uint32_t> visibleTextOffset) {
   // epub is guaranteed non-null here: ensureEpubLoaded() was called in performSync() before
   // SHOWING_RESULT state is entered, and this method is only called from that state.
   assert(epub);
-  if (!EpubReaderUtils::saveProgress(*epub, spineIndex, page, 0)) {
+  if (!visibleTextOffset.has_value() && remotePosition.hasVisibleTextOffset && remotePosition.spineIndex == spineIndex) {
+    visibleTextOffset = remotePosition.visibleTextOffset;
+  }
+  LOG_DBG("KOSync", "Applying remote position: spine=%d page=%d offset=%s", spineIndex, page,
+          visibleTextOffset.has_value() ? std::to_string(*visibleTextOffset).c_str() : "none");
+  if (!EpubReaderUtils::saveProgress(*epub, spineIndex, page, 0, visibleTextOffset)) {
     {
       RenderLock lock(*this);
       state = SYNC_FAILED;
