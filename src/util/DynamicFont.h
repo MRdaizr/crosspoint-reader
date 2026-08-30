@@ -37,6 +37,11 @@ inline int fontForCjkText(const GfxRenderer& renderer, const char* text, int fal
   sdFontSystem.ensureLoaded(const_cast<GfxRenderer&>(renderer));
   const int sdFontId = sdFontSystem.currentFontId();
   if (renderer.isSdCardFont(sdFontId)) {
+    // Keep the SD face as the primary font, but register the size-matched
+    // built-in face as a CJK fallback.  A .cpfont may legitimately omit a
+    // title character; without this mapping GfxRenderer logs "No glyph" and
+    // the entire character disappears even though the UI font can render it.
+    const_cast<GfxRenderer&>(renderer).setFallbackFont(sdFontId, fallbackFontId);
     return sdFontId;
   }
 
@@ -63,8 +68,12 @@ inline int fontForSdCardText(const GfxRenderer& renderer, int fallbackFontId) {
   static bool reported = false;
   static int reportedFontId = 0;
   if (renderer.isSdCardFont(sdFontId)) {
+    // FUI list rows share one font slot, so keep the selected SD family for
+    // Latin and CJK alike.  GfxRenderer will redirect only missing CJK
+    // codepoints to the bundled size-matched face.
+    const_cast<GfxRenderer&>(renderer).setFallbackFont(sdFontId, fallbackFontId);
     if (!reported || reportedFontId != sdFontId) {
-      LOG_INF("DFNT", "Dynamic UI text uses SD font id=%d", sdFontId);
+      LOG_INF("DFNT", "Dynamic UI text uses SD font id=%d fallback=%d", sdFontId, fallbackFontId);
       reported = true;
       reportedFontId = sdFontId;
     }

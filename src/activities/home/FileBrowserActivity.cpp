@@ -32,6 +32,7 @@ void FileBrowserActivity::loadFiles() {
 
   auto root = Storage.open(basepath.c_str());
   if (!root || !root.isDirectory()) {
+    rebuildRowItems();
     return;
   }
 
@@ -40,6 +41,7 @@ void FileBrowserActivity::loadFiles() {
   if (!fileNameBuffer) {
     LOG_ERR("FileBrowser", "fileNameBuffer not allocated");
     root.close();
+    rebuildRowItems();
     return;
   }
 
@@ -68,6 +70,29 @@ void FileBrowserActivity::loadFiles() {
   }
   root.close();
   FsHelpers::sortFileList(files);
+  rebuildRowItems();
+}
+
+void FileBrowserActivity::rebuildRowItems() {
+  rowsShowFileIcons = UITheme::getInstance().getTheme().showsFileIcons();
+  rowLabels.resize(files.size());
+  rowValues.resize(files.size());
+  rowItems.clear();
+  rowItems.reserve(files.size());
+
+  for (size_t i = 0; i < files.size(); ++i) {
+    rowLabels[i] = getFileName(files[i]);
+    rowValues[i] = getFileExtension(files[i]);
+
+    fui::ListItem item;
+    item.label = rowLabels[i].c_str();
+    item.value = rowValues[i].empty() ? nullptr : rowValues[i].c_str();
+    item.actionValue = static_cast<int16_t>(i);
+    // RoundedRaffExt and the current text-first menu intentionally suppress
+    // all generic row icons.
+    item.icon = {};
+    rowItems.push_back(item);
+  }
 }
 
 void FileBrowserActivity::onEnter() {
@@ -117,6 +142,9 @@ void FileBrowserActivity::onEnter() {
 void FileBrowserActivity::onExit() {
   UiListActivity::onExit();
   files.clear();
+  rowLabels.clear();
+  rowValues.clear();
+  rowItems.clear();
   fileNameBuffer.reset();
 }
 
@@ -213,9 +241,12 @@ bool FileBrowserActivity::handleCustomInput() {
       mappedInput.getHeldTime() >= GO_HOME_MS) {
     {
       RenderLock lock(*this);
+      closeRouting();
       basepath = "/";
       loadFiles();
       nav.selected = 0;
+      nav.top = 0;
+      nav.follow(listCount());
     }
     requestUpdate();
     return true;
@@ -282,6 +313,7 @@ bool FileBrowserActivity::handleButtons() {
             LOG_DBG("FileBrowser", "Deleted successfully");
             {
               RenderLock lock(*this);
+              closeRouting();
               loadFiles();
               if (files.empty()) {
                 nav.selected = 0;
@@ -289,6 +321,7 @@ bool FileBrowserActivity::handleButtons() {
                 // Move selection to the new "last" item
                 nav.selected = static_cast<int>(files.size() - 1);
               }
+              nav.follow(listCount());
             }
 
             requestUpdate(true);
@@ -309,10 +342,13 @@ bool FileBrowserActivity::handleButtons() {
       if (isDirectory) {
         {
           RenderLock lock(*this);
+          closeRouting();
           if (basepath.back() != '/') basepath += "/";
           basepath += entry.substr(0, entry.length() - 1);
           loadFiles();
           nav.selected = 0;
+          nav.top = 0;
+          nav.follow(listCount());
         }
         requestUpdate();
       } else {
@@ -339,6 +375,7 @@ bool FileBrowserActivity::handleButtons() {
       if (!atRoot) {
         {
           RenderLock lock(*this);
+          closeRouting();
           const std::string oldPath = basepath;
 
           basepath.replace(basepath.find_last_of('/'), std::string::npos, "");
@@ -348,6 +385,7 @@ bool FileBrowserActivity::handleButtons() {
           const auto pos = oldPath.find_last_of('/');
           const std::string dirName = oldPath.substr(pos + 1) + "/";
           nav.selected = static_cast<int>(findEntry(dirName));
+          nav.follow(listCount());
         }
 
         requestUpdate();
@@ -417,19 +455,12 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
     screen.centeredText(emptyMessage, emptyStyle);
     return;
   }
-  rowLabels.clear(); rowValues.clear(); rowItems.clear();
-  rowLabels.reserve(files.size()); rowValues.reserve(files.size()); rowItems.reserve(files.size());
-  for (size_t i = 0; i < files.size(); ++i) {
-    rowLabels.push_back(getFileName(files[i]));
-    rowValues.push_back(getFileExtension(files[i]));
-    fui::ListItem item;
-    item.label = rowLabels.back().c_str();
-    item.value = rowValues.back().empty() ? nullptr : rowValues.back().c_str();
-    item.actionValue = static_cast<int16_t>(i);
-    // File glyphs are intentionally omitted for RoundedRaffExt and all
-    // generic FUI menu rows; the filename remains the complete affordance.
-    item.icon = {};
-    rowItems.push_back(item);
+  // Folder labels depend on the active theme (RoundedRaffExt uses the
+  // bracketed text form when icons are disabled).  Rebuild only for a theme
+  // change or if a defensive size check detects stale data; normal repaints
+  // reuse stable pointers into rowLabels/rowValues.
+  if (rowItems.size() != files.size() || rowsShowFileIcons != UITheme::getInstance().getTheme().showsFileIcons()) {
+    rebuildRowItems();
   }
 
   // A FUI list has one shared label slot.  Bind it to the selected SD face
@@ -459,25 +490,39 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
 }
 
 void FileBrowserActivity::activateIndex(const int index) {
-  if (index < 0 || index >= static_cast<int>(files.size())) return;
-  nav.selected = index;
-  const std::string entry = files[static_cast<size_t>(index)];
-  const bool isDirectory = !entry.empty() && entry.back() == '/';
+  std::string entry;
+  std::string currentPath;
+  bool isDirectory = false;
+  {
+    RenderLock lock(*this);
+    if (index < 0 || index >= static_cast<int>(files.size())) return;
+    nav.selected = index;
+    entry = files[static_cast<size_t>(index)];
+    currentPath = basepath;
+    isDirectory = !entry.empty() && entry.back() == '/';
+  }
+
   if (mode == Mode::PickFirmware && !isDirectory) {
-    std::string selectedPath = basepath;
+    std::string selectedPath = currentPath;
     if (selectedPath.back() != '/') selectedPath += "/";
     setResult(FilePathResult{selectedPath + entry});
     finish();
     return;
   }
   if (isDirectory) {
-    if (basepath.back() != '/') basepath += "/";
-    basepath += entry.substr(0, entry.length() - 1);
-    loadFiles();
-    nav.selected = 0;
+    {
+      RenderLock lock(*this);
+      closeRouting();
+      if (basepath.back() != '/') basepath += "/";
+      basepath += entry.substr(0, entry.length() - 1);
+      loadFiles();
+      nav.selected = 0;
+      nav.top = 0;
+      nav.follow(listCount());
+    }
     requestUpdate();
   } else {
-    std::string bookPath = basepath;
+    std::string bookPath = currentPath;
     if (bookPath.back() != '/') bookPath += "/";
     onSelectBook(bookPath + entry);
   }

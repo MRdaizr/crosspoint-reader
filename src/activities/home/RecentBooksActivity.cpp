@@ -39,7 +39,29 @@ const char* recentBookAuthorGetter(const void* context, uint32_t index) {
 }
 }  // namespace
 
-void RecentBooksActivity::loadRecentBooks() { recentBooks = RECENT_BOOKS.getBooks(); }
+void RecentBooksActivity::loadRecentBooks() {
+  recentBooks = RECENT_BOOKS.getBooks();
+  rebuildRowItems();
+}
+
+void RecentBooksActivity::rebuildRowItems() {
+  rowLabels.resize(recentBooks.size());
+  rowSubtitles.resize(recentBooks.size());
+  rowItems.clear();
+  rowItems.reserve(recentBooks.size());
+
+  for (size_t i = 0; i < recentBooks.size(); ++i) {
+    rowLabels[i] = recentBooks[i].title;
+    rowSubtitles[i] = recentBooks[i].author;
+    fui::ListItem item;
+    item.label = rowLabels[i].c_str();
+    item.subtitle = rowSubtitles[i].empty() ? nullptr : rowSubtitles[i].c_str();
+    item.actionValue = static_cast<int16_t>(i);
+    // RoundedRaffExt is intentionally text-first: no generic row icons.
+    item.icon = {};
+    rowItems.push_back(item);
+  }
+}
 
 void RecentBooksActivity::onEnter() {
   UiListActivity::onEnter();
@@ -63,6 +85,9 @@ void RecentBooksActivity::onEnter() {
 void RecentBooksActivity::onExit() {
   UiListActivity::onExit();
   recentBooks.clear();
+  rowLabels.clear();
+  rowSubtitles.clear();
+  rowItems.clear();
 }
 
 bool RecentBooksActivity::handleCustomInput() {
@@ -120,11 +145,19 @@ void RecentBooksActivity::promptRemoveBook(const std::string& path, const std::s
     }
     if (RECENT_BOOKS.removeByPath(path)) {
       LOG_DBG("RBA", "Removed from recents: %s", path.c_str());
-      loadRecentBooks();
-      if (recentBooks.empty()) {
-        nav.selected = 0;
-      } else if (nav.selected >= recentBooks.size()) {
-        nav.selected = static_cast<int>(recentBooks.size() - 1);
+      // The interaction table still contains pointers/indices for the old
+      // list.  Invalidate it and rebuild all aliased row data atomically with
+      // the render task before publishing the next screen.
+      {
+        RenderLock lock(*this);
+        closeRouting();
+        loadRecentBooks();
+        if (recentBooks.empty()) {
+          nav.selected = 0;
+        } else if (nav.selected >= static_cast<int>(recentBooks.size())) {
+          nav.selected = static_cast<int>(recentBooks.size() - 1);
+        }
+        nav.follow(listCount());
       }
       requestUpdate(true);
     }
@@ -136,11 +169,16 @@ void RecentBooksActivity::promptRemoveBook(const std::string& path, const std::s
 }
 
 void RecentBooksActivity::activateIndex(const int index) {
-  if (index < 0 || index >= static_cast<int>(recentBooks.size())) return;
+  std::string path;
+  {
+    RenderLock lock(*this);
+    if (index < 0 || index >= static_cast<int>(recentBooks.size())) return;
+    nav.selected = index;
+    path = recentBooks[static_cast<size_t>(index)].path;
+  }
   app.clearTapFlash();
-  nav.selected = index;
-  LOG_DBG("RBA", "Selected recent book: %s", recentBooks[static_cast<size_t>(index)].path.c_str());
-  onSelectBook(recentBooks[static_cast<size_t>(index)].path);
+  LOG_DBG("RBA", "Selected recent book: %s", path.c_str());
+  onSelectBook(path);
 }
 
 void RecentBooksActivity::buildScreen(UiScreen& screen) {
@@ -162,13 +200,11 @@ void RecentBooksActivity::buildScreen(UiScreen& screen) {
     screen.centeredText(emptyMessage, emptyStyle);
     return;
   }
-  rowLabels.clear(); rowSubtitles.clear(); rowItems.clear();
-  rowLabels.reserve(recentBooks.size()); rowSubtitles.reserve(recentBooks.size()); rowItems.reserve(recentBooks.size());
-  for (size_t i = 0; i < recentBooks.size(); ++i) {
-    rowLabels.push_back(recentBooks[i].title);
-    rowSubtitles.push_back(recentBooks[i].author);
-    fui::ListItem item; item.label = rowLabels.back().c_str(); item.subtitle = rowSubtitles.back().empty() ? nullptr : rowSubtitles.back().c_str();
-    item.actionValue = static_cast<int16_t>(i); item.icon = {}; rowItems.push_back(item);
+  // Row data is built by loadRecentBooks(), not during each repaint.  The
+  // interaction table therefore keeps stable pointers while a screen is
+  // being rendered and while touch events are routed.
+  if (rowItems.size() != recentBooks.size()) {
+    rebuildRowItems();
   }
 
   // Recent-book rows use one shared FUI small-text slot for both title and

@@ -222,5 +222,10 @@ class KeyboardEntryActivity : public Activity {
   bool handleKeyPress();
   bool insertChar(char c);
   void insertString(const std::string& str);
+  // Cursor positions are byte offsets into UTF-8 text, but they must always
+  // stay on codepoint boundaries.  The legacy keyboard moved by one byte,
+  // which corrupted CJK text when deleting or navigating through it.
+  static size_t utf8Prev(const std::string& value, size_t pos);
+  static size_t utf8Next(const std::string& value, size_t pos);
   void mapColContentBottom(int& col, bool goingUp) const;
 };

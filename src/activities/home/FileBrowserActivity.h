@@ -31,6 +31,11 @@ class FileBrowserActivity final : public UiListActivity {
   std::vector<std::string> rowLabels;
   std::vector<std::string> rowValues;
   std::vector<freeink::ui::ListItem> rowItems;
+  // Row strings and ListItems alias the vectors above.  Build them only when
+  // the directory changes; rebuilding them during every render can invalidate
+  // pointers while the render task is drawing a list.
+  bool rowsShowFileIcons = false;
+  void rebuildRowItems();
 
   // Data loading
   void loadFiles();
