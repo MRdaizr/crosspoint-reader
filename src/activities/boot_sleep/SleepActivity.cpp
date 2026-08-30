@@ -4,6 +4,7 @@
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalStorage.h>
+#include <HalDisplay.h>
 #include <I18n.h>
 #include <Txt.h>
 #include <Xtc.h>
@@ -18,6 +19,9 @@
 
 void SleepActivity::onEnter() {
   Activity::onEnter();
+  // Sleep screens have their own dark/light/filter semantics. Do not let the
+  // global night-mode polarity invert the transition popup or wallpaper.
+  display.setInverted(false);
 
   const bool renderQuickResume =
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||

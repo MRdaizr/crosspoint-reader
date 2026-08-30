@@ -44,12 +44,20 @@ class InflateReader {
   InflateReader(const InflateReader&) = delete;
   InflateReader& operator=(const InflateReader&) = delete;
 
+  // Size of the streaming ring buffer, exposed for callers that need to
+  // allocate it before smaller decoder state blocks.
+  static constexpr size_t RING_BYTES = 32768;
+
   // Initialise decompressor. streaming=true allocates a 32KB ring buffer needed
   // when read() or readAtMost() will be called multiple times.
   // Returns false only in streaming mode if the ring buffer allocation fails.
   bool init(bool streaming = false);
 
-  // Release the ring buffer and reset internal state.
+  // Initialise streaming mode over a caller-owned ring buffer. The caller must
+  // keep the buffer alive until this reader is destroyed or deinitialised.
+  bool initWithRing(uint8_t* ring);
+
+  // Release the ring buffer (only when owned by this reader) and reset state.
   void deinit();
 
   // Set the entire compressed input as a contiguous memory buffer.
@@ -82,4 +90,5 @@ class InflateReader {
  private:
   uzlib_uncomp decomp = {};
   uint8_t* ringBuffer = nullptr;
+  bool ownsRing = false;
 };

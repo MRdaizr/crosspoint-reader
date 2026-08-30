@@ -18,6 +18,9 @@ class EpubReaderMenuActivity final : public UiListActivity {
     ROTATE_SCREEN,
     BOOKMARKS,
     TOGGLE_BOOKMARK,
+    TEXT_SETTINGS,
+    NIGHT_MODE,
+    DICTIONARY,
     SCREENSHOT,
     DISPLAY_QR,
     GO_HOME,
@@ -31,7 +34,6 @@ class EpubReaderMenuActivity final : public UiListActivity {
 
   void onEnter() override;
 
- private:
   struct MenuItem {
     MenuAction action;
     StrId labelId;
@@ -39,6 +41,7 @@ class EpubReaderMenuActivity final : public UiListActivity {
 
   static std::vector<MenuItem> buildMenuItems(bool hasFootnotes, bool hasBookmarks);
 
+ private:
   // Fixed menu layout
   const std::vector<MenuItem> menuItems;
 

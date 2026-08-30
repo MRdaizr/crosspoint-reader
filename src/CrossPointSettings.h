@@ -175,7 +175,18 @@ class CrossPointSettings {
     LP_MENU_KOSYNC = 0,
     LP_MENU_DISABLED = 1,
     LP_MENU_BOOKMARK = 2,
+    LP_MENU_DICTIONARY = 3,
+    LP_MENU_READER_MENU = 4,
     LONG_PRESS_MENU_FUNCTION_COUNT
+  };
+
+  // EPUB reader menu presentation.  Keep LIST as the persisted default so
+  // existing devices retain the classic full-screen menu; TOOLBAR is an
+  // opt-in bottom-sheet overlay for EPUB readers.
+  enum READER_MENU_STYLE {
+    READER_MENU_LIST = 0,
+    READER_MENU_TOOLBAR = 1,
+    READER_MENU_STYLE_COUNT
   };
 
   // Hide battery percentage
@@ -306,6 +317,12 @@ class CrossPointSettings {
   uint8_t tiltPageTurn = TILT_OFF;
   // Language setting (Language enum index, default 0 = EN)
   uint8_t language = 0;
+  // Global display polarity. Applied immediately before each activity render.
+  uint8_t screenInverted = 0;
+  // EPUB reader menu presentation (classic list by default).
+  uint8_t readerMenuStyle = READER_MENU_LIST;
+  // SD dictionary folder name; empty means no dictionary selected.
+  char dictionaryName[32] = "";
   // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.
   uint8_t quickResumeSleepScreen = QUICK_RESUME_NEVER;
   // Reading Analytics settings.

@@ -166,6 +166,11 @@ enum class FuiMenuIconSlot : uint8_t {
   ExtensionsTodos,
   ExtensionsWeRead,
   FlashcardDeckRows,
+  ReaderToolbarContents,
+  ReaderToolbarText,
+  ReaderToolbarMore,
+  ReaderToolbarPrevChapter,
+  ReaderToolbarNextChapter,
 };
 
 enum class KeyboardKeyType { Normal, Shift, Mode, Space, Del, Ok, Disabled };

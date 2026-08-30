@@ -21,7 +21,6 @@ class EpubReaderFootnotesActivity final : public UiListActivity {
  private:
   const std::vector<FootnoteEntry>& footnotes;
   std::vector<std::string> rowLabels;
-  std::vector<std::string> rowSubtitles;
   std::vector<freeink::ui::ListItem> rowItems;
 
   int listCount() const override { return static_cast<int>(footnotes.size()); }

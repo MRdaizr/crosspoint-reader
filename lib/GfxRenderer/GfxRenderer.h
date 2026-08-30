@@ -276,6 +276,9 @@ class GfxRenderer {
   bool supportsStripGrayscale() const;
   bool storeBwBuffer();    // Returns true if buffer was stored successfully
   void restoreBwBuffer();  // Restore and free the stored buffer
+  // Release a stored BW snapshot without copying it back. Used by overlays
+  // when the underlying page is going to be rebuilt anyway.
+  void discardStoredBwBuffer();
   void cleanupGrayscaleWithFrameBuffer() const;
 
   // Temporarily lend the framebuffer allocation to a cover/image converter.
@@ -320,4 +323,10 @@ class GfxRenderer {
   bool copyRegionToBuffer(int logicalX, int logicalY, int logicalW, int logicalH, uint8_t* buf, size_t bufSize) const;
   bool copyBufferToRegion(int logicalX, int logicalY, int logicalW, int logicalH, const uint8_t* buf,
                           size_t bufSize) const;
+
+  // Compatibility helpers for overlay clients that use the older framebuffer
+  // snapshot naming.  Coordinates are logical/orientation-aware and the
+  // copied rows are byte-aligned in panel memory.
+  size_t readFramebufferRegion(int x, int y, int w, int h, uint8_t* dst, size_t dstCapacity) const;
+  void writeFramebufferRegion(int x, int y, int w, int h, const uint8_t* src);
 };

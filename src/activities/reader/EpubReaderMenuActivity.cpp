@@ -4,6 +4,7 @@
 #include <I18n.h>
 
 #include "MappedInputManager.h"
+#include "CrossPointSettings.h"
 #include "components/UITheme.h"
 
 namespace fui = freeink::ui;
@@ -23,7 +24,7 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes,
                                                                                      bool hasBookmarks) {
   std::vector<MenuItem> items;
-  items.reserve(12);
+  items.reserve(16);
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   if (hasFootnotes) {
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
@@ -32,6 +33,9 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
     items.push_back({MenuAction::BOOKMARKS, StrId::STR_BOOKMARKS});
   }
   items.push_back({MenuAction::TOGGLE_BOOKMARK, StrId::STR_TOGGLE_BOOKMARK});
+  items.push_back({MenuAction::TEXT_SETTINGS, StrId::STR_TEXT_SETTINGS});
+  items.push_back({MenuAction::NIGHT_MODE, StrId::STR_NIGHT_MODE});
+  items.push_back({MenuAction::DICTIONARY, StrId::STR_LOOKUP});
   items.push_back({MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION});
   items.push_back({MenuAction::AUTO_PAGE_TURN, StrId::STR_AUTO_TURN_PAGES_PER_MIN});
   items.push_back({MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT});
@@ -62,6 +66,12 @@ void EpubReaderMenuActivity::activateIndex(const int index) {
   app.clearTapFlash();
   nav.selected = index;
   const auto selectedAction = menuItems[static_cast<size_t>(index)].action;
+  if (selectedAction == MenuAction::NIGHT_MODE) {
+    SETTINGS.screenInverted = SETTINGS.screenInverted ? 0 : 1;
+    SETTINGS.saveToFile();
+    requestUpdate();
+    return;
+  }
   if (selectedAction == MenuAction::ROTATE_SCREEN) {
     pendingOrientation = static_cast<uint8_t>((pendingOrientation + 1) % orientationLabels.size());
     requestUpdate();
@@ -107,6 +117,8 @@ void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
     const auto action = menuItems[i].action;
     if (action == MenuAction::ROTATE_SCREEN) rowValues[i] = I18N.get(orientationLabels[pendingOrientation]);
     else if (action == MenuAction::AUTO_PAGE_TURN) rowValues[i] = pageTurnLabels[selectedPageTurnOption];
+    else if (action == MenuAction::NIGHT_MODE) rowValues[i] = SETTINGS.screenInverted ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+    else if (action == MenuAction::DICTIONARY) rowValues[i] = SETTINGS.dictionaryName[0] ? SETTINGS.dictionaryName : I18N.get(STR_NONE_OPT);
     else rowValues[i].clear();
     rowItems[i].value = rowValues[i].empty() ? nullptr : rowValues[i].c_str();
   }

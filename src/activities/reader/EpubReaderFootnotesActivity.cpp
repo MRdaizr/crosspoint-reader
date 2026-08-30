@@ -14,17 +14,13 @@ namespace fui = freeink::ui;
 void EpubReaderFootnotesActivity::onEnter() {
   UiListActivity::onEnter();
   rowLabels.clear();
-  rowSubtitles.clear();
   rowItems.clear();
   rowLabels.reserve(footnotes.size());
-  rowSubtitles.reserve(footnotes.size());
   rowItems.reserve(footnotes.size());
   for (const auto& footnote : footnotes) {
     rowLabels.push_back(footnote.number[0] == '\0' ? std::string(tr(STR_LINK)) : footnote.number);
-    rowSubtitles.push_back(footnote.href);
     fui::ListItem item;
     item.label = rowLabels.back().c_str();
-    item.subtitle = rowSubtitles.back().empty() ? nullptr : rowSubtitles.back().c_str();
     item.actionValue = static_cast<int16_t>(rowItems.size());
     item.icon = {};
     rowItems.push_back(item);
@@ -68,8 +64,6 @@ void EpubReaderFootnotesActivity::buildScreen(UiScreen& screen) {
   props.count = static_cast<uint16_t>(rowItems.size());
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;
-  props.subtitleText = screen.theme().smallText;
-  props.subtitleText.maxLines = 1;
   syncListViewport(screen, props, true);
   screen.list(props);
 }

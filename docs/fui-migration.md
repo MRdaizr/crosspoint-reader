@@ -42,6 +42,34 @@ wrapped CJK labels use the measured page size and a bounded rebuild pass.  The
 FUI theme bridge also forwards list, header, control, sheet, and slider-capsule
 metrics from Classic, Lyra, and RoundedRaff instead of relying on SDK defaults.
 
+## EPUB reader menu, night mode, and dictionaries
+
+Settings exposes the unified Text Settings page, global Night Mode, and the EPUB
+Reader Menu Style selector. The default style remains the
+classic list menu; selecting Toolbar enables the EPUB-only `ReaderToolbarUi`
+bottom-sheet overlay while EPUB/TXT/XTC body layout and existing hardware-button
+semantics stay unchanged. RoundedRaffExt keeps the toolbar and all reader menu
+entries text-first by suppressing their semantic icon slots.
+
+The reader menu now includes Text Settings, Night Mode, and Look Up. Footnote
+lists intentionally show only the localized footnote number (with a localized
+link fallback when a number is absent), never the source href. Night Mode is
+persisted as `screenInverted` and applied before every activity render; the sleep
+screen explicitly restores its normal polarity.
+
+The new settings are additive: older JSON and binary settings keep their existing
+values, while missing `screenInverted`, `readerMenuStyle`, and `dictionaryName`
+fields use the normal-polarity, list-menu, and no-dictionary defaults. The
+dictionary choice is saved only after a valid SD folder is selected.
+
+Dictionary selection is persisted as `dictionaryName`. At settings entry the
+firmware scans `/dictionaries` and `/.dictionaries`; a valid folder contains one
+`.idx` and a matching `.dict` or `.dict.dz` file, with optional `.syn`. Indexes
+are streamed into small sidecar files and definitions are read on demand, so no
+full dictionary is loaded into RAM. Missing, corrupt, decompression, read, and
+low-memory failures are surfaced as recoverable messages. No dictionary files
+are bundled in firmware.
+
 ## Font coverage
 
 The UI font family uses Ubuntu Medium-style regular/bold glyphs at 10px and

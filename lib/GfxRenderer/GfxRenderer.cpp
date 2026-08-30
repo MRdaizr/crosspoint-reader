@@ -1796,6 +1796,20 @@ bool GfxRenderer::copyBufferToRegion(int lx, int ly, int lw, int lh, const uint8
   return true;
 }
 
+size_t GfxRenderer::readFramebufferRegion(const int x, const int y, const int w, const int h, uint8_t* dst,
+                                           const size_t dstCapacity) const {
+  if (!dst || w <= 0 || h <= 0) return 0;
+  const size_t bytes = getRegionByteSize(x, y, w, h);
+  if (bytes == 0 || bytes > dstCapacity || !copyRegionToBuffer(x, y, w, h, dst, dstCapacity)) return 0;
+  return bytes;
+}
+
+void GfxRenderer::writeFramebufferRegion(const int x, const int y, const int w, const int h, const uint8_t* src) {
+  if (!src || w <= 0 || h <= 0) return;
+  const size_t bytes = getRegionByteSize(x, y, w, h);
+  if (bytes != 0) copyBufferToRegion(x, y, w, h, src, bytes);
+}
+
 int GfxRenderer::getSpaceWidth(const int fontId, const EpdFontFamily::Style style) const {
   // Advance table fast-path for SD card fonts during layout
   auto sdIt = sdCardFonts_.find(fontId);
@@ -2128,6 +2142,11 @@ void GfxRenderer::restoreBwBuffer() {
 
   freeBwBufferChunks();
   LOG_DBG("GFX", "Restored and freed BW buffer chunks");
+}
+
+void GfxRenderer::discardStoredBwBuffer() {
+  freeBwBufferChunks();
+  LOG_DBG("GFX", "Discarded stored BW buffer chunks");
 }
 
 /**

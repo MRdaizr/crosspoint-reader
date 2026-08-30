@@ -3,10 +3,12 @@
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <HalPowerManager.h>
+#include <HalDisplay.h>
 
 #include <algorithm>
 
 #include "OpdsServerStore.h"
+#include "CrossPointSettings.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
@@ -58,6 +60,10 @@ void ActivityManager::renderTaskLoop() {
     RenderLock lock;
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
+      // Apply the persisted polarity immediately before every activity draw.
+      // This keeps night mode consistent across legacy screens and FUI overlays
+      // without requiring each activity to duplicate the setting check.
+      display.setInverted(SETTINGS.screenInverted != 0);
       currentActivity->render(std::move(lock));
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.

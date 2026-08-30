@@ -12,6 +12,7 @@ enum class SettingType { TOGGLE, ENUM, ACTION, VALUE, STRING };
 
 enum class SettingAction {
   None,
+  TextSettings,
   RemapFrontButtons,
   CustomiseStatusBar,
   KOReaderSync,
@@ -43,6 +44,7 @@ struct SettingInfo {
   const char* key = nullptr;             // JSON API key (nullptr for ACTION types)
   StrId category = StrId::STR_NONE_OPT;  // Category for web UI grouping
   bool obfuscated = false;               // Save/load via base64 obfuscation (passwords)
+  bool inTextSettings = false;           // Rendered only by the unified Text Settings page
 
   // Direct char[] string fields (for settings stored in CrossPointSettings)
   size_t stringOffset = 0;
@@ -56,6 +58,11 @@ struct SettingInfo {
 
   SettingInfo& withObfuscated() {
     obfuscated = true;
+    return *this;
+  }
+
+  SettingInfo& withTextSettings() {
+    inTextSettings = true;
     return *this;
   }
 
@@ -121,6 +128,21 @@ struct SettingInfo {
     s.nameId = nameId;
     s.type = SettingType::ENUM;
     s.enumValues = std::move(values);
+    s.valueGetter = std::move(getter);
+    s.valueSetter = std::move(setter);
+    s.key = key;
+    s.category = category;
+    return s;
+  }
+
+  static SettingInfo DynamicEnumStrings(StrId nameId, std::vector<std::string> values,
+                                        std::function<uint8_t()> getter, std::function<void(uint8_t)> setter,
+                                        const char* key = nullptr,
+                                        StrId category = StrId::STR_NONE_OPT) {
+    SettingInfo s;
+    s.nameId = nameId;
+    s.type = SettingType::ENUM;
+    s.enumStringValues = std::move(values);
     s.valueGetter = std::move(getter);
     s.valueSetter = std::move(setter);
     s.key = key;

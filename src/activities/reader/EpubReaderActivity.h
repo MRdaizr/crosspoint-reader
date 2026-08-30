@@ -6,11 +6,15 @@
 #include <cstdint>
 #include <optional>
 #include <atomic>
+#include <memory>
+#include <vector>
 
 #include "BookmarkEntry.h"
 #include "EpubReaderMenuActivity.h"
 #include "ProgressMapper.h"
 #include "ReaderActivity.h"
+#include "ReaderToolbarUi.h"
+#include "components/OptionPopup.h"
 
 class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
@@ -66,6 +70,8 @@ class EpubReaderActivity final : public ReaderActivity {
   bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
   bool automaticPageTurnActive = false;
   bool showBookmarkMessage = false;
+  bool showDictionaryMessage = false;
+  unsigned long dictionaryMessageTime = 0UL;
   bool ignoreNextConfirmRelease = false;
   bool currentPageBookmarked = false;
   bool bookmarkRemoved = false;  // true when last toggle removed (controls popup text)
@@ -79,6 +85,23 @@ class EpubReaderActivity final : public ReaderActivity {
   // Set when the reader is left at end-of-book and SETTINGS.moveFinishedToReadFolder is on.
   // Consumed in onExit() to relocate the finished book into /Read/.
   bool pendingReadFolderMove = false;
+
+  // EPUB-only toolbar reader menu. The classic list menu remains the default;
+  // when enabled, these overlays are rendered over the current page and own
+  // only the FUI touch table while physical buttons stay reader-controlled.
+  enum class Overlay { None, Toolbar, Contents, Text, More };
+  Overlay overlay = Overlay::None;
+  int focusedTool = 0;
+  int panelIndex = 0;
+  static constexpr unsigned long PANEL_HOLD_MS = 1500;
+  static constexpr int PANEL_HOLD_STEP = 10;
+  bool panelHoldJumped = false;
+  bool panelCursorShown = false;
+  std::unique_ptr<ReaderToolbarUi> toolbarUi;
+  OptionPopup overlayPopup;
+  bool overlayPageStored = false;
+  int autoTurnOption = 0;
+  std::vector<EpubReaderMenuActivity::MenuItem> moreItems;
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
@@ -127,6 +150,25 @@ class EpubReaderActivity final : public ReaderActivity {
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
   void restoreSavedPosition();
+
+  bool usesToolbarMenu() const;
+  void openOverlay(Overlay target);
+  void closeOverlayToPage();
+  void discardOverlayPage();
+  void handleOverlayInput();
+  void renderOverlay();
+  std::string currentChapterTitle() const;
+  std::string textRowName(int row) const;
+  std::string textRowValue(int row) const;
+  void showTextRowPopup(int row);
+  void applyTextSettingLive();
+  void paintOverlayPopup();
+  void applyReaderTextSettings();
+  void buildMoreActions();
+  std::string moreRowName(int row) const;
+  std::string moreRowValue(int row) const;
+  void activateMoreRow(int row);
+  void openDictionaryWordSelect();
 
   bool isAtEndOfBook() const override;
   void onReturnFromEndOfBook() override;

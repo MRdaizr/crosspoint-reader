@@ -323,6 +323,27 @@ MappedInputManager::Labels MappedInputManager::mapLabels(const char* back, const
           labelForHardware(HalGPIO::BTN_LEFT), labelForHardware(HalGPIO::BTN_RIGHT)};
 }
 
+MappedInputManager::Labels MappedInputManager::mapDirectionalLabels(const char* back, const char* confirm,
+                                                                    const char* left, const char* right,
+                                                                    const char* up, const char* down) const {
+  const auto labelForButton = [&](const Button rawButton) {
+    if (mapScreenDirection(Button::ScreenLeft) == rawButton) return left;
+    if (mapScreenDirection(Button::ScreenRight) == rawButton) return right;
+    if (mapScreenDirection(Button::ScreenUp) == rawButton) return up;
+    if (mapScreenDirection(Button::ScreenDown) == rawButton) return down;
+    return "";
+  };
+  const auto labelForHardware = [&](const uint8_t hw) -> const char* {
+    if (hw == SETTINGS.frontButtonBack) return back;
+    if (hw == SETTINGS.frontButtonConfirm) return confirm;
+    if (hw == SETTINGS.frontButtonLeft) return labelForButton(Button::Left);
+    if (hw == SETTINGS.frontButtonRight) return labelForButton(Button::Right);
+    return "";
+  };
+  return {labelForHardware(HalGPIO::BTN_BACK), labelForHardware(HalGPIO::BTN_CONFIRM),
+          labelForHardware(HalGPIO::BTN_LEFT), labelForHardware(HalGPIO::BTN_RIGHT)};
+}
+
 int MappedInputManager::getPressedFrontButton() const {
   // Scan the raw front buttons in hardware order.
   // This bypasses remapping so the remap activity can capture physical presses.

@@ -27,6 +27,10 @@
 #include "EpubReaderFootnotesActivity.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "EpubReaderUtils.h"
+#include "DictionaryWordSelectActivity.h"
+#include "activities/settings/TextSettingsActivity.h"
+#include "ReaderFontSizes.h"
+#include "SdCardFontSystem.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncActivity.h"
 #include "MappedInputManager.h"
@@ -42,6 +46,7 @@
 #include "util/BookmarkUtil.h"
 #include "util/BookmarkFile.h"
 #include "util/AchievementPopupUtils.h"
+#include "util/DictionaryRegistry.h"
 #include "util/ScreenshotUtil.h"
 
 namespace {
@@ -281,6 +286,10 @@ void EpubReaderActivity::onEnter() {
 void EpubReaderActivity::onExit() {
   Activity::onExit();
 
+  overlayPopup.dismiss();
+  toolbarUi.reset();
+  discardOverlayPage();
+
   endOfBookOptions.reset();
   endOfBookOptionsReady.store(false, std::memory_order_release);
 
@@ -346,6 +355,11 @@ void EpubReaderActivity::onExit() {
 void EpubReaderActivity::openReaderMenu() {
   if (!epub) {
     requestUpdate();
+    return;
+  }
+
+  if (usesToolbarMenu() && section) {
+    openOverlay(Overlay::Toolbar);
     return;
   }
 
@@ -448,6 +462,16 @@ void EpubReaderActivity::loop() {
     requestUpdate();
   }
 
+  if (showDictionaryMessage && (millis() - dictionaryMessageTime) >= ReaderUtils::BOOKMARK_MESSAGE_DURATION_MS) {
+    showDictionaryMessage = false;
+    requestUpdate();
+  }
+
+  if (overlay != Overlay::None) {
+    handleOverlayInput();
+    return;
+  }
+
   // Schedule one parser slice from the main loop. The render task must not
   // chain slices directly, otherwise it starves input polling.
   if (((section && section->isBuilding()) || (nextChapterPreload && nextChapterPreload->isBuilding())) &&
@@ -464,7 +488,11 @@ void EpubReaderActivity::loop() {
     if (ignoreNextConfirmRelease) {
       ignoreNextConfirmRelease = false;
     } else {
-      openReaderMenu();
+      if (usesToolbarMenu() && section) {
+        openOverlay(Overlay::Toolbar);
+      } else {
+        openReaderMenu();
+      }
     }
   }
 
@@ -488,6 +516,19 @@ void EpubReaderActivity::loop() {
             ignoreNextConfirmRelease = true;  // sync launched or error shown; suppress menu open
             return;
           }
+        }
+        break;
+      case CrossPointSettings::LP_MENU_DICTIONARY:
+        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
+          openDictionaryWordSelect();
+          ignoreNextConfirmRelease = true;
+        }
+        break;
+      case CrossPointSettings::LP_MENU_READER_MENU:
+        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
+          if (usesToolbarMenu() && section) openOverlay(Overlay::Toolbar);
+          else openReaderMenu();
+          ignoreNextConfirmRelease = true;
         }
         break;
       case CrossPointSettings::LP_MENU_DISABLED:
@@ -795,6 +836,22 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
   };
 
   switch (action) {
+    case EpubReaderMenuActivity::MenuAction::TEXT_SETTINGS:
+      startActivityForResult(
+          std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry()),
+          [this](const ActivityResult&) {
+            applyReaderTextSettings();
+            requestUpdate();
+          });
+      break;
+    case EpubReaderMenuActivity::MenuAction::NIGHT_MODE:
+      SETTINGS.screenInverted = SETTINGS.screenInverted ? 0 : 1;
+      SETTINGS.saveToFile();
+      requestUpdate();
+      break;
+    case EpubReaderMenuActivity::MenuAction::DICTIONARY:
+      openDictionaryWordSelect();
+      break;
     case EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER: {
       const int spineIdx = currentSpineIndex;
       const std::string path = epub->getPath();
@@ -1029,6 +1086,7 @@ void EpubReaderActivity::applyOrientation(const uint8_t orientation) {
 }
 
 void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption) {
+  autoTurnOption = selectedPageTurnOption < std::size(PAGE_TURN_RATES) ? selectedPageTurnOption : 0;
   if (selectedPageTurnOption == 0 || selectedPageTurnOption >= std::size(PAGE_TURN_RATES)) {
     automaticPageTurnActive = false;
     return;
@@ -1112,6 +1170,15 @@ void EpubReaderActivity::applyPageTurnLocked(const bool isForwardTurn) {
 void EpubReaderActivity::render(RenderLock&& lock) {
   if (!epub) {
     return;
+  }
+
+  // Overlay input is handled by the loop task while the reader's page remains
+  // the backing surface.  A normal page render clears pageRenderRequested once
+  // it has painted; keep it asserted for the next overlay repaint so changing
+  // panels, moving the cursor, or dismissing a popup cannot get short-circuited
+  // by the incremental-build gate below.
+  if (overlay != Overlay::None && usesToolbarMenu() && section) {
+    pageRenderRequested = true;
   }
 
   const auto showPendingSyncSaveError = [this]() {
@@ -1524,6 +1591,15 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     const auto start = millis();
     renderContents(std::move(p), orientedMarginTop, orientedMarginRight, orientedMarginBottom, orientedMarginLeft);
     LOG_DBG("ERS", "Rendered page in %dms", millis() - start);
+    if (overlay != Overlay::None && usesToolbarMenu() && toolbarUi) {
+      // renderContents leaves a clean BW page in the framebuffer. Keep a
+      // snapshot so closing or switching panels can erase only the overlay.
+      discardOverlayPage();
+      overlayPageStored = renderer.storeBwBuffer();
+      renderOverlay();
+      if (overlayPopup.isActive()) overlayPopup.processRenderOverlay(renderer, mappedInput);
+      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+    }
   }
   silentIndexNextChapterIfNeeded(viewportWidth, viewportHeight);
   if (currentSpineIndex != lastSavedSpineIndex || section->currentPage != lastSavedPage ||
@@ -1545,6 +1621,9 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
   if (showBookmarkMessage) {
     GUI.drawPopup(renderer, bookmarkRemoved ? tr(STR_BOOKMARK_REMOVED) : tr(STR_BOOKMARK_ADDED));
+  }
+  if (showDictionaryMessage) {
+    GUI.drawPopup(renderer, tr(STR_DICT_NO_DICT_SET));
   }
 }
 
@@ -2186,4 +2265,487 @@ CrossPointPosition EpubReaderActivity::getCurrentPosition() const {
     }
   }
   return localPos;
+}
+
+
+namespace {
+constexpr StrId kToolbarTextRows[] = {StrId::STR_TEXT_SETTINGS, StrId::STR_FONT_SIZE, StrId::STR_LINE_SPACING,
+                                      StrId::STR_PARA_ALIGNMENT, StrId::STR_FOCUS_READING};
+constexpr StrId kToolbarSpacingIds[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE, StrId::STR_EXTRA_WIDE};
+constexpr StrId kToolbarAlignIds[] = {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER,
+                                      StrId::STR_ALIGN_RIGHT, StrId::STR_BOOK_S_STYLE};
+constexpr int kToolbarTextRowCount = static_cast<int>(std::size(kToolbarTextRows));
+}  // namespace
+
+bool EpubReaderActivity::usesToolbarMenu() const {
+  return SETTINGS.readerMenuStyle == CrossPointSettings::READER_MENU_TOOLBAR;
+}
+
+std::string EpubReaderActivity::currentChapterTitle() const {
+  if (!epub) return {};
+  const int tocIndex = epub->getTocIndexForSpineIndex(currentSpineIndex);
+  return tocIndex >= 0 ? epub->getTocItem(tocIndex).title : std::string(tr(STR_UNNAMED));
+}
+
+std::string EpubReaderActivity::textRowName(const int row) const {
+  return row >= 0 && row < kToolbarTextRowCount ? I18N.get(kToolbarTextRows[row]) : std::string();
+}
+
+std::string EpubReaderActivity::textRowValue(const int row) const {
+  switch (row) {
+    case 0:
+      return {};
+    case 1:
+      return std::to_string(SETTINGS.fontPointSize) + " pt";
+    case 2:
+      return I18N.get(kToolbarSpacingIds[SETTINGS.lineSpacing % CrossPointSettings::LINE_COMPRESSION_COUNT]);
+    case 3:
+      return I18N.get(kToolbarAlignIds[SETTINGS.paragraphAlignment % CrossPointSettings::PARAGRAPH_ALIGNMENT_COUNT]);
+    case 4:
+      return SETTINGS.focusReadingEnabled ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+    default:
+      return {};
+  }
+}
+
+void EpubReaderActivity::applyTextSettingLive() {
+  applyReaderTextSettings();
+  discardOverlayPage();
+  requestUpdate();
+}
+
+void EpubReaderActivity::showTextRowPopup(const int row) {
+  switch (row) {
+    case 1: {
+      const auto sizes = readerFontPointSizes(&sdFontSystem.registry(), SETTINGS.sdFontFamilyName);
+      if (sizes.empty()) return;
+      std::vector<std::string> labels;
+      labels.reserve(sizes.size());
+      for (const uint8_t size : sizes) labels.push_back(std::to_string(size) + " pt");
+      const uint8_t current = snapToNearestPointSize(sizes, SETTINGS.fontPointSize);
+      int currentIndex = 0;
+      for (size_t i = 0; i < sizes.size(); ++i) {
+        if (sizes[i] == current) currentIndex = static_cast<int>(i);
+      }
+      overlayPopup.show(StrId::STR_FONT_SIZE, labels, currentIndex, [this, sizes](const int index) {
+        if (index >= 0 && index < static_cast<int>(sizes.size())) {
+          SETTINGS.fontPointSize = sizes[static_cast<size_t>(index)];
+          applyTextSettingLive();
+        }
+      });
+      break;
+    }
+    case 2:
+      overlayPopup.show(StrId::STR_LINE_SPACING, kToolbarSpacingIds, static_cast<int>(std::size(kToolbarSpacingIds)),
+                        SETTINGS.lineSpacing % CrossPointSettings::LINE_COMPRESSION_COUNT, [this](const int index) {
+                          SETTINGS.lineSpacing = static_cast<uint8_t>(index);
+                          applyTextSettingLive();
+                        });
+      break;
+    case 3:
+      overlayPopup.show(StrId::STR_PARA_ALIGNMENT, kToolbarAlignIds, static_cast<int>(std::size(kToolbarAlignIds)),
+                        SETTINGS.paragraphAlignment % CrossPointSettings::PARAGRAPH_ALIGNMENT_COUNT,
+                        [this](const int index) {
+                          SETTINGS.paragraphAlignment = static_cast<uint8_t>(index);
+                          applyTextSettingLive();
+                        });
+      break;
+    default:
+      return;
+  }
+  requestUpdate();
+}
+
+void EpubReaderActivity::discardOverlayPage() {
+  if (!overlayPageStored) return;
+  renderer.discardStoredBwBuffer();
+  overlayPageStored = false;
+}
+
+void EpubReaderActivity::openOverlay(const Overlay target) {
+  if (!epub || !section) return;
+  const Overlay previous = overlay;
+  overlay = target;
+  if (!toolbarUi) toolbarUi = std::make_unique<ReaderToolbarUi>(renderer);
+  if (previous == Overlay::None) toolbarUi->begin();
+
+  panelCursorShown = !mappedInput.hasTouch();
+  switch (target) {
+    case Overlay::Toolbar:
+      focusedTool = std::clamp(focusedTool, 0, 2);
+      break;
+    case Overlay::Contents:
+      panelIndex = std::max(0, epub->getTocIndexForSpineIndex(currentSpineIndex));
+      toolbarUi->nav().reset(panelIndex);
+      toolbarUi->nav().top = panelIndex;
+      break;
+    case Overlay::Text:
+      panelIndex = 0;
+      toolbarUi->nav().reset();
+      break;
+    case Overlay::More:
+      panelIndex = 0;
+      buildMoreActions();
+      toolbarUi->nav().reset();
+      break;
+    default:
+      break;
+  }
+  panelHoldJumped = false;
+  requestUpdate();
+}
+
+void EpubReaderActivity::closeOverlayToPage() {
+  overlay = Overlay::None;
+  overlayPopup.dismiss();
+  toolbarUi.reset();
+  discardOverlayPage();
+  pageRenderRequested = true;
+  requestUpdate();
+}
+
+void EpubReaderActivity::renderOverlay() {
+  if (!epub || !section || !toolbarUi) return;
+
+  ReaderToolbarUi::Model model;
+  model.activeTool = focusedTool;
+  std::string chapterTitle;
+  std::string pageInfo;
+  if (overlay == Overlay::Toolbar) {
+    chapterTitle = currentChapterTitle();
+    const int total = section->estimatedTotalPages();
+    const float chapterProgress = total > 0 ? static_cast<float>(section->currentPage + 1) / total : 0.0f;
+    const float bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress);
+    pageInfo = std::to_string(section->currentPage + 1) + "/" + std::to_string(total) + "   " +
+               std::to_string(clampPercent(static_cast<int>(bookProgress * 100.0f + 0.5f))) + "%";
+    model.chapterTitle = chapterTitle.c_str();
+    model.pageInfo = pageInfo.c_str();
+    model.progressPermille = static_cast<int>(std::clamp(bookProgress, 0.0f, 1.0f) * 1000.0f + 0.5f);
+    toolbarUi->setModel(model);
+    toolbarUi->render();
+    return;
+  }
+
+  model.panel = true;
+  model.selectedIndex = panelCursorShown ? panelIndex : -1;
+  if (!mappedInput.hasTouch()) {
+    model.bottomReserve = UITheme::getInstance().getMetrics().buttonHintsHeight;
+    model.denseRows = true;
+  }
+  if (overlay == Overlay::Contents) {
+    model.panelTitle = tr(STR_TOOL_CONTENTS);
+    model.itemCount = epub->getTocItemsCount();
+    model.rowText = [this](const int index) {
+      const auto item = epub->getTocItem(index);
+      const int indent = item.level > 1 ? (item.level - 1) * 2 : 0;
+      return std::string(static_cast<size_t>(indent), ' ') + item.title;
+    };
+  } else if (overlay == Overlay::Text) {
+    model.panelTitle = tr(STR_TOOL_TEXT);
+    model.itemCount = kToolbarTextRowCount;
+    model.rowText = [this](const int index) { return textRowName(index); };
+    model.rowValue = [this](const int index) { return textRowValue(index); };
+  } else {
+    model.panelTitle = tr(STR_TOOL_MORE);
+    model.itemCount = static_cast<int>(moreItems.size());
+    model.rowText = [this](const int index) { return moreRowName(index); };
+    model.rowValue = [this](const int index) { return moreRowValue(index); };
+  }
+  toolbarUi->setModel(model);
+  toolbarUi->render();
+  if (!mappedInput.hasTouch()) {
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  }
+}
+
+void EpubReaderActivity::handleOverlayInput() {
+  if (!toolbarUi) return;
+  if (overlayPopup.isActive()) {
+    overlayPopup.handleInput(renderer, mappedInput, [this] { requestUpdate(); });
+    return;
+  }
+
+  const auto routed = toolbarUi->route(mappedInput);
+  const auto toolOverlay = [](const int tool) {
+    return tool == 0 ? Overlay::Contents : (tool == 1 ? Overlay::Text : Overlay::More);
+  };
+  const auto gotoSpine = [this](int target) {
+    const int count = epub ? epub->getSpineItemsCount() : 0;
+    if (count <= 0) return;
+    target = std::clamp(target, 0, count - 1);
+    if (target == currentSpineIndex) return;
+    RenderLock lock(*this);
+    clearDeferredReposition();
+    nextPageNumber = 0;
+    currentSpineIndex = target;
+    section.reset();
+    pageRenderRequested = true;
+    requestUpdate();
+  };
+
+  if (overlay == Overlay::Toolbar) {
+    switch (routed.event) {
+      case ReaderToolbarUi::Event::Dismiss:
+        closeOverlayToPage();
+        return;
+      case ReaderToolbarUi::Event::Tool:
+        focusedTool = std::clamp(routed.value, 0, 2);
+        openOverlay(toolOverlay(focusedTool));
+        return;
+      case ReaderToolbarUi::Event::PrevChapter:
+        gotoSpine(currentSpineIndex - 1);
+        return;
+      case ReaderToolbarUi::Event::NextChapter:
+        gotoSpine(currentSpineIndex + 1);
+        return;
+      case ReaderToolbarUi::Event::Scrub:
+        if (routed.permille >= 0 && epub) {
+          // The toolbar represents the whole book, not only the current
+          // spine. Reuse the existing offset-aware jump path so the target
+          // chapter and the normalized page within it are both restored after
+          // a partial or full section build.
+          jumpToFraction(static_cast<float>(routed.permille) / 1000.0f);
+        }
+        return;
+      default:
+        break;
+    }
+    if (routed.routed) return;
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+      closeOverlayToPage();
+    } else if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
+      focusedTool = (focusedTool + 2) % 3;
+      requestUpdate();
+    } else if (mappedInput.wasReleased(MappedInputManager::Button::Right)) {
+      focusedTool = (focusedTool + 1) % 3;
+      requestUpdate();
+    } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      openOverlay(toolOverlay(focusedTool));
+    } else if (mappedInput.wasReleased(MappedInputManager::Button::Up)) {
+      gotoSpine(currentSpineIndex - 1);
+    } else if (mappedInput.wasReleased(MappedInputManager::Button::Down)) {
+      gotoSpine(currentSpineIndex + 1);
+    }
+    return;
+  }
+
+  const int count = overlay == Overlay::Contents
+                       ? epub->getTocItemsCount()
+                       : overlay == Overlay::Text ? kToolbarTextRowCount : static_cast<int>(moreItems.size());
+  const int pageRows = std::max(1, toolbarUi->visibleRows());
+  auto activateRow = [this, count]() {
+    if (panelIndex < 0 || panelIndex >= count) return;
+    if (overlay == Overlay::Contents) {
+      const auto item = epub->getTocItem(panelIndex);
+      if (item.spineIndex >= 0) {
+        RenderLock lock(*this);
+        clearDeferredReposition();
+        currentSpineIndex = item.spineIndex;
+        pendingAnchor = item.anchor;
+        nextPageNumber = 0;
+        section.reset();
+        pageRenderRequested = true;
+      }
+      closeOverlayToPage();
+    } else if (overlay == Overlay::Text) {
+      if (panelIndex == 0) {
+        overlay = Overlay::None;
+        discardOverlayPage();
+        toolbarUi.reset();
+        startActivityForResult(
+            std::make_unique<TextSettingsActivity>(renderer, mappedInput, &sdFontSystem.registry()),
+            [this](const ActivityResult&) {
+              applyReaderTextSettings();
+              if (usesToolbarMenu() && section) openOverlay(Overlay::Text);
+              else requestUpdate();
+            });
+      } else if (panelIndex == 4) {
+        SETTINGS.focusReadingEnabled = SETTINGS.focusReadingEnabled ? 0 : 1;
+        applyTextSettingLive();
+      } else {
+        showTextRowPopup(panelIndex);
+      }
+    } else {
+      activateMoreRow(panelIndex);
+    }
+  };
+
+  if (routed.event == ReaderToolbarUi::Event::Dismiss) {
+    overlay = Overlay::Toolbar;
+    overlayPopup.dismiss();
+    requestUpdate();
+    return;
+  }
+  if (routed.event == ReaderToolbarUi::Event::Tool) {
+    focusedTool = std::clamp(routed.value, 0, 2);
+    openOverlay(toolOverlay(focusedTool));
+    return;
+  }
+  if (routed.event == ReaderToolbarUi::Event::Row) {
+    panelIndex = routed.value;
+    panelCursorShown = false;
+    activateRow();
+    return;
+  }
+  if (mappedInput.wasSwipe() == MappedInputManager::SwipeDir::Up) {
+    toolbarUi->nav().scrollBy(pageRows, count);
+    requestUpdate();
+    return;
+  }
+  if (mappedInput.wasSwipe() == MappedInputManager::SwipeDir::Down) {
+    toolbarUi->nav().scrollBy(-pageRows, count);
+    requestUpdate();
+    return;
+  }
+  if (routed.routed) return;
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    overlay = Overlay::Toolbar;
+    requestUpdate();
+    return;
+  }
+  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    activateRow();
+    return;
+  }
+  if (count > 0) {
+    const bool up = mappedInput.wasReleased(MappedInputManager::Button::Up) ||
+                    mappedInput.wasReleased(MappedInputManager::Button::Left);
+    const bool down = mappedInput.wasReleased(MappedInputManager::Button::Down) ||
+                      mappedInput.wasReleased(MappedInputManager::Button::Right);
+    if (up) panelIndex = std::max(0, panelIndex - 1);
+    if (down) panelIndex = std::min(count - 1, panelIndex + 1);
+    if (up || down) {
+      panelCursorShown = true;
+      requestUpdate();
+    }
+  }
+}
+
+void EpubReaderActivity::paintOverlayPopup() {
+  requestUpdate();
+}
+
+void EpubReaderActivity::applyReaderTextSettings() {
+  SETTINGS.saveToFile();
+  sdFontSystem.ensureLoaded(renderer);
+  RenderLock lock(*this);
+  if (section) {
+    rememberCurrentContentOffset();
+    cachedSpineIndex = currentSpineIndex;
+    cachedChapterTotalPageCount = section->pageCount;
+    nextPageNumber = section->currentPage;
+  }
+  section.reset();
+  pageRenderRequested = true;
+}
+
+void EpubReaderActivity::buildMoreActions() {
+  moreItems = EpubReaderMenuActivity::buildMenuItems(!currentPageFootnotes.empty(), !cachedBookmarks.empty());
+  moreItems.erase(std::remove_if(moreItems.begin(), moreItems.end(), [](const auto& item) {
+                    return item.action == EpubReaderMenuActivity::MenuAction::SELECT_CHAPTER ||
+                           item.action == EpubReaderMenuActivity::MenuAction::TEXT_SETTINGS;
+                  }),
+                  moreItems.end());
+}
+
+std::string EpubReaderActivity::moreRowName(const int row) const {
+  return row >= 0 && row < static_cast<int>(moreItems.size()) ? I18N.get(moreItems[row].labelId) : std::string();
+}
+
+std::string EpubReaderActivity::moreRowValue(const int row) const {
+  using MA = EpubReaderMenuActivity::MenuAction;
+  if (row < 0 || row >= static_cast<int>(moreItems.size())) return {};
+  switch (moreItems[row].action) {
+    case MA::ROTATE_SCREEN: {
+      static constexpr StrId ids[] = {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_ORIENTATION_INVERTED,
+                                      StrId::STR_LANDSCAPE_CCW};
+      return I18N.get(ids[SETTINGS.orientation % CrossPointSettings::ORIENTATION_COUNT]);
+    }
+    case MA::AUTO_PAGE_TURN:
+      return autoTurnOption == 0 ? std::string(tr(STR_STATE_OFF)) : std::to_string(PAGE_TURN_RATES[autoTurnOption]);
+    case MA::NIGHT_MODE:
+      return SETTINGS.screenInverted ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+    case MA::DICTIONARY:
+      return SETTINGS.dictionaryName[0] ? std::string(SETTINGS.dictionaryName) : I18N.get(StrId::STR_NONE_OPT);
+    default:
+      return {};
+  }
+}
+
+void EpubReaderActivity::activateMoreRow(const int row) {
+  using MA = EpubReaderMenuActivity::MenuAction;
+  if (row < 0 || row >= static_cast<int>(moreItems.size())) return;
+  // Some More actions leave the overlay (dictionary, screenshot, home). Make
+  // sure the next reader render rebuilds the page after the sheet is removed.
+  pageRenderRequested = true;
+  const auto action = moreItems[static_cast<size_t>(row)].action;
+  switch (action) {
+    case MA::ROTATE_SCREEN:
+      applyOrientation(static_cast<uint8_t>((SETTINGS.orientation + 1) % CrossPointSettings::ORIENTATION_COUNT));
+      discardOverlayPage();
+      pageRenderRequested = true;
+      requestUpdate();
+      return;
+    case MA::AUTO_PAGE_TURN:
+      autoTurnOption = (autoTurnOption + 1) % static_cast<int>(std::size(PAGE_TURN_RATES));
+      toggleAutoPageTurn(static_cast<uint8_t>(autoTurnOption));
+      discardOverlayPage();
+      requestUpdate();
+      return;
+    case MA::NIGHT_MODE:
+      SETTINGS.screenInverted = SETTINGS.screenInverted ? 0 : 1;
+      SETTINGS.saveToFile();
+      discardOverlayPage();
+      requestUpdate();
+      return;
+    case MA::DICTIONARY:
+      overlay = Overlay::None;
+      discardOverlayPage();
+      openDictionaryWordSelect();
+      return;
+    case MA::TOGGLE_BOOKMARK:
+      addBookmark();
+      requestUpdate();
+      return;
+    default:
+      break;
+  }
+  overlay = Overlay::None;
+  discardOverlayPage();
+  onReaderMenuConfirm(action);
+  if (action != MA::GO_HOME && action != MA::DELETE_CACHE) requestUpdate();
+}
+
+void EpubReaderActivity::openDictionaryWordSelect() {
+  if (!epub || !section) return;
+  if (SETTINGS.dictionaryName[0] == '\0') {
+    showDictionaryMessage = true;
+    dictionaryMessageTime = millis();
+    requestUpdate();
+    return;
+  }
+  std::string dictionaryBasePath;
+  if (!DictionaryRegistry::resolveBasePath(SETTINGS.dictionaryName, dictionaryBasePath)) {
+    LOG_ERR("ERS", "Selected dictionary is no longer available: %s", SETTINGS.dictionaryName);
+    SETTINGS.dictionaryName[0] = '\0';
+    SETTINGS.saveToFile();
+    showDictionaryMessage = true;
+    dictionaryMessageTime = millis();
+    requestUpdate();
+    return;
+  }
+  auto page = section->loadPage(section->currentPage);
+  if (!page) return;
+  int top = 0;
+  int right = 0;
+  int bottom = 0;
+  int left = 0;
+  renderer.getOrientedViewableTRBL(&top, &right, &bottom, &left);
+  top += SETTINGS.screenMargin;
+  left += SETTINGS.screenMargin;
+  startActivityForResult(
+      std::make_unique<DictionaryWordSelectActivity>(renderer, mappedInput, std::move(page), left, top),
+      [this](const ActivityResult&) { requestUpdate(); });
 }

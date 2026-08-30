@@ -13,6 +13,7 @@
 #include "CrossPointSettings.h"
 #include "KOReaderCredentialStore.h"
 #include "activities/settings/SettingsActivity.h"
+#include "util/DictionaryRegistry.h"
 
 inline std::vector<StrId> builtinFontFamilyLabels() {
   std::vector<StrId> values = {StrId::STR_NOTO_SERIF};
@@ -60,6 +61,7 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
   s.enumStringValues = std::move(allStringValues);
   s.key = "fontFamily";
   s.category = StrId::STR_CAT_READER;
+  s.inTextSettings = true;
 
   // Capture registry families by copy for the lambdas
   std::vector<std::string> sdFamilyNames;
@@ -108,7 +110,40 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
 // SdCardFontRegistry is supplied AND has SD card fonts installed, the
 // font-family entry is replaced in a per-call copy with a registry-aware
 // version. Callers without SD fonts pay only a vector copy.
-inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr) {
+inline SettingInfo buildDictionarySetting(const std::vector<DictionaryEntry>* dictionaries) {
+  std::vector<std::string> values;
+  values.reserve((dictionaries ? dictionaries->size() : 0) + 1);
+  values.emplace_back(I18N.get(StrId::STR_NONE_OPT));
+  if (dictionaries) {
+    for (const auto& entry : *dictionaries) values.push_back(entry.name);
+  }
+  std::vector<std::string> names;
+  if (dictionaries) {
+    names.reserve(dictionaries->size());
+    for (const auto& entry : *dictionaries) names.push_back(entry.name);
+  }
+  return SettingInfo::DynamicEnumStrings(
+      StrId::STR_DICTIONARY, std::move(values),
+      [names]() -> uint8_t {
+        if (SETTINGS.dictionaryName[0] == '\0') return 0;
+        for (size_t i = 0; i < names.size(); ++i) {
+          if (names[i] == SETTINGS.dictionaryName) return static_cast<uint8_t>(i + 1);
+        }
+        return 0;
+      },
+      [names](const uint8_t index) {
+        if (index == 0 || index > names.size()) {
+          SETTINGS.dictionaryName[0] = '\0';
+          return;
+        }
+        strncpy(SETTINGS.dictionaryName, names[index - 1].c_str(), sizeof(SETTINGS.dictionaryName) - 1);
+        SETTINGS.dictionaryName[sizeof(SETTINGS.dictionaryName) - 1] = '\0';
+      },
+      "dictionaryName", StrId::STR_CAT_READER);
+}
+
+inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* registry = nullptr,
+                                                 const std::vector<DictionaryEntry>* dictionaries = nullptr) {
   static const std::vector<SettingInfo> baseList = [] {
     std::vector<SettingInfo> v = {
         // --- Display ---
@@ -137,12 +172,14 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           "uiTheme", StrId::STR_CAT_DISPLAY),
         SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
                             StrId::STR_CAT_DISPLAY),
+        SettingInfo::Toggle(StrId::STR_NIGHT_MODE, &CrossPointSettings::screenInverted, "screenInverted",
+                            StrId::STR_CAT_DISPLAY),
 
         // --- Reader ---
         // Built-in font-family entry. Replaced per-call with a registry-aware
         // version when SD fonts are installed.
         SettingInfo::Enum(StrId::STR_FONT_FAMILY, &CrossPointSettings::fontFamily,
-                          builtinFontFamilyLabels(), "fontFamily", StrId::STR_CAT_READER),
+                          builtinFontFamilyLabels(), "fontFamily", StrId::STR_CAT_READER).withTextSettings(),
         // Physical point size is edited in TextSettingsActivity.  Keep a
         // category-less value entry so the web settings API and persistence
         // layer expose the stable `fontPointSize` key without duplicating a
@@ -158,30 +195,33 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
 #endif
         SettingInfo::Enum(StrId::STR_LINE_SPACING, &CrossPointSettings::lineSpacing,
                           {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE, StrId::STR_EXTRA_WIDE}, "lineSpacing",
-                          StrId::STR_CAT_READER),
+                          StrId::STR_CAT_READER).withTextSettings(),
         SettingInfo::Value(StrId::STR_SCREEN_MARGIN, &CrossPointSettings::screenMargin, {5, 40, 5}, "screenMargin",
-                           StrId::STR_CAT_READER),
+                           StrId::STR_CAT_READER).withTextSettings(),
         SettingInfo::Enum(StrId::STR_PARA_ALIGNMENT, &CrossPointSettings::paragraphAlignment,
                           {StrId::STR_JUSTIFY, StrId::STR_ALIGN_LEFT, StrId::STR_CENTER, StrId::STR_ALIGN_RIGHT,
                            StrId::STR_BOOK_S_STYLE},
-                          "paragraphAlignment", StrId::STR_CAT_READER),
+                          "paragraphAlignment", StrId::STR_CAT_READER).withTextSettings(),
         SettingInfo::Toggle(StrId::STR_EMBEDDED_STYLE, &CrossPointSettings::embeddedStyle, "embeddedStyle",
-                            StrId::STR_CAT_READER),
+                            StrId::STR_CAT_READER).withTextSettings(),
         SettingInfo::Toggle(StrId::STR_FOCUS_READING, &CrossPointSettings::focusReadingEnabled, "focusReadingEnabled",
-                            StrId::STR_CAT_READER),
+                            StrId::STR_CAT_READER).withTextSettings(),
         SettingInfo::Toggle(StrId::STR_HYPHENATION, &CrossPointSettings::hyphenationEnabled, "hyphenationEnabled",
-                            StrId::STR_CAT_READER),
+                            StrId::STR_CAT_READER).withTextSettings(),
         SettingInfo::Enum(
             StrId::STR_ORIENTATION, &CrossPointSettings::orientation,
             {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW},
             "orientation", StrId::STR_CAT_READER),
         SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &CrossPointSettings::extraParagraphSpacing,
-                            "extraParagraphSpacing", StrId::STR_CAT_READER),
+                            "extraParagraphSpacing", StrId::STR_CAT_READER).withTextSettings(),
         SettingInfo::Toggle(StrId::STR_TEXT_AA, &CrossPointSettings::textAntiAliasing, "textAntiAliasing",
-                            StrId::STR_CAT_READER),
+                            StrId::STR_CAT_READER).withTextSettings(),
         SettingInfo::Enum(StrId::STR_IMAGES, &CrossPointSettings::imageRendering,
                           {StrId::STR_IMAGES_DISPLAY, StrId::STR_IMAGES_PLACEHOLDER, StrId::STR_IMAGES_SUPPRESS},
                           "imageRendering", StrId::STR_CAT_READER),
+        SettingInfo::Enum(StrId::STR_READER_MENU_STYLE, &CrossPointSettings::readerMenuStyle,
+                          {StrId::STR_MENU_STYLE_LIST, StrId::STR_MENU_STYLE_TOOLBAR}, "readerMenuStyle",
+                          StrId::STR_CAT_READER),
         // --- Controls ---
         SettingInfo::Enum(StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
                           {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED}, "sideButtonLayout",
@@ -193,7 +233,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                            StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
                           "longPressButtonBehavior", StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(StrId::STR_LONG_PRESS_MENU, &CrossPointSettings::longPressMenuFunction,
-                          {StrId::STR_KOSYNC, StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION}, "longPressMenuFunction",
+                          {StrId::STR_KOSYNC, StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION, StrId::STR_DICTIONARY,
+                           StrId::STR_READER_MENU}, "longPressMenuFunction",
                           StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(
             StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
@@ -308,6 +349,16 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     if (it != v.end()) {
       *it = buildFontFamilySetting(registry);
     }
+  }
+  auto dictIt = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) {
+    return s.nameId == StrId::STR_DICTIONARY && s.category == StrId::STR_CAT_READER;
+  });
+  if (dictIt == v.end()) {
+    auto imageIt = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) {
+      return s.nameId == StrId::STR_IMAGES && s.category == StrId::STR_CAT_READER;
+    });
+    const auto insertAt = imageIt == v.end() ? v.end() : imageIt + 1;
+    v.insert(insertAt, buildDictionarySetting(dictionaries));
   }
   return v;
 }

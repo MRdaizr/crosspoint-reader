@@ -115,9 +115,23 @@ class OptionPopup {
   }
 
   bool processRender(GfxRenderer& renderer, const MappedInputManager& input) const {
+    return processRenderImpl(renderer, input, true, true);
+  }
+
+  // Render the popup over an already painted page. ReaderToolbarUi uses this
+  // path so a point-size/line-spacing picker does not clear the EPUB page
+  // beneath the bottom sheet. The caller owns the final refresh because it may
+  // need to composite other overlay controls in the same frame.
+  bool processRenderOverlay(GfxRenderer& renderer, const MappedInputManager& input) const {
+    return processRenderImpl(renderer, input, false, false);
+  }
+
+ private:
+  bool processRenderImpl(GfxRenderer& renderer, const MappedInputManager& input, const bool clearBeforeDraw,
+                         const bool refreshDisplay) const {
     if (!active_) return false;
 
-    renderer.clearScreen();
+    if (clearBeforeDraw) renderer.clearScreen();
     const int screenWidth = renderer.getScreenWidth();
     const int screenHeight = renderer.getScreenHeight();
     const int rowHeight = renderer.getLineHeight(UI_10_FONT_ID) + 16;
@@ -138,11 +152,17 @@ class OptionPopup {
 
     const auto labels = input.mapLabels(tr(STR_BACK), tr(STR_SELECT), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-    renderer.displayBuffer();
+    if (refreshDisplay) renderer.displayBuffer();
     return true;
   }
 
+ public:
   bool isActive() const { return active_; }
+  void dismiss() {
+    active_ = false;
+    ignoreInitialConfirmRelease_ = false;
+    onSelect_ = nullptr;
+  }
 
  private:
   void finishShow(const int currentIndex, std::function<void(int)> onSelect) {
