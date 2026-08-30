@@ -8,7 +8,6 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
-#include <JsonSettingsIO.h>
 #include <Logging.h>
 #include <Memory.h>
 #include <esp_system.h>
@@ -41,6 +40,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookmarkUtil.h"
+#include "util/BookmarkFile.h"
 #include "util/AchievementPopupUtils.h"
 #include "util/ScreenshotUtil.h"
 
@@ -1282,11 +1282,8 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       }
 
       if (!loadedPartial && canPreviewBeforeFullBuild && previewPageNumber >= 0) {
-        auto previewPage = section->buildPagePreview(
-            SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
-            SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
-            SETTINGS.embeddedStyle, SETTINGS.imageRendering, SETTINGS.focusReadingEnabled,
-            static_cast<uint16_t>(previewPageNumber));
+        const ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+        auto previewPage = section->loadPageDuringBuild(renderSpec, static_cast<uint16_t>(previewPageNumber));
         if (previewPage) {
           section->currentPage = previewPageNumber;
           if (cachedChapterTotalPageCount > 0) {
@@ -2027,13 +2024,7 @@ void EpubReaderActivity::loadCachedBookmarks() {
     return;
   }
 
-  const std::string bmPath = BookmarkUtil::getBookmarkPath(epub->getPath());
-  if (Storage.exists(bmPath.c_str())) {
-    String json = Storage.readFile(bmPath.c_str());
-    if (!json.isEmpty()) {
-      JsonSettingsIO::loadBookmarks(cachedBookmarks, json.c_str());
-    }
-  }
+  BookmarkFile::load(epub->getPath(), cachedBookmarks);
   updateBookmarkFlag();
 }
 
@@ -2083,12 +2074,9 @@ void EpubReaderActivity::addBookmark() {
     currentPageBookmarked = true;
   }
 
-  const std::string path = BookmarkUtil::getBookmarkPath(epub->getPath());
-  const std::string bookmarksDir = BookmarkUtil::getBookmarksDir();
-  Storage.mkdir(bookmarksDir.c_str());
-  const bool ok = JsonSettingsIO::saveBookmarks(cachedBookmarks, path.c_str());
+  const bool ok = BookmarkFile::save(epub->getPath(), cachedBookmarks);
   if (!ok) {
-    LOG_ERR("ERS", "Failed to save bookmarks to: %s", path.c_str());
+    LOG_ERR("ERS", "Failed to save bookmarks for: %s", epub->getPath().c_str());
   }
   requestUpdate();
 }
