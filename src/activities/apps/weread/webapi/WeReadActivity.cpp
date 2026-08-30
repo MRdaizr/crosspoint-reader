@@ -601,7 +601,7 @@ void WeReadActivity::onFuiAction(const fui::ActionEvent& event, void* user) {
     const auto action = static_cast<DetailAction>(event.value);
     if (!self->detailActionEnabled(action)) return;
     self->detailSelected_.store(event.value);
-    self->fuiDetailNav_.selected = event.value - 1;
+    self->fuiDetailNav_.selected = self->detailActionRow(action);
     self->app.clearTapFlash();
     self->activateDetailSelection();
   }
@@ -706,8 +706,9 @@ void WeReadActivity::buildFuiScreen(UiScreen& screen) {
     fuiDetailItems_[i] = {};
     fuiDetailItems_[i].label = labels[i];
     fuiDetailItems_[i].value = values[i];
-    fuiDetailItems_[i].actionValue = static_cast<int16_t>(i + 1);
-    fuiDetailItems_[i].enabled = i != 0 || cached;
+    const auto action = detailActionForRow(i);
+    fuiDetailItems_[i].actionValue = static_cast<int16_t>(action);
+    fuiDetailItems_[i].enabled = detailActionEnabled(action);
   }
   fuiDetailProps_ = {};
   fuiDetailProps_.items = fuiDetailItems_;
@@ -744,17 +745,16 @@ void WeReadActivity::buildFuiScreen(UiScreen& screen) {
   detailRowStyles.disabled = detailRowStyles.normal;
   fuiDetailProps_.rowStyles = detailRowStyles;
   const int selected = detailSelected_.load();
-  fuiDetailProps_.selectedIndex = selected >= static_cast<int>(DetailAction::Read)
-                                      ? static_cast<int16_t>(selected - 1)
-                                      : -1;
+  const int selectedRow = detailActionRow(static_cast<DetailAction>(selected));
+  fuiDetailProps_.selectedIndex = selectedRow >= 0 ? static_cast<int16_t>(selectedRow) : -1;
   fuiDetailProps_.rowHeight = static_cast<int16_t>(metrics.listRowHeight);
   fuiDetailProps_.rowGap = static_cast<int16_t>(metrics.listRowGap);
-  fuiDetailNav_.selected = std::clamp(selected - 1, 0, kDetailListActionCount - 1);
+  fuiDetailNav_.selected = std::clamp(selectedRow >= 0 ? selectedRow : 0, 0, kDetailListActionCount - 1);
   fuiDetailNav_.syncToProps(screen.body(), fuiDetailProps_.rowHeight, fuiDetailProps_.rowGap,
                             kDetailListActionCount, fuiDetailProps_);
   // Introduction is drawn above this list and uses its own selection marker;
   // keep every action row unselected while that entry is active.
-  if (selected < static_cast<int>(DetailAction::Read)) fuiDetailProps_.selectedIndex = -1;
+  if (selectedRow < 0) fuiDetailProps_.selectedIndex = -1;
   screen.list(fuiDetailProps_);
 }
 
@@ -1319,17 +1319,48 @@ bool WeReadActivity::detailActionEnabled(const DetailAction action) const {
   return false;
 }
 
+WeReadActivity::DetailAction WeReadActivity::detailActionForRow(const int row) {
+  // The visual order intentionally puts "Cache" before "Browse", while the
+  // enum follows the historical activation order. Keep this mapping in one
+  // place so FUI, the legacy selection repaint, and button navigation cannot
+  // disagree about which label belongs to each row.
+  switch (row) {
+    case 0:
+      return DetailAction::Read;
+    case 1:
+      return DetailAction::Cache;
+    case 2:
+      return DetailAction::Browse;
+    case 3:
+      return DetailAction::Images;
+    default:
+      return DetailAction::Read;
+  }
+}
+
+int WeReadActivity::detailActionRow(const DetailAction action) {
+  for (int row = 0; row < kDetailListActionCount; ++row) {
+    if (detailActionForRow(row) == action) return row;
+  }
+  return -1;
+}
+
 void WeReadActivity::moveDetailSelection(const int direction) {
-  int selection = detailSelected_.load();
+  const auto currentAction = static_cast<DetailAction>(detailSelected_.load());
+  int row = detailActionRow(currentAction);
+  // Introduction is drawn above the list and has no list row. Moving down
+  // from it enters the first visible action; moving up wraps to the last.
+  if (row < 0) row = direction > 0 ? kDetailListActionCount - 1 : 0;
   for (int i = 0; i < kDetailActionCount; ++i) {
-    selection = direction > 0 ? ButtonNavigator::nextIndex(selection, kDetailActionCount)
-                              : ButtonNavigator::previousIndex(selection, kDetailActionCount);
-    if (detailActionEnabled(static_cast<DetailAction>(selection))) {
-      detailSelected_.store(selection);
+    row = direction > 0 ? ButtonNavigator::nextIndex(row, kDetailListActionCount)
+                        : ButtonNavigator::previousIndex(row, kDetailListActionCount);
+    const auto action = detailActionForRow(row);
+    if (detailActionEnabled(action)) {
+      detailSelected_.store(static_cast<int>(action));
       return;
     }
   }
-  detailSelected_.store(selection);
+  detailSelected_.store(static_cast<int>(detailActionForRow(row)));
 }
 
 void WeReadActivity::activateDetailSelection() {
@@ -2529,7 +2560,7 @@ void WeReadActivity::drawDetailActions(const Rect& actions, const int selectedIn
   constexpr int kMinTitleWidth = 40;
   const int actionsBottom = actions.y + std::max(0, actions.height);
   for (int index = 0; index < kDetailListActionCount; ++index) {
-    const auto action = static_cast<DetailAction>(index + 1);
+    const auto action = detailActionForRow(index);
     const bool selected = selectedIndex == static_cast<int>(action);
     const int y = actions.y + index * (rowHeight + rowGap);
     if (y >= actionsBottom) break;

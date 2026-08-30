@@ -168,6 +168,8 @@ class WeReadActivity final : public Activity, private UiAppHost {
   void activateSelected();
   void openSelectedDetail(const WeReadStore::ShelfRecord& book);
   void loadSelectedDetail(bool preserveUi = false);
+  static DetailAction detailActionForRow(int row);
+  static int detailActionRow(DetailAction action);
   bool detailActionEnabled(DetailAction action) const;
   void moveDetailSelection(int direction);
   void activateDetailSelection();
