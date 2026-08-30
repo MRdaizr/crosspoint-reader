@@ -4,6 +4,32 @@
 #include <Logging.h>
 
 #include "CrossPointSettings.h"
+#include "fontIds.h"
+
+namespace {
+
+struct UiFontSize {
+  int fontId;
+  uint8_t pointSize;
+};
+
+// These point sizes match the generated UI faces in fontIds.h.  Keep this
+// table separate from the reader font-size enum: an SD family may provide a
+// different set of reader sizes, while UI fallback must remain size-matched.
+constexpr UiFontSize UI_FALLBACK_SIZES[] = {
+    {SMALL_FONT_ID, 8},
+    {UI_10_FONT_ID, 10},
+    {UI_12_FONT_ID, 12},
+};
+
+constexpr uint32_t CJK_PROBES[] = {
+    0x4E00,  // Han
+    0x3042,  // Hiragana
+    0x30A2,  // Katakana
+    0xAC00,  // Hangul
+};
+
+}  // namespace
 
 namespace {
 
@@ -30,6 +56,7 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
     const auto* family = registry_.findFamily(SETTINGS.sdFontFamilyName);
     if (family) {
       if (manager_.loadFamily(*family, renderer, fontSizeEnumFromSettings())) {
+        setupUiFallbacks(renderer);
         LOG_INF("SDFS", "Loaded SD card font family: %s (fontId=%d, size=%u)", SETTINGS.sdFontFamilyName,
                 manager_.getLoadedFontId(), manager_.currentPointSize());
       } else {
@@ -95,6 +122,7 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
   const auto* family = registry_.findFamily(wantedFamily);
   if (family) {
     if (manager_.loadFamily(*family, renderer, sizeEnum)) {
+      setupUiFallbacks(renderer);
       LOG_INF("SDFS", "Loaded SD card font family: %s (fontId=%d, size=%u)", wantedFamily,
               manager_.getLoadedFontId(), manager_.currentPointSize());
     } else {
@@ -104,6 +132,43 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
   } else {
     LOG_ERR("SDFS", "SD font family not found: %s (clearing)", wantedFamily);
     SETTINGS.sdFontFamilyName[0] = '\0';
+  }
+}
+
+void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {
+  const std::string& familyName = manager_.currentFamilyName();
+  if (familyName.empty()) return;
+
+  const auto* family = registry_.findFamily(familyName);
+  if (family == nullptr) return;
+
+  // Avoid loading several extra UI-size files for a Latin-only family. The
+  // coverage query is RAM-only even though the loaded SD font keeps only a
+  // page-sized glyph interval table resident.
+  const int readerFontId = manager_.getLoadedFontId();
+  const auto readerIt = renderer.getFontMap().find(readerFontId);
+  if (readerIt == renderer.getFontMap().end()) return;
+
+  bool hasCjk = false;
+  for (const uint32_t cp : CJK_PROBES) {
+    if (readerIt->second.hasCodepoint(cp)) {
+      hasCjk = true;
+      break;
+    }
+  }
+  if (!hasCjk) {
+    LOG_DBG("SDFS", "%s has no CJK coverage; skipping UI fallback sizes", familyName.c_str());
+    return;
+  }
+
+  for (const auto& ui : UI_FALLBACK_SIZES) {
+    const int sdFontId = manager_.loadFamilyExtraSize(*family, renderer, ui.pointSize);
+    if (sdFontId != 0) {
+      renderer.setFallbackFont(ui.fontId, sdFontId);
+      LOG_DBG("SDFS", "UI fallback font %d -> SD %d (%u pt)", ui.fontId, sdFontId, ui.pointSize);
+    } else {
+      LOG_DBG("SDFS", "No %u pt SD glyphs for UI fallback in %s", ui.pointSize, familyName.c_str());
+    }
   }
 }
 

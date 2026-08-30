@@ -12,6 +12,12 @@ class EpdFont {
 
   const EpdGlyph* getGlyph(uint32_t cp) const;
 
+  /// Returns true when this font contains a glyph for cp. Unlike getGlyph(),
+  /// this never loads data or falls back to the replacement glyph. SD-card
+  /// fonts use their in-memory coverage callback when cp is outside the
+  /// currently resident mini interval table.
+  bool hasCodepoint(uint32_t cp) const;
+
   /// Returns the kerning adjustment (4.4 fixed-point in pixels) between two codepoints.
   /// Returns 0 if no kerning data exists for the pair.
   int8_t getKerning(uint32_t leftCp, uint32_t rightCp) const;

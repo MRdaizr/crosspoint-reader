@@ -101,6 +101,94 @@ void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
   }
 }
 
+namespace {
+
+bool isCjkFallbackCodepoint(const uint32_t cp) {
+  // utf8IsCjkBreakable covers the normal Han/kana/Hangul/fullwidth ranges.
+  // Keep the phonetic extensions and the remaining CJK compatibility range in
+  // the fallback decision too; these are common in Japanese UI strings but are
+  // not line-break opportunities in every layout context.
+  return utf8IsCjkBreakable(cp) || (cp >= 0x31F0 && cp <= 0x31FF) ||
+         (cp >= 0x2E80 && cp <= 0x2FFF) || (cp >= 0x2F800 && cp <= 0x2FA1F);
+}
+
+}  // namespace
+
+int GfxRenderer::resolveTextFontId(const int fontId, const char* text,
+                                   const EpdFontFamily::Style style) const {
+  if (text == nullptr || *text == '\0' || fallbackFontMap_.empty()) return fontId;
+
+  const auto fallbackIt = fallbackFontMap_.find(fontId);
+  if (fallbackIt == fallbackFontMap_.end() || fallbackIt->second == fontId) return fontId;
+
+  const auto primaryIt = fontMap.find(fontId);
+  const auto fallbackFamilyIt = fontMap.find(fallbackIt->second);
+  if (primaryIt == fontMap.end() || fallbackFamilyIt == fontMap.end()) return fontId;
+
+  const EpdFontFamily& primary = primaryIt->second;
+  const EpdFontFamily& fallback = fallbackFamilyIt->second;
+  const unsigned char* cursor = reinterpret_cast<const unsigned char*>(text);
+  while (true) {
+    const uint32_t cp = utf8NextCodepoint(&cursor);
+    if (cp == 0) break;
+
+    // Route the complete string to the fallback only when both sides can
+    // render the codepoint.  This keeps Latin-only labels on the built-in
+    // font and avoids replacing a missing CJK glyph with a fallback that does
+    // not actually contain it.
+    if (isCjkFallbackCodepoint(cp) && !primary.hasCodepoint(cp, style) && fallback.hasCodepoint(cp, style)) {
+      return fallbackIt->second;
+    }
+  }
+  return fontId;
+}
+
+void GfxRenderer::ensureSdGlyphsResident(const int fontId, const char* text,
+                                         const EpdFontFamily::Style style, const bool metadataOnly) const {
+  if (text == nullptr || *text == '\0') return;
+
+  const auto sdIt = sdCardFonts_.find(fontId);
+  if (sdIt == sdCardFonts_.end() || sdIt->second == nullptr) return;
+
+  const uint8_t styleMask = static_cast<uint8_t>(1u << (static_cast<uint8_t>(style) & 0x03));
+  const int missed = sdIt->second->prewarm(text, styleMask, metadataOnly);
+  if (missed > 0) {
+    LOG_DBG("GFX", "Fallback prewarm missed %d glyph(s) for font %d", missed, fontId);
+  }
+}
+
+void GfxRenderer::prewarmFallbackText(const int fontId, const TextGetter getter, const void* ctx,
+                                      const uint32_t textCount, const EpdFontFamily::Style style) const {
+  // The getter may legitimately use a null context (for example, a static
+  // table of translated labels), so only the callback and count are required.
+  if (getter == nullptr || textCount == 0) return;
+
+  int fallbackFontId = fontId;
+  for (uint32_t i = 0; i < textCount; ++i) {
+    const char* text = getter(ctx, i);
+    if (text == nullptr || *text == '\0') continue;
+    fallbackFontId = resolveTextFontId(fontId, text, style);
+    if (fallbackFontId != fontId) break;
+  }
+  if (fallbackFontId == fontId) return;
+
+  const auto sdIt = sdCardFonts_.find(fallbackFontId);
+  if (sdIt == sdCardFonts_.end() || sdIt->second == nullptr) return;
+
+  const uint8_t styleMask = static_cast<uint8_t>(1u << (static_cast<uint8_t>(style) & 0x03));
+  const int missed = sdIt->second->prewarm(getter, ctx, textCount, styleMask, false);
+  if (missed > 0) {
+    LOG_DBG("GFX", "Fallback batch prewarm missed %d glyph(s) for font %d", missed, fallbackFontId);
+  }
+}
+
+void GfxRenderer::prewarmFallbackText(const int fontId, const char* text,
+                                      const EpdFontFamily::Style style) const {
+  if (text == nullptr || *text == '\0') return;
+  const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  if (resolvedFontId != fontId) ensureSdGlyphsResident(resolvedFontId, text, style, false);
+}
+
 // Translate logical (x,y) coordinates to physical panel coordinates based on current orientation
 // This should always be inlined for better performance
 static inline void rotateCoordinates(const GfxRenderer::Orientation orientation, const int x, const int y, int* phyX,
@@ -403,14 +491,22 @@ int GfxRenderer::getTextWidth(const int fontId, const char* text, const EpdFontF
     return 0;
   }
 
-  const auto fontIt = fontMap.find(fontId);
+  const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) {
-    LOG_ERR("GFX", "Font %d not found", fontId);
+    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
     return 0;
   }
 
   std::string visual;
   const char* renderedText = resolveVisualText(text, visual, baseDir);
+
+  // Layout must see the same resident SD glyphs that drawText() will use.
+  // Without this metadata prewarm, a CJK label can fault one glyph at a time
+  // through the eight-entry overflow ring while it is being measured.
+  if (resolvedFontId != fontId) {
+    ensureSdGlyphsResident(resolvedFontId, renderedText, style, true);
+  }
 
   int w = 0, h = 0;
   fontIt->second.getTextDimensions(renderedText, &w, &h, style);
@@ -430,10 +526,17 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
     return;
   }
 
+  const int resolvedFontId = resolveTextFontId(fontId, text, style);
   std::string visual;
   const char* renderedText = resolveVisualText(text, visual, baseDir);
 
-  const int yPos = y + getFontAscenderSize(fontId);
+  // Keep the fallback's baseline inside the row box established by the
+  // requested UI font.  Size-matched fallback files normally make this a
+  // no-op, while differing files remain visually centered.
+  int yPos = y + getFontAscenderSize(resolvedFontId);
+  if (resolvedFontId != fontId) {
+    yPos += (getLineHeight(fontId) - getLineHeight(resolvedFontId)) / 2;
+  }
   int lastBaseX = x;
   int lastBaseLeft = 0;
   int lastBaseWidth = 0;
@@ -441,13 +544,17 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
   int32_t prevAdvanceFP = 0;  // 12.4 fixed-point: prev glyph's advance + next kern for snap
 
   if (fontCacheManager_ && fontCacheManager_->isScanning()) {
-    fontCacheManager_->recordText(renderedText, fontId, style);
+    fontCacheManager_->recordText(renderedText, resolvedFontId, style);
     return;
   }
 
-  const auto fontIt = fontMap.find(fontId);
+  if (resolvedFontId != fontId) {
+    ensureSdGlyphsResident(resolvedFontId, renderedText, style, false);
+  }
+
+  const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) {
-    LOG_ERR("GFX", "Font %d not found", fontId);
+    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
     return;
   }
   const auto& font = fontIt->second;
@@ -1739,17 +1846,21 @@ int GfxRenderer::getKerning(const int fontId, const uint32_t leftCp, const uint3
 }
 
 int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFamily::Style style) const {
+  if (text == nullptr || *text == '\0') return 0;
+
+  const int resolvedFontId = resolveTextFontId(fontId, text, style);
+
   // Advance table fast-path for SD card fonts during layout.
   // No kerning/ligature lookup — consistent with previous metadataOnly behavior
   // where kern/lig data was not loaded.
-  auto sdIt = sdCardFonts_.find(fontId);
+  auto sdIt = sdCardFonts_.find(resolvedFontId);
   if (sdIt != sdCardFonts_.end() && sdIt->second->hasAdvanceTable()) {
     int32_t widthFP = 0;
     const bool isSupSub = (style & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0;
     const uint8_t styleIdx = resolveSdCardStyle(*sdIt->second, style);
-    const auto fontIt = fontMap.find(fontId);
+    const auto fontIt = fontMap.find(resolvedFontId);
     if (fontIt == fontMap.end()) {
-      LOG_ERR("GFX", "Font %d not found", fontId);
+      LOG_ERR("GFX", "Font %d not found", resolvedFontId);
       return 0;
     }
     const auto& font = fontIt->second;
@@ -1764,9 +1875,13 @@ int GfxRenderer::getTextAdvanceX(const int fontId, const char* text, EpdFontFami
     return fp4::toPixel(widthFP);
   }
 
-  const auto fontIt = fontMap.find(fontId);
+  if (resolvedFontId != fontId) {
+    ensureSdGlyphsResident(resolvedFontId, text, style, true);
+  }
+
+  const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) {
-    LOG_ERR("GFX", "Font %d not found", fontId);
+    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
     return 0;
   }
 
@@ -1835,9 +1950,14 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
     return;
   }
 
-  const auto fontIt = fontMap.find(fontId);
+  const int resolvedFontId = resolveTextFontId(fontId, text, style);
+  if (resolvedFontId != fontId) {
+    ensureSdGlyphsResident(resolvedFontId, text, style, false);
+  }
+
+  const auto fontIt = fontMap.find(resolvedFontId);
   if (fontIt == fontMap.end()) {
-    LOG_ERR("GFX", "Font %d not found", fontId);
+    LOG_ERR("GFX", "Font %d not found", resolvedFontId);
     return;
   }
 

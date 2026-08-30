@@ -53,6 +53,12 @@ class SdCardFontSystem {
   }
 
  private:
+  // Register size-matched SD fonts as CJK fallbacks for the built-in UI faces.
+  // The reader-size font remains the selected font for EPUB content; these
+  // additional files are only used when a UI string contains a glyph missing
+  // from the built-in face.
+  void setupUiFallbacks(GfxRenderer& renderer);
+
   SdCardFontRegistry registry_;
   SdCardFontManager manager_;
   std::atomic<bool> registryDirty_{false};

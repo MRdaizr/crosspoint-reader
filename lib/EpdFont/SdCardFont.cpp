@@ -415,6 +415,20 @@ void SdCardFont::applyGlyphMissCallback(uint8_t styleIdx) {
   auto& s = styles_[styleIdx];
   s.stubData.glyphMissHandler = &SdCardFont::onGlyphMiss;
   s.stubData.glyphMissCtx = &overflowCtx_[styleIdx];
+  s.stubData.coverageHandler = &SdCardFont::onCoverageQuery;
+}
+
+bool SdCardFont::onCoverageQuery(void* ctx, const uint32_t codepoint) {
+  const auto* overflowCtx = static_cast<const OverflowContext*>(ctx);
+  if (overflowCtx == nullptr || overflowCtx->self == nullptr || overflowCtx->styleIdx >= MAX_STYLES) {
+    return false;
+  }
+
+  const PerStyle& style = overflowCtx->self->styles_[overflowCtx->styleIdx];
+  if (!style.present || (style.fullIntervals == nullptr && style.bmpIntervals == nullptr)) {
+    return false;
+  }
+  return overflowCtx->self->findGlobalGlyphIndex(style, codepoint) >= 0;
 }
 
 // --- Compute per-style file offsets from a base data offset ---
@@ -1034,6 +1048,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   }
   s.miniData.glyphMissHandler = &SdCardFont::onGlyphMiss;
   s.miniData.glyphMissCtx = &overflowCtx_[styleIdx];
+  s.miniData.coverageHandler = &SdCardFont::onCoverageQuery;
 
   s.epdFont.data = &s.miniData;
 

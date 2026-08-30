@@ -58,6 +58,15 @@ class GfxRenderer {
   // fontCacheManager_ below.
   mutable std::map<int, SdCardFont*> sdCardFonts_;
 
+  // Size-matched fallback font ids for UI strings.  The primary id remains
+  // the one passed by callers; resolveTextFontId() redirects only when a
+  // string contains a CJK codepoint that the primary font does not cover.
+  std::map<int, int> fallbackFontMap_;
+
+  int resolveTextFontId(int fontId, const char* text, EpdFontFamily::Style style) const;
+  void ensureSdGlyphsResident(int fontId, const char* text, EpdFontFamily::Style style,
+                              bool metadataOnly) const;
+
   // Mutable because drawText() is const but needs to delegate scan-mode
   // recording to the (non-const) FontCacheManager. Same pragmatic compromise
   // as before, concentrated in a single pointer instead of four fields.
@@ -115,9 +124,26 @@ class GfxRenderer {
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
   void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }
   void unregisterSdCardFont(int fontId) { removeFont(fontId); }
-  void clearSdCardFonts() { sdCardFonts_.clear(); }
+  void clearSdCardFonts() {
+    sdCardFonts_.clear();
+    fallbackFontMap_.clear();
+  }
   const std::map<int, SdCardFont*>& getSdCardFonts() const { return sdCardFonts_; }
   bool isSdCardFont(int fontId) const { return sdCardFonts_.count(fontId) > 0; }
+
+  // Register a size-matched SD font for a built-in UI font.  Only CJK-bearing
+  // strings are redirected; Latin-only strings continue using the built-in
+  // face, preserving the existing UI metrics.
+  void setFallbackFont(int primaryFontId, int fallbackFontId) { fallbackFontMap_[primaryFontId] = fallbackFontId; }
+  void clearFallbackFonts() { fallbackFontMap_.clear(); }
+
+  using TextGetter = const char* (*)(const void* ctx, uint32_t index);
+  // Batch-prewarm fallback glyphs for a screenful of strings.  This avoids a
+  // per-glyph SD read through the small overflow ring during FUI redraws.
+  void prewarmFallbackText(int fontId, TextGetter getter, const void* ctx, uint32_t textCount,
+                           EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
+  void prewarmFallbackText(int fontId, const char* text,
+                           EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   // Ensure SD card font glyph data is loaded for the given text. Called from layout code
   // (which holds a const GfxRenderer&) before measuring word widths. Safe to call on non-SD fonts (no-op).
   // styleMask: bitmask of styles to prepare (bit 0=regular, 1=bold, 2=italic, 3=bold-italic).

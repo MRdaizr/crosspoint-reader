@@ -187,3 +187,20 @@ const EpdGlyph* EpdFont::getGlyph(const uint32_t cp) const {
   }
   return nullptr;
 }
+
+bool EpdFont::hasCodepoint(const uint32_t cp) const {
+  const int count = data->intervalCount;
+  if (count > 0 && data->intervals != nullptr) {
+    const EpdUnicodeInterval* intervals = data->intervals;
+    const auto* end = intervals + count;
+    const auto it = std::upper_bound(
+        intervals, end, cp, [](uint32_t value, const EpdUnicodeInterval& interval) { return value < interval.first; });
+    if (it != intervals && cp <= (it - 1)->last) {
+      return true;
+    }
+  }
+
+  // SD-card fonts expose their complete coverage index through this callback,
+  // while keeping only the current page's glyphs in data->intervals.
+  return data->coverageHandler != nullptr && data->coverageHandler(data->glyphMissCtx, cp);
+}
