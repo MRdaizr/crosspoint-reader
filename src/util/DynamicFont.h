@@ -48,6 +48,27 @@ inline int fontForCjkText(const GfxRenderer& renderer, const char* text, int fal
   return fallbackFontId;
 }
 
+// Resolve the currently selected SD-card font for a complete UI text run.
+// Unlike fontForCjkText(), this intentionally does not inspect the string:
+// file names and recent-book metadata use one shared FUI slot, so Latin-only
+// rows must use the same SD face as CJK rows.  Keeping this decision at the
+// activity boundary also avoids rebinding the slot while the list renderer is
+// measuring individual labels.
+inline int fontForSdCardText(const GfxRenderer& renderer, int fallbackFontId) {
+  sdFontSystem.ensureLoaded(const_cast<GfxRenderer&>(renderer));
+  const int sdFontId = sdFontSystem.currentFontId();
+  if (renderer.isSdCardFont(sdFontId)) {
+    return sdFontId;
+  }
+
+  static bool loggedMissingSdFont = false;
+  if (!loggedMissingSdFont) {
+    LOG_DBG("DFNT", "SD font text requested without a loaded SD font; falling back to built-in UI font");
+    loggedMissingSdFont = true;
+  }
+  return fallbackFontId;
+}
+
 inline void prewarmIfSdFont(const GfxRenderer& renderer, int fontId, const std::string& text, uint8_t styleMask = 0x01) {
   if (text.empty() || !renderer.isSdCardFont(fontId)) return;
   if (auto* fontCache = renderer.getFontCacheManager()) {

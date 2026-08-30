@@ -396,7 +396,8 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   // FUI's font fields are slots, while DynamicFont returns the concrete
   // GfxRenderer/SD-card font ID.  Start each build from the bundled UI faces;
-  // a CJK filename below will rebind the small slot to the selected SD font.
+  // the complete file list below will rebind the slots to the selected SD
+  // font when one is available, including Latin-only names.
   uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_SMALL, UI_10_FONT_ID);
   uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_BODY, UI_12_FONT_ID);
   const int pathFontId = DynamicFont::fontForCjkText(renderer, basepath.c_str(), SMALL_FONT_ID);
@@ -406,7 +407,7 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   if (files.empty()) {
     const char* emptyMessage = mode == Mode::PickFirmware ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND);
-    const int emptyFontId = DynamicFont::fontForCjkText(renderer, emptyMessage, UI_12_FONT_ID);
+    const int emptyFontId = DynamicFont::fontForSdCardText(renderer, UI_12_FONT_ID);
     uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_BODY, emptyFontId);
     fui::TextStyle emptyStyle = screen.theme().bodyText;
     emptyStyle.bold = !renderer.isSdCardFont(emptyFontId);
@@ -429,17 +430,9 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   }
 
   // A FUI list has one shared label slot.  Bind it to the selected SD face
-  // when any filename contains CJK so Chinese/Japanese/Korean names use the
-  // same dynamic fallback as the legacy browser.  English-only directories
-  // keep the bundled UI face and do not touch the SD glyph cache.
-  int listFontId = UI_10_FONT_ID;
-  for (const auto& label : rowLabels) {
-    const int candidate = DynamicFont::fontForCjkText(renderer, label.c_str(), UI_10_FONT_ID);
-    if (renderer.isSdCardFont(candidate)) {
-      listFontId = candidate;
-      break;
-    }
-  }
+  // for every row, not only when a filename contains CJK.  This keeps Latin,
+  // Chinese and mixed directories on the same dynamic font path.
+  const int listFontId = DynamicFont::fontForSdCardText(renderer, UI_10_FONT_ID);
   uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_SMALL, listFontId);
 
   fui::ListProps props;

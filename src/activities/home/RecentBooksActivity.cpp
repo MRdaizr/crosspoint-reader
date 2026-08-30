@@ -152,7 +152,7 @@ void RecentBooksActivity::buildScreen(UiScreen& screen) {
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   if (recentBooks.empty()) {
     const char* emptyMessage = tr(STR_NO_RECENT_BOOKS);
-    const int emptyFontId = DynamicFont::fontForCjkText(renderer, emptyMessage, UI_12_FONT_ID);
+    const int emptyFontId = DynamicFont::fontForSdCardText(renderer, UI_12_FONT_ID);
     uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_BODY, emptyFontId);
     fui::TextStyle emptyStyle = screen.theme().bodyText;
     emptyStyle.bold = !renderer.isSdCardFont(emptyFontId);
@@ -168,22 +168,10 @@ void RecentBooksActivity::buildScreen(UiScreen& screen) {
     item.actionValue = static_cast<int16_t>(i); item.icon = {}; rowItems.push_back(item);
   }
 
-  // Recent-book rows use the FUI small-text slot for both title and author.
-  // Select the SD face when either part contains CJK, matching the old GUI
-  // list's DynamicFont fallback without changing list navigation.
-  int listFontId = UI_10_FONT_ID;
-  for (size_t i = 0; i < recentBooks.size(); ++i) {
-    const int titleFontId = DynamicFont::fontForCjkText(renderer, rowLabels[i].c_str(), UI_10_FONT_ID);
-    if (renderer.isSdCardFont(titleFontId)) {
-      listFontId = titleFontId;
-      break;
-    }
-    const int authorFontId = DynamicFont::fontForCjkText(renderer, rowSubtitles[i].c_str(), UI_10_FONT_ID);
-    if (renderer.isSdCardFont(authorFontId)) {
-      listFontId = authorFontId;
-      break;
-    }
-  }
+  // Recent-book rows use one shared FUI small-text slot for both title and
+  // author.  Select the SD face for every row so English-only books and CJK
+  // books follow the same dynamic-font path.
+  const int listFontId = DynamicFont::fontForSdCardText(renderer, UI_10_FONT_ID);
   const bool usingSdFont = renderer.isSdCardFont(listFontId);
   uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_SMALL, listFontId);
 
