@@ -165,6 +165,16 @@ void SdCardFont::applyKernLigaturePointers(PerStyle& s, EpdFontData& data) const
   // kern matrix is never resident — see PerStyle::miniKernMatrix comment.
   data.kernLeftClasses = s.miniKernLeftClasses;
   data.kernRightClasses = s.miniKernRightClasses;
+  // SD-card fonts use the packed class maps and dense matrix from the .cpfont file.
+  // Clear the built-in-only representation explicitly because this EpdFontData is reused
+  // across cache rebuilds.
+  data.kernLeftCodepoints = nullptr;
+  data.kernLeftClassIds = nullptr;
+  data.kernRightCodepoints = nullptr;
+  data.kernRightClassIds = nullptr;
+  data.kernRowOffsets = nullptr;
+  data.kernSparseCols = nullptr;
+  data.kernSparseValues = nullptr;
   data.kernMatrix = s.miniKernMatrix;
   data.kernLeftEntryCount = s.miniKernLeftEntryCount;
   data.kernRightEntryCount = s.miniKernRightEntryCount;

@@ -3,7 +3,7 @@
  * name: ubuntu_10_bold
  * size: 10
  * mode: 1-bit
- * Command used: lib/EpdFont/scripts/fontconvert.py ubuntu_10_bold 10 lib/EpdFont/builtinFonts/source/Ubuntu/Ubuntu-Bold.ttf C:/Windows/Fonts/NotoSansSC-VF.ttf C:/Windows/Fonts/NotoSansJP-VF.ttf --additional-characters lib/EpdFont/scripts/ui_zh_cn_chars.txt --additional-characters lib/EpdFont/scripts/ui_ja_chars.txt --exclude-intervals 0x0590,0x05FF --exclude-intervals 0x01A0,0x01A1 --exclude-intervals 0x01AF,0x01B0 --exclude-intervals 0x1EA0,0x1EF9 --additional-intervals 0x3000,0x303F --additional-intervals 0x3040,0x309F --additional-intervals 0x30A0,0x30FF --additional-intervals 0x31F0,0x31FF --additional-intervals 0xFF00,0xFFEF
+ * Command used: fontconvert.py ubuntu_10_bold 10 ../builtinFonts/source/Ubuntu/Ubuntu-Bold.ttf ../../../../NotoSansSC-VF.ttf C:/Windows/Fonts/NotoSansJP-VF.ttf --exclude-intervals 0x0590,0x05FF --exclude-intervals 0x01A0,0x01A1 --exclude-intervals 0x01AF,0x01B0 --exclude-intervals 0x1EA0,0x1EF9 --additional-characters ui_zh_cn_chars.txt --additional-characters ui_ja_chars.txt --additional-intervals 0x3000,0x303F --additional-intervals 0x3040,0x309F --additional-intervals 0x30A0,0x30FF --additional-intervals 0x31F0,0x31FF --additional-intervals 0xFF00,0xFFEF
  */
 #pragma once
 #include "EpdFontData.h"
@@ -6675,6 +6675,13 @@ static const EpdFontData ubuntu_10_bold = {
     false,
     nullptr,
     0,
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
+    nullptr,
     nullptr,
     nullptr,
     nullptr,

@@ -122,7 +122,21 @@ typedef struct {
   const uint16_t* glyphToGroup;               ///< Per-glyph group ID (nullptr for contiguous-group fonts)
   const EpdKernClassEntry* kernLeftClasses;   ///< Sorted left-side class map (nullptr if none)
   const EpdKernClassEntry* kernRightClasses;  ///< Sorted right-side class map (nullptr if none)
-  const int8_t* kernMatrix;              ///< Flat leftClassCount x rightClassCount matrix, 4.4 fixed-point in pixels
+  // Built-in fonts use split class maps: the codepoints are searched separately from the
+  // class-id payload, so the binary search reads a naturally aligned uint16_t array instead
+  // of packed 3-byte records. SD-card fonts keep the packed representation above because it
+  // is mapped directly from the .cpfont file.
+  const uint16_t* kernLeftCodepoints;    ///< Split left-side codepoints (nullptr for packed maps)
+  const uint8_t* kernLeftClassIds;      ///< Class IDs parallel to kernLeftCodepoints
+  const uint16_t* kernRightCodepoints;  ///< Split right-side codepoints (nullptr for packed maps)
+  const uint8_t* kernRightClassIds;     ///< Class IDs parallel to kernRightCodepoints
+  const int8_t* kernMatrix;              ///< Dense matrix, used by SD-card fonts
+  // Built-in fonts use sparse CSR kerning instead of the overwhelmingly-zero dense matrix.
+  // kernRowOffsets has kernLeftClassCount + 1 entries; each row's columns and values occupy
+  // [kernRowOffsets[row], kernRowOffsets[row + 1]) and are sorted by column.
+  const uint16_t* kernRowOffsets;        ///< Sparse row offsets (nullptr for dense matrices)
+  const uint8_t* kernSparseCols;         ///< 0-based right-class IDs for sparse entries
+  const int8_t* kernSparseValues;        ///< 4.4 fixed-point values for sparse entries
   uint16_t kernLeftEntryCount;           ///< Entries in kernLeftClasses
   uint16_t kernRightEntryCount;          ///< Entries in kernRightClasses
   uint8_t kernLeftClassCount;            ///< Number of distinct left classes (matrix rows)
