@@ -182,6 +182,13 @@ void RecentBooksActivity::buildScreen(UiScreen& screen) {
   props.inputMask = fui::InputTouch | fui::InputLongPress;
   props.subtitleText = screen.theme().smallText; props.subtitleText.maxLines = 1;
   fui::TextStyle label = screen.theme().smallText;
+  // FreeInkApp treats an all-default TextStyle as "unset" and substitutes
+  // bodyText.  With an SD font, a regular (non-bold) small-text label would
+  // otherwise look default and silently move from FONT_SMALL (the SD face)
+  // to FONT_BODY (the bundled UI face), which drops CJK glyphs.  maxLines=0
+  // still renders as one line in GfxRendererTarget, but marks this style as
+  // caller-owned so the small-font slot remains authoritative.
+  label.maxLines = 0;
   label.bold = !usingSdFont;
   props.labelText = label;
   syncListViewport(screen, props, true);
