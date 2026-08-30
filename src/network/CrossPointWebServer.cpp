@@ -1185,7 +1185,7 @@ void CrossPointWebServer::handleSettingsPage() const {
 void CrossPointWebServer::handleGetSettings() const {
   // Pass the SD font registry so the fontFamily setting's enumStringValues
   // includes SD-resident families — otherwise the web API only exposes the
-  // three built-in fonts.
+  // built-in fonts plus any SD-card families.
   const auto& settings = getSettingsList(&sdFontSystem.registry());
 
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -1216,7 +1216,10 @@ void CrossPointWebServer::handleGetSettings() const {
       case SettingType::ENUM: {
         doc["type"] = "enum";
         if (s.valuePtr) {
-          doc["value"] = static_cast<int>(SETTINGS.*(s.valuePtr));
+          const uint8_t value = s.nameId == StrId::STR_FONT_FAMILY
+                                    ? CrossPointSettings::normalizeBuiltinFontFamily(SETTINGS.*(s.valuePtr))
+                                    : SETTINGS.*(s.valuePtr);
+          doc["value"] = static_cast<int>(value);
         } else if (s.valueGetter) {
           doc["value"] = static_cast<int>(s.valueGetter());
         }

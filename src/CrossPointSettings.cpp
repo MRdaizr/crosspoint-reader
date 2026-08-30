@@ -284,6 +284,13 @@ bool CrossPointSettings::loadFromBinaryFile() {
     applyLegacyFrontButtonLayout(*this);
   }
 
+#ifdef OMIT_FONTS
+  // The binary format predates the slim profile.  Preserve the file layout,
+  // but never carry an omitted built-in font into the runtime.
+  fontFamily = NOTOSERIF;
+  if (sdFontFamilyName[0] == '\0') fontPointSize = DEFAULT_FONT_POINT_SIZE;
+#endif
+
   LOG_DBG("CPS", "Settings loaded from binary file");
   return true;
 }
@@ -304,7 +311,8 @@ float CrossPointSettings::getReaderLineCompression() const {
     }
   }
 
-  switch (fontFamily) {
+  const bool sans = fontFamily == NOTOSANS && isBuiltinFontFamilyAvailable(fontFamily);
+  switch (sans ? NOTOSANS : NOTOSERIF) {
     case NOTOSERIF:
     default:
       switch (lineSpacing) {
@@ -394,6 +402,12 @@ int CrossPointSettings::getReaderFontId() const {
     // Fall through to built-in if SD font not found
   }
 
+#ifdef OMIT_FONTS
+  // A stale NotoSans/12/16/18 value can exist in an older settings file, but
+  // those font arrays are not linked in a slim build.  A valid SD font still
+  // wins above; otherwise use the one retained built-in reader font.
+  return NOTOSERIF_14_FONT_ID;
+#else
   const uint8_t pt = snapToNearestPointSize(BUILTIN_READER_POINT_SIZES,
                                             std::size(BUILTIN_READER_POINT_SIZES), fontPointSize);
   const bool sans = fontFamily == NOTOSANS;
@@ -408,4 +422,5 @@ int CrossPointSettings::getReaderFontId() const {
     default:
       return sans ? NOTOSANS_14_FONT_ID : NOTOSERIF_14_FONT_ID;
   }
+#endif
 }

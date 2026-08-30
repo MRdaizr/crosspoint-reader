@@ -33,10 +33,10 @@ int findCurrentFontIndex(const SdCardFontRegistry* registry, const char* sdFamil
   if (registry && sdFamilyName && sdFamilyName[0] != '\0') {
     const auto& families = registry->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); ++i) {
-      if (families[i].name == sdFamilyName) return CrossPointSettings::BUILTIN_FONT_COUNT + i;
+      if (families[i].name == sdFamilyName) return CrossPointSettings::BUILTIN_FONT_OPTION_COUNT + i;
     }
   }
-  return fontFamily < CrossPointSettings::BUILTIN_FONT_COUNT ? fontFamily : 0;
+  return CrossPointSettings::normalizeBuiltinFontFamily(fontFamily);
 }
 }  // namespace
 
@@ -55,13 +55,16 @@ void TextSettingsActivity::onEnter() {
   previewHeight = usableHeight * metrics_.previewHeightPercent / 100;
 
   fonts_.clear();
-  fonts_.reserve(CrossPointSettings::BUILTIN_FONT_COUNT + (registry_ ? registry_->getFamilyCount() : 0));
+  fonts_.reserve(CrossPointSettings::BUILTIN_FONT_OPTION_COUNT + (registry_ ? registry_->getFamilyCount() : 0));
   fonts_.push_back({I18N.get(StrId::STR_NOTO_SERIF), true, static_cast<uint8_t>(CrossPointSettings::NOTOSERIF)});
+#ifndef OMIT_FONTS
   fonts_.push_back({I18N.get(StrId::STR_NOTO_SANS), true, static_cast<uint8_t>(CrossPointSettings::NOTOSANS)});
+#endif
   if (registry_) {
     for (const auto& family : registry_->getFamilies()) {
       fonts_.push_back({family.name, false,
-                        static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + (&family - registry_->getFamilies().data()))});
+                        static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_OPTION_COUNT +
+                                             (&family - registry_->getFamilies().data()))});
     }
   }
   currentFamilyIndex_ = findCurrentFontIndex(registry_, SETTINGS.sdFontFamilyName, SETTINGS.fontFamily);
@@ -195,10 +198,10 @@ void TextSettingsActivity::applyFamily(const int index) {
   RenderLock lock;
   const auto& font = fonts_[index];
   if (font.isBuiltin) {
-    SETTINGS.fontFamily = font.settingIndex;
+    SETTINGS.fontFamily = CrossPointSettings::normalizeBuiltinFontFamily(font.settingIndex);
     SETTINGS.sdFontFamilyName[0] = '\0';
   } else if (registry_) {
-    const int sdIndex = font.settingIndex - CrossPointSettings::BUILTIN_FONT_COUNT;
+    const int sdIndex = font.settingIndex - CrossPointSettings::BUILTIN_FONT_OPTION_COUNT;
     const auto& families = registry_->getFamilies();
     if (sdIndex < 0 || sdIndex >= static_cast<int>(families.size())) return;
     strncpy(SETTINGS.sdFontFamilyName, families[sdIndex].name.c_str(), sizeof(SETTINGS.sdFontFamilyName) - 1);

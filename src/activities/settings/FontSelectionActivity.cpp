@@ -22,12 +22,12 @@ int findCurrentFontIndex(const SdCardFontRegistry* registry, const char* sdFontF
     const auto& families = registry->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
       if (families[i].name == sdFontFamilyName) {
-        return CrossPointSettings::BUILTIN_FONT_COUNT + i;
+        return CrossPointSettings::BUILTIN_FONT_OPTION_COUNT + i;
       }
     }
   }
 
-  return fontFamily < CrossPointSettings::BUILTIN_FONT_COUNT ? fontFamily : 0;
+  return CrossPointSettings::normalizeBuiltinFontFamily(fontFamily);
 }
 }  // namespace
 
@@ -48,15 +48,18 @@ void FontSelectionActivity::onEnter() {
   originalSdFontFamilyName_[sizeof(originalSdFontFamilyName_) - 1] = '\0';
 
   fonts_.clear();
-  fonts_.reserve(CrossPointSettings::BUILTIN_FONT_COUNT + (registry_ ? registry_->getFamilyCount() : 0));
+  fonts_.reserve(CrossPointSettings::BUILTIN_FONT_OPTION_COUNT + (registry_ ? registry_->getFamilyCount() : 0));
 
   fonts_.push_back({I18N.get(StrId::STR_NOTO_SERIF), true, static_cast<uint8_t>(CrossPointSettings::NOTOSERIF)});
+#ifndef OMIT_FONTS
   fonts_.push_back({I18N.get(StrId::STR_NOTO_SANS), true, static_cast<uint8_t>(CrossPointSettings::NOTOSANS)});
+#endif
 
   if (registry_) {
     const auto& families = registry_->getFamilies();
     for (int i = 0; i < static_cast<int>(families.size()); i++) {
-      fonts_.push_back({families[i].name, false, static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_COUNT + i)});
+      fonts_.push_back({families[i].name, false,
+                        static_cast<uint8_t>(CrossPointSettings::BUILTIN_FONT_OPTION_COUNT + i)});
     }
   }
 
@@ -70,11 +73,11 @@ void FontSelectionActivity::onEnter() {
 void FontSelectionActivity::onExit() { UiListActivity::onExit(); }
 
 void FontSelectionActivity::onBackButton() {
-    SETTINGS.fontFamily = originalFontFamily_;
-    strncpy(SETTINGS.sdFontFamilyName, originalSdFontFamilyName_, sizeof(SETTINGS.sdFontFamilyName) - 1);
-    SETTINGS.sdFontFamilyName[sizeof(SETTINGS.sdFontFamilyName) - 1] = '\0';
-    sdFontSystem.ensureLoaded(renderer);
-    finish();
+  SETTINGS.fontFamily = CrossPointSettings::normalizeBuiltinFontFamily(originalFontFamily_);
+  strncpy(SETTINGS.sdFontFamilyName, originalSdFontFamilyName_, sizeof(SETTINGS.sdFontFamilyName) - 1);
+  SETTINGS.sdFontFamilyName[sizeof(SETTINGS.sdFontFamilyName) - 1] = '\0';
+  sdFontSystem.ensureLoaded(renderer);
+  finish();
 }
 
 void FontSelectionActivity::activateIndex(const int index) {
@@ -87,10 +90,11 @@ void FontSelectionActivity::activateIndex(const int index) {
   previewFontIndex_ = selectedIndex_;
   const auto& font = fonts_[selectedIndex_];
   if (font.isBuiltin) {
-    SETTINGS.fontFamily = font.settingIndex;
+    SETTINGS.fontFamily = CrossPointSettings::normalizeBuiltinFontFamily(font.settingIndex);
     SETTINGS.sdFontFamilyName[0] = '\0';
+    sdFontSystem.ensureLoaded(renderer);
   } else if (registry_) {
-    const int sdIdx = font.settingIndex - CrossPointSettings::BUILTIN_FONT_COUNT;
+    const int sdIdx = font.settingIndex - CrossPointSettings::BUILTIN_FONT_OPTION_COUNT;
     const auto& families = registry_->getFamilies();
     if (sdIdx < static_cast<int>(families.size())) {
       strncpy(SETTINGS.sdFontFamilyName, families[sdIdx].name.c_str(), sizeof(SETTINGS.sdFontFamilyName) - 1);
@@ -106,11 +110,12 @@ const char* FontSelectionActivity::headerTitle() const { return tr(STR_FONT_FAMI
 
 void FontSelectionActivity::handleSelection() {
   const auto& font = fonts_[selectedIndex_];
-  if (font.settingIndex < CrossPointSettings::BUILTIN_FONT_COUNT) {
-    SETTINGS.fontFamily = font.settingIndex;
+  if (font.settingIndex < CrossPointSettings::BUILTIN_FONT_OPTION_COUNT) {
+    SETTINGS.fontFamily = CrossPointSettings::normalizeBuiltinFontFamily(font.settingIndex);
     SETTINGS.sdFontFamilyName[0] = '\0';
+    sdFontSystem.ensureLoaded(renderer);
   } else if (registry_) {
-    const int sdIdx = font.settingIndex - CrossPointSettings::BUILTIN_FONT_COUNT;
+    const int sdIdx = font.settingIndex - CrossPointSettings::BUILTIN_FONT_OPTION_COUNT;
     const auto& families = registry_->getFamilies();
     if (sdIdx < static_cast<int>(families.size())) {
       strncpy(SETTINGS.sdFontFamilyName, families[sdIdx].name.c_str(), sizeof(SETTINGS.sdFontFamilyName) - 1);

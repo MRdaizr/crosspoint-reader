@@ -35,6 +35,11 @@ class SdCardFontSystem {
   const SdCardFontRegistry& registry() const { return registry_; }
 
  private:
+  // Keep reader SD fonts usable when a glyph is absent from the selected
+  // family.  The retained NotoSerif14 face is the final built-in fallback in
+  // the slim profile (and is also safe for full builds).
+  void setupReaderFallback(GfxRenderer& renderer);
+
   // Register size-matched SD fonts as CJK fallbacks for the built-in UI faces.
   // The reader-size font remains the selected font for EPUB content; these
   // additional files are only used when a UI string contains a glyph missing

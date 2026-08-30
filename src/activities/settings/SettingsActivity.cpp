@@ -343,7 +343,9 @@ void SettingsActivity::buildScreen(UiScreen& screen) {
     if (setting.type == SettingType::TOGGLE && setting.valuePtr != nullptr) {
       value = (SETTINGS.*(setting.valuePtr)) ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
-      const uint8_t selected = SETTINGS.*(setting.valuePtr);
+      const uint8_t selected = setting.nameId == StrId::STR_FONT_FAMILY
+                                   ? CrossPointSettings::normalizeBuiltinFontFamily(SETTINGS.*(setting.valuePtr))
+                                   : SETTINGS.*(setting.valuePtr);
       if (selected < setting.enumValues.size()) value = I18N.get(setting.enumValues[selected]);
     } else if (setting.type == SettingType::ENUM && setting.valueGetter) {
       const uint8_t selected = setting.valueGetter();

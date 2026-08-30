@@ -92,9 +92,9 @@ for size in ${UI_FONT_SIZES[@]}; do
     else
       echo "Warning: Simplified Chinese UI glyphs skipped for ${font_name}; set NOTOSANS_SC_FONT to Noto Sans SC." >&2
     fi
-    # Japanese UI coverage is deliberately limited to kana, punctuation,
-    # full-width forms and the explicit UI string list. Book text outside the
-    # built-in set continues to use the SD-card font fallback.
+    # Japanese UI coverage comes from the static menu string list below. Do
+    # not include the complete kana blocks: book text outside the built-in set
+    # continues to use the SD-card font fallback.
     if [[ -f "$NOTOSANS_JP_FONT" && -f "$JA_CHARS" ]]; then
       font_stack+=("$NOTOSANS_JP_FONT")
       char_args+=(--additional-characters "$JA_CHARS")
@@ -108,10 +108,8 @@ for size in ${UI_FONT_SIZES[@]}; do
       "${UI_EXCLUDE_ARGS[@]}" \
       "${char_args[@]}" \
       --additional-intervals 0x3000,0x303F \
-      --additional-intervals 0x3040,0x309F \
-      --additional-intervals 0x30A0,0x30FF \
-      --additional-intervals 0x31F0,0x31FF \
-      --additional-intervals 0xFF00,0xFFEF > $output_path
+      --additional-intervals 0xFF00,0xFF65 \
+      --additional-intervals 0xFFA0,0xFFEF > $output_path
     echo "Generated $output_path"
   done
 done
@@ -134,10 +132,8 @@ python fontconvert.py notosans_8_regular 8 "${small_font_stack[@]}" \
   "${UI_EXCLUDE_ARGS[@]}" \
   "${small_char_args[@]}" \
   --additional-intervals 0x3000,0x303F \
-  --additional-intervals 0x3040,0x309F \
-  --additional-intervals 0x30A0,0x30FF \
-  --additional-intervals 0x31F0,0x31FF \
-  --additional-intervals 0xFF00,0xFFEF > ../builtinFonts/notosans_8_regular.h
+  --additional-intervals 0xFF00,0xFF65 \
+  --additional-intervals 0xFFA0,0xFFEF > ../builtinFonts/notosans_8_regular.h
 
 echo ""
 echo "Running compression verification..."

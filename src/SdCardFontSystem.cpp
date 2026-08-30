@@ -48,6 +48,7 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
     if (family) {
       if (manager_.loadFamily(*family, renderer, SETTINGS.fontPointSize)) {
         SETTINGS.fontPointSize = manager_.currentPointSize();
+        setupReaderFallback(renderer);
         setupUiFallbacks(renderer);
         LOG_INF("SDFS", "Loaded SD card font family: %s (fontId=%d, size=%u)", SETTINGS.sdFontFamilyName,
                 manager_.getLoadedFontId(), manager_.currentPointSize());
@@ -105,6 +106,7 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
   if (family) {
     if (manager_.loadFamily(*family, renderer, requestedPointSize)) {
       SETTINGS.fontPointSize = manager_.currentPointSize();
+      setupReaderFallback(renderer);
       setupUiFallbacks(renderer);
       LOG_INF("SDFS", "Loaded SD card font family: %s (fontId=%d, size=%u)", wantedFamily,
               manager_.getLoadedFontId(), manager_.currentPointSize());
@@ -116,6 +118,11 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
     LOG_ERR("SDFS", "SD font family not found: %s (clearing)", wantedFamily);
     SETTINGS.sdFontFamilyName[0] = '\0';
   }
+}
+
+void SdCardFontSystem::setupReaderFallback(GfxRenderer& renderer) {
+  const int readerFontId = manager_.getLoadedFontId();
+  if (readerFontId != 0) renderer.setFallbackFont(readerFontId, NOTOSERIF_14_FONT_ID);
 }
 
 void SdCardFontSystem::setupUiFallbacks(GfxRenderer& renderer) {

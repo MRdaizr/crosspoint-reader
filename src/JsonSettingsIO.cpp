@@ -165,11 +165,16 @@ bool JsonSettingsIO::saveSettings(const CrossPointSettings& s, const char* path)
   doc["frontButtonLeft"] = s.frontButtonLeft;
   doc["frontButtonRight"] = s.frontButtonRight;
   // Font family — uses dynamic getter/setter in SettingsList so the generic loop skips it.
-  doc["fontFamily"] = s.fontFamily;
+  doc["fontFamily"] = CrossPointSettings::normalizeBuiltinFontFamily(s.fontFamily);
   // Reader size is an actual point size since the text-settings migration.
   // Keep the old key out of newly written files; the loader below accepts it
   // for one-way migration from pre-1.5 settings.
+  const bool hasSdFont = s.sdFontFamilyName[0] != '\0';
+#ifdef OMIT_FONTS
+  doc["fontPointSize"] = hasSdFont ? s.fontPointSize : CrossPointSettings::DEFAULT_FONT_POINT_SIZE;
+#else
   doc["fontPointSize"] = s.fontPointSize;
+#endif
   // SD card font family name — not in SettingsList, save manually
   if (s.sdFontFamilyName[0] != '\0') {
     doc["sdFontFamilyName"] = s.sdFontFamilyName;
@@ -301,6 +306,19 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
   } else if (storedFontFamily >= CrossPointSettings::BUILTIN_FONT_COUNT) {
     if (needsResave) *needsResave = true;
   }
+
+#ifdef OMIT_FONTS
+  // Migrate settings created by a full build to the slim reader profile.  SD
+  // font selections remain intact; only their built-in fallback is normalized.
+  if (s.fontFamily != CrossPointSettings::NOTOSERIF) {
+    s.fontFamily = CrossPointSettings::NOTOSERIF;
+    if (needsResave) *needsResave = true;
+  }
+  if (s.sdFontFamilyName[0] == '\0' && s.fontPointSize != CrossPointSettings::DEFAULT_FONT_POINT_SIZE) {
+    s.fontPointSize = CrossPointSettings::DEFAULT_FONT_POINT_SIZE;
+    if (needsResave) *needsResave = true;
+  }
+#endif
 
   // Language -- stored as code string for stability across enum reorders.
   if (doc["language"].is<const char*>()) {

@@ -110,7 +110,25 @@ class CrossPointSettings {
   // Font family options (built-in fonts only; SD card fonts use sdFontFamilyName)
   enum FONT_FAMILY { NOTOSERIF = 0, NOTOSANS = 1, FONT_FAMILY_COUNT };
   static constexpr uint8_t LEGACY_OPENDYSLEXIC = 2;
+  // BUILTIN_FONT_COUNT is the persisted enum boundary.  Keep it stable so
+  // existing settings files and SD-font indexes remain compatible even when
+  // a slim build hides some built-in choices from the UI.
   static constexpr uint8_t BUILTIN_FONT_COUNT = FONT_FAMILY_COUNT;
+#ifdef OMIT_FONTS
+  static constexpr uint8_t BUILTIN_FONT_OPTION_COUNT = 1;
+#else
+  static constexpr uint8_t BUILTIN_FONT_OPTION_COUNT = BUILTIN_FONT_COUNT;
+#endif
+  static constexpr bool isBuiltinFontFamilyAvailable(const uint8_t family) {
+#ifdef OMIT_FONTS
+    return family == NOTOSERIF;
+#else
+    return family < BUILTIN_FONT_COUNT;
+#endif
+  }
+  static constexpr uint8_t normalizeBuiltinFontFamily(const uint8_t family) {
+    return isBuiltinFontFamilyAvailable(family) ? family : static_cast<uint8_t>(NOTOSERIF);
+  }
   // Reader font size is persisted as a physical point size.  Older binary and
   // JSON files stored a 0..3 Small/Medium/Large/Extra-large slot; migration
   // maps those values to 12/14/16/18pt.
