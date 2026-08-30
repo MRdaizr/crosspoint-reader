@@ -93,7 +93,15 @@ ProgressRange getPageProgressRange(const std::shared_ptr<Epub>& epub, const int 
 }
 
 bool bookmarkMatchesProgress(const BookmarkEntry& bookmark, const int spineIndex, const int page, const int pageCount,
-                             const ProgressRange& pageRange) {
+                             const ProgressRange& pageRange,
+                             const std::optional<uint32_t> visibleTextOffset = std::nullopt) {
+  // The visible-codepoint offset is stable across font/margin/orientation
+  // reflow. If both records have it, it is a stronger identity than a page or
+  // nearby percentage range and must be matched exactly.
+  if (bookmark.hasVisibleTextOffset && visibleTextOffset.has_value() && bookmark.computedSpineIndex == spineIndex) {
+    return bookmark.visibleTextOffset == *visibleTextOffset;
+  }
+
   if (bookmark.computedSpineIndex == spineIndex && bookmark.computedChapterPageCount == pageCount &&
       bookmark.computedChapterProgress == page) {
     return true;
@@ -338,6 +346,10 @@ void EpubReaderActivity::openReaderMenu() {
                              SETTINGS.orientation, !currentPageFootnotes.empty(), !cachedBookmarks.empty()),
                          [this](const ActivityResult& result) {
                            // Always apply orientation change even if the menu was cancelled.
+                           if (!std::holds_alternative<MenuResult>(result.data)) {
+                             LOG_ERR("ERS", "Reader menu returned an unexpected result");
+                             return;
+                           }
                            const auto& menu = std::get<MenuResult>(result.data);
                            applyOrientation(menu.orientation);
                            toggleAutoPageTurn(menu.pageTurnOption);
@@ -499,9 +511,11 @@ void EpubReaderActivity::loop() {
         startActivityForResult(
             std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes),
             [this](const ActivityResult& result) {
-              if (!result.isCancelled) {
+              if (!result.isCancelled && std::holds_alternative<FootnoteResult>(result.data)) {
                 const auto& footnoteResult = std::get<FootnoteResult>(result.data);
                 navigateToHref(footnoteResult.href, true);
+              } else if (!result.isCancelled) {
+                LOG_ERR("ERS", "Footnote picker returned an unexpected result");
               }
               requestUpdate();
             });
@@ -689,6 +703,11 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       return;
     }
 
+    if (!std::holds_alternative<ProgressChangeResult>(result.data)) {
+      LOG_ERR("ERS", "Bookmark/progress activity returned an unexpected result");
+      openReaderMenu();
+      return;
+    }
     const auto& sync = std::get<ProgressChangeResult>(result.data);
 
     // A bookmark's visible-text offset identifies the same content even when
@@ -787,9 +806,11 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
     case EpubReaderMenuActivity::MenuAction::FOOTNOTES: {
       startActivityForResult(std::make_unique<EpubReaderFootnotesActivity>(renderer, mappedInput, currentPageFootnotes),
                              [this](const ActivityResult& result) {
-                               if (!result.isCancelled) {
+                               if (!result.isCancelled && std::holds_alternative<FootnoteResult>(result.data)) {
                                  const auto& footnoteResult = std::get<FootnoteResult>(result.data);
                                  navigateToHref(footnoteResult.href, true);
+                               } else if (!result.isCancelled) {
+                                 LOG_ERR("ERS", "Footnote picker returned an unexpected result");
                                }
                                requestUpdate();
                              });
@@ -805,8 +826,10 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       startActivityForResult(
           std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
           [this](const ActivityResult& result) {
-            if (!result.isCancelled) {
+            if (!result.isCancelled && std::holds_alternative<PercentResult>(result.data)) {
               jumpToPercent(std::get<PercentResult>(result.data).percent);
+            } else if (!result.isCancelled) {
+              LOG_ERR("ERS", "Percent picker returned an unexpected result");
             }
           });
       break;
@@ -2050,7 +2073,10 @@ void EpubReaderActivity::addBookmark() {
   cachedBookmarks.erase(std::remove_if(cachedBookmarks.begin(), cachedBookmarks.end(),
                                        [&](const BookmarkEntry& b) {
                                          return bookmarkMatchesProgress(b, currentSpineIndex, currentPage, pageCount,
-                                                                        pageRange);
+                                                                        pageRange,
+                                                                        currentPosition.hasVisibleTextOffset
+                                                                            ? std::optional<uint32_t>(currentPosition.visibleTextOffset)
+                                                                            : std::nullopt);
                                        }),
                         cachedBookmarks.end());
   if (cachedBookmarks.size() != bookmarkCountBeforeToggle) {
@@ -2089,8 +2115,11 @@ void EpubReaderActivity::updateBookmarkFlag() {
   }
   const int pageCount = section->estimatedTotalPages();
   const ProgressRange pageRange = getPageProgressRange(epub, currentSpineIndex, section->currentPage, pageCount);
+  const auto currentOffset = currentPageVisibleOffset.has_value()
+                                 ? currentPageVisibleOffset
+                                 : section->getVisibleTextOffsetForPage(static_cast<uint16_t>(section->currentPage));
   currentPageBookmarked = std::any_of(cachedBookmarks.begin(), cachedBookmarks.end(), [&](const BookmarkEntry& b) {
-    return bookmarkMatchesProgress(b, currentSpineIndex, section->currentPage, pageCount, pageRange);
+    return bookmarkMatchesProgress(b, currentSpineIndex, section->currentPage, pageCount, pageRange, currentOffset);
   });
 }
 
