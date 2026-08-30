@@ -293,7 +293,7 @@ The Settings screen allows you to configure the device's behavior. There are a f
 
 - **Check for updates**: Check for Crosspoint firmware updates over Wi-Fi. Firmware can also be updated without a USB connection by placing a `firmware.bin` file on the SD card.
 
-- **Language**: Set the UI language. CrossPoint supports 27 languages: English, Spanish, French, German, Czech, Brazilian Portuguese, Russian, Swedish, Romanian, Catalan, Ukrainian, Belarusian, Italian, Polish, Finnish, Danish, Dutch, Turkish, Kazakh, Hungarian, Lithuanian, Slovenian, Valencian, Hebrew, Vietnamese, Slovak, and Simplified Chinese.
+- **Language**: Set the UI language. The built-in UI currently provides English, Simplified Chinese, and Japanese (`日本語`). Strings not yet translated in Japanese fall back to English.
 
 - **Manage Fonts**: Browse, download, and manage custom font families installed from the SD card. See [Custom Fonts (SD Card)](#38-custom-fonts-sd-card) for more information.
 
@@ -562,13 +562,18 @@ If the device goes to sleep or you close the book while viewing a footnote, the 
 
 ### Supported Languages
 
-CrossPoint renders text using the following Unicode character blocks, enabling support for a wide range of languages:
+CrossPoint renders book text using the following Unicode character blocks, enabling support for a wide range of languages:
 
 * **Latin Script (Basic, Supplement, Extended-A/B):** Covers English, German, French, Spanish, Portuguese, Italian, Dutch, Swedish, Norwegian, Danish, Finnish, Polish, Czech, Hungarian, Romanian, Slovak, Slovenian, Turkish, Catalan, and others.
 * **Cyrillic Script (Standard and Extended):** Covers Russian, Ukrainian, Belarusian, Bulgarian, Serbian, Macedonian, Kazakh, Kyrgyz, Mongolian, and others.
 * **Vietnamese:** Supported via extended Latin glyph coverage in the built-in reader fonts.
 
-The built-in UI family also includes Simplified Chinese and Japanese kana, punctuation, full-width forms, and common UI kanji. The reader's general-purpose book fonts remain intentionally compact: **CJK book text beyond the UI subset, Korean, Arabic, Greek, Hebrew, and other extended scripts should be enabled by installing custom SD card fonts** — see [Custom Fonts (SD Card)](#38-custom-fonts-sd-card).
+The built-in UI family is intentionally limited to English, Simplified Chinese,
+and Japanese (kana, punctuation, full-width forms, and common UI kanji). The
+reader's general-purpose book fonts remain intentionally compact: **CJK book
+text beyond the UI subset, Korean, Arabic, Greek, Hebrew, and other extended
+scripts should be enabled by installing custom SD card fonts** — see [Custom
+Fonts (SD Card)](#38-custom-fonts-sd-card).
 
 ---
 

@@ -20,6 +20,7 @@ parser.add_argument("size", type=int, help="font size to use.")
 parser.add_argument("fontstack", action="store", nargs='+', help="list of font files, ordered by descending priority.")
 parser.add_argument("--2bit", dest="is2Bit", action="store_true", help="generate 2-bit greyscale bitmap instead of 1-bit black and white.")
 parser.add_argument("--additional-intervals", dest="additional_intervals", action="append", help="Additional code point intervals to export as min,max. This argument can be repeated.")
+parser.add_argument("--exclude-intervals", dest="exclude_intervals", action="append", help="Code point intervals to exclude from the generated font as min,max. This argument can be repeated.")
 parser.add_argument("--additional-characters", dest="additional_characters", action="append", help="UTF-8 text file whose unique characters should be exported. This argument can be repeated.")
 parser.add_argument("--compress", dest="compress", action="store_true", help="Compress glyph bitmaps using DEFLATE with group-based compression.")
 parser.add_argument("--force-autohint", dest="force_autohint", action="store_true", help="Force FreeType auto-hinter instead of native font hinting. Improves stem width consistency for fonts with weak or no native TrueType hints.")
@@ -139,6 +140,10 @@ intervals = [
 add_ints = []
 if args.additional_intervals:
     add_ints = [tuple([int(n, base=0) for n in i.split(",")]) for i in args.additional_intervals]
+
+exclude_ints = []
+if args.exclude_intervals:
+    exclude_ints = sorted(tuple(int(n, base=0) for n in i.split(",")) for i in args.exclude_intervals)
 
 add_chars = set()
 if args.additional_characters:
@@ -260,16 +265,34 @@ for i_start, i_end in unmerged_intervals:
         continue
     unvalidated_intervals.append((i_start, i_end))
 
+
+def subtract_excluded_intervals(start, end):
+    """Yield the portions of [start, end] not covered by exclusions."""
+    cursor = start
+    for excluded_start, excluded_end in exclude_ints:
+        if excluded_end < cursor:
+            continue
+        if excluded_start > end:
+            break
+        if excluded_start > cursor:
+            yield cursor, min(end, excluded_start - 1)
+        cursor = max(cursor, excluded_end + 1)
+        if cursor > end:
+            return
+    if cursor <= end:
+        yield cursor, end
+
 for i_start, i_end in unvalidated_intervals:
-    start = i_start
-    for code_point in range(i_start, i_end + 1):
-        face = load_glyph(code_point)
-        if face is None:
-            if start < code_point:
-                intervals.append((start, code_point - 1))
-            start = code_point + 1
-    if start != i_end + 1:
-        intervals.append((start, i_end))
+    for included_start, included_end in subtract_excluded_intervals(i_start, i_end):
+        start = included_start
+        for code_point in range(included_start, included_end + 1):
+            face = load_glyph(code_point)
+            if face is None:
+                if start < code_point:
+                    intervals.append((start, code_point - 1))
+                start = code_point + 1
+        if start != included_end + 1:
+            intervals.append((start, included_end))
 
 for face in font_stack:
     face.set_char_size(size << 6, size << 6, 150, 150)

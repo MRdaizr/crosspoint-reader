@@ -33,6 +33,20 @@ UI_FONT_STYLES=("Regular" "Bold")
 ZH_CN_CHARS="ui_zh_cn_chars.txt"
 JA_CHARS="ui_ja_chars.txt"
 
+# UI faces intentionally contain only the English/Chinese/Japanese set.  The
+# CJK fallback fonts also provide Vietnamese and Hebrew codepoints, so exclude
+# those ranges explicitly instead of relying on the font stack to omit them.
+UI_EXCLUDE_INTERVALS=(
+  "0x0590,0x05FF"   # Hebrew
+  "0x01A0,0x01A1"   # Vietnamese Latin extension
+  "0x01AF,0x01B0"   # Vietnamese Latin extension
+  "0x1EA0,0x1EF9"   # Vietnamese precomposed letters
+)
+UI_EXCLUDE_ARGS=()
+for interval in "${UI_EXCLUDE_INTERVALS[@]}"; do
+  UI_EXCLUDE_ARGS+=(--exclude-intervals "$interval")
+done
+
 # Keep the checked-in generated headers reproducible while making regeneration
 # convenient on the Windows development setup used by X3/X4 contributors.
 # The font files are intentionally not vendored in this repository; callers
@@ -70,9 +84,11 @@ for size in ${UI_FONT_SIZES[@]}; do
     font_name="ubuntu_${size}_$(echo $style | tr '[:upper:]' '[:lower:]')"
     font_path="../builtinFonts/source/Ubuntu/Ubuntu-${style}.ttf"
     output_path="../builtinFonts/${font_name}.h"
-    cjk_args=()
+    font_stack=("$font_path")
+    char_args=()
     if [[ -f "$NOTOSANS_SC_FONT" && -f "$ZH_CN_CHARS" ]]; then
-      cjk_args+=("$NOTOSANS_SC_FONT" "--additional-characters" "$ZH_CN_CHARS")
+      font_stack+=("$NOTOSANS_SC_FONT")
+      char_args+=(--additional-characters "$ZH_CN_CHARS")
     else
       echo "Warning: Simplified Chinese UI glyphs skipped for ${font_name}; set NOTOSANS_SC_FONT to Noto Sans SC." >&2
     fi
@@ -80,11 +96,17 @@ for size in ${UI_FONT_SIZES[@]}; do
     # full-width forms and the explicit UI string list. Book text outside the
     # built-in set continues to use the SD-card font fallback.
     if [[ -f "$NOTOSANS_JP_FONT" && -f "$JA_CHARS" ]]; then
-      cjk_args+=("$NOTOSANS_JP_FONT" "--additional-characters" "$JA_CHARS")
+      font_stack+=("$NOTOSANS_JP_FONT")
+      char_args+=(--additional-characters "$JA_CHARS")
     else
       echo "Warning: Japanese UI glyphs skipped for ${font_name}; set NOTOSANS_JP_FONT to Noto Sans JP." >&2
     fi
-    python fontconvert.py $font_name $size $font_path "${cjk_args[@]}" \
+    # Keep all positional font paths together. argparse stops the fontstack
+    # positional at the first option, so interleaving --additional-characters
+    # between fallback fonts would silently drop the later font.
+    python fontconvert.py $font_name $size "${font_stack[@]}" \
+      "${UI_EXCLUDE_ARGS[@]}" \
+      "${char_args[@]}" \
       --additional-intervals 0x3000,0x303F \
       --additional-intervals 0x3040,0x309F \
       --additional-intervals 0x30A0,0x30FF \
@@ -94,21 +116,23 @@ for size in ${UI_FONT_SIZES[@]}; do
   done
 done
 
-small_zh_args=()
+small_font_stack=(../builtinFonts/source/NotoSans/NotoSans-Regular.ttf)
+small_char_args=()
 if [[ -f "$NOTOSANS_SC_FONT" && -f "$ZH_CN_CHARS" ]]; then
-  small_zh_args=("$NOTOSANS_SC_FONT" "--additional-characters" "$ZH_CN_CHARS")
+  small_font_stack+=("$NOTOSANS_SC_FONT")
+  small_char_args+=(--additional-characters "$ZH_CN_CHARS")
 else
   echo "Warning: Simplified Chinese UI glyphs skipped for notosans_8_regular; set NOTOSANS_SC_FONT to Noto Sans SC." >&2
 fi
-small_ja_args=()
 if [[ -f "$NOTOSANS_JP_FONT" && -f "$JA_CHARS" ]]; then
-  small_ja_args=("$NOTOSANS_JP_FONT" "--additional-characters" "$JA_CHARS")
+  small_font_stack+=("$NOTOSANS_JP_FONT")
+  small_char_args+=(--additional-characters "$JA_CHARS")
 else
   echo "Warning: Japanese UI glyphs skipped for notosans_8_regular; set NOTOSANS_JP_FONT to Noto Sans JP." >&2
 fi
-python fontconvert.py notosans_8_regular 8 \
-  ../builtinFonts/source/NotoSans/NotoSans-Regular.ttf \
-  "${small_zh_args[@]}" "${small_ja_args[@]}" \
+python fontconvert.py notosans_8_regular 8 "${small_font_stack[@]}" \
+  "${UI_EXCLUDE_ARGS[@]}" \
+  "${small_char_args[@]}" \
   --additional-intervals 0x3000,0x303F \
   --additional-intervals 0x3040,0x309F \
   --additional-intervals 0x30A0,0x30FF \
