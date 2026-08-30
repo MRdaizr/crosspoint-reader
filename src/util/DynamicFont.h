@@ -57,14 +57,24 @@ inline int fontForCjkText(const GfxRenderer& renderer, const char* text, int fal
 inline int fontForSdCardText(const GfxRenderer& renderer, int fallbackFontId) {
   sdFontSystem.ensureLoaded(const_cast<GfxRenderer&>(renderer));
   const int sdFontId = sdFontSystem.currentFontId();
+  // Report only when the effective source changes, rather than once per row
+  // or repaint. This distinguishes a detected SD card from an actually
+  // loaded font family in device logs.
+  static bool reported = false;
+  static int reportedFontId = 0;
   if (renderer.isSdCardFont(sdFontId)) {
+    if (!reported || reportedFontId != sdFontId) {
+      LOG_INF("DFNT", "Dynamic UI text uses SD font id=%d", sdFontId);
+      reported = true;
+      reportedFontId = sdFontId;
+    }
     return sdFontId;
   }
 
-  static bool loggedMissingSdFont = false;
-  if (!loggedMissingSdFont) {
-    LOG_DBG("DFNT", "SD font text requested without a loaded SD font; falling back to built-in UI font");
-    loggedMissingSdFont = true;
+  if (!reported || reportedFontId != 0) {
+    LOG_INF("DFNT", "Dynamic UI text uses built-in font id=%d (no SD font loaded)", fallbackFontId);
+    reported = true;
+    reportedFontId = 0;
   }
   return fallbackFontId;
 }
