@@ -68,7 +68,9 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, const int
   if (lineH <= 0 || textWidth <= 0) return;
 
   const float compression = SETTINGS.getReaderLineCompression();
-  const int lineAdvance = std::max(1, renderer.getLineHeight(fontId, compression));
+  // GfxRenderer exposes the base font line height; apply the reader's line
+  // compression here to match ChapterHtmlSlimParser's layout calculation.
+  const int lineAdvance = std::max(1, static_cast<int>(renderer.getLineHeight(fontId) * compression + 0.5f));
   const int paragraphGap = SETTINGS.extraParagraphSpacing ? lineAdvance / 2 : 0;
   const PreviewKey key{.fontId = fontId,
                        .fontPointSize = SETTINGS.fontPointSize,
