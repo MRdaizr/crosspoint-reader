@@ -118,7 +118,8 @@ void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
     if (action == MenuAction::ROTATE_SCREEN) rowValues[i] = I18N.get(orientationLabels[pendingOrientation]);
     else if (action == MenuAction::AUTO_PAGE_TURN) rowValues[i] = pageTurnLabels[selectedPageTurnOption];
     else if (action == MenuAction::NIGHT_MODE) rowValues[i] = SETTINGS.screenInverted ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-    else if (action == MenuAction::DICTIONARY) rowValues[i] = SETTINGS.dictionaryName[0] ? SETTINGS.dictionaryName : I18N.get(STR_NONE_OPT);
+    else if (action == MenuAction::DICTIONARY)
+      rowValues[i] = SETTINGS.dictionaryName[0] ? SETTINGS.dictionaryName : I18N.get(StrId::STR_NONE_OPT);
     else rowValues[i].clear();
     rowItems[i].value = rowValues[i].empty() ? nullptr : rowValues[i].c_str();
   }
