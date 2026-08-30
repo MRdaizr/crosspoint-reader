@@ -812,7 +812,17 @@ Rect WeReadActivity::mainContentBounds() const {
 }
 
 Rect WeReadActivity::detailActionsBounds(const Rect& content) const {
-  const int height = kDetailListActionCount * GUI.getListRowStep(false);
+  // Keep the legacy repaint and the FUI list on the same geometry.  The
+  // theme's getListRowStep() implementation is based on the old BaseTheme
+  // metrics (30px for a plain row), while RoundedRaffExt uses the active
+  // metrics (42px rows with a 6px gap).  Using the legacy step here leaves
+  // only the first two/three actions inside the band, so the fourth action is
+  // clipped when the selection moves below "recache".
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  const int rowHeight = std::max(1, metrics.listRowHeight);
+  const int rowGap = std::max(0, metrics.listRowGap);
+  const int height = kDetailListActionCount * rowHeight +
+                     std::max(0, kDetailListActionCount - 1) * rowGap;
   return Rect{content.x, content.y + content.height - height, content.width, height};
 }
 
