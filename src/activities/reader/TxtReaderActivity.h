@@ -120,5 +120,13 @@ class TxtReaderActivity final : public ReaderActivity {
   void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
+  bool handleForcedRefresh() override {
+    {
+      RenderLock lock(*this);
+      pagesUntilFullRefresh = 1;
+    }
+    requestUpdate();
+    return true;
+  }
   ScreenshotInfo getScreenshotInfo() const override;
 };

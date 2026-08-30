@@ -4,6 +4,7 @@
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
+#include <atomic>
 #include <cassert>
 #include <memory>
 #include <string>
@@ -61,9 +62,9 @@ class ActivityManager {
   // Must only be used via RenderLock
   SemaphoreHandle_t renderingMutex = nullptr;
 
-  // Whether to trigger a render after the current loop()
-  // This variable must only be set by the main loop, to avoid race conditions
-  bool requestedUpdate = false;
+  // Whether to trigger a render after the current loop(). Background workers
+  // can request an update too, so this flag must be atomic.
+  std::atomic<bool> requestedUpdate{false};
 
  public:
   explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
@@ -104,6 +105,7 @@ class ActivityManager {
   bool allowPowerSaving() const;
   bool isCurrentActivityReader() const;
   bool isReaderActivity() const;
+  bool handleForcedRefresh();
   bool skipLoopDelay() const;
   ScreenshotInfo getScreenshotInfo() const;
 

@@ -1744,6 +1744,8 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
   const auto tPrewarm = millis();
 
   const bool pageHasImages = page->hasImages();
+  const bool manualRefreshPending = forcedRefreshPending;
+  forcedRefreshPending = false;
   // EPUB text AA currently re-renders the full page for every grayscale strip
   // and can turn an ordinary page flip into a minute-plus render on X4. Keep
   // image grayscale, but do not route text-only pages through grayscale.
@@ -1769,6 +1771,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
     // Step 2: Re-render with images and display again (images appear clean)
     int16_t imgX, imgY, imgW, imgH;
     if (page->getImageBoundingBox(imgX, imgY, imgW, imgH)) {
+      // Image pages bypass the normal refresh cadence. Preserve the explicit
+      // manual clean pass before their double-FAST image pipeline.
+      if (manualRefreshPending) {
+        renderer.displayBuffer(HalDisplay::HALF_REFRESH);
+      }
       renderer.fillRect(imgX + orientedMarginLeft, imgY + orientedMarginTop, imgW, imgH, false);
       renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 
