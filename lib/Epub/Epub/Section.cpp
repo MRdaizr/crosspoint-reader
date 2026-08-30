@@ -1139,6 +1139,41 @@ std::unique_ptr<Page> Section::loadPageFromSectionFile() {
   return loadPageAt(currentPage);
 }
 
+std::unique_ptr<Page> Section::loadPageDuringBuild(const ReaderRenderSpec& spec, const uint16_t targetPage) {
+  // A page produced by the active parser is already complete and flushed to
+  // the checkpoint file. Read it without touching the parser's write cursor;
+  // this is both cheaper and safer than inflating/parsing the chapter again.
+  if (buildActive && targetPage < buildLut.size()) {
+    HalFile partialFile;
+    if (Storage.openFileForRead("SCT", buildFilePath, partialFile)) {
+      const auto& entry = buildLut[targetPage];
+      const uint32_t fileSize = partialFile.size();
+      if (entry.fileOffset >= HEADER_SIZE && entry.fileOffset < fileSize) {
+        partialFile.seek(entry.fileOffset);
+        auto page = Page::deserialize(partialFile);
+        if (page) page->visibleTextOffset = entry.visibleTextOffset;
+        partialFile.close();
+        return page;
+      }
+      partialFile.close();
+    }
+    LOG_DBG("SCT", "Active build page %u is not readable yet", static_cast<unsigned>(targetPage));
+  }
+
+  // During a rebuild, the committed partial prefix remains authoritative until
+  // the active parser reaches the requested page.
+  if (partial_ && targetPage < partialPageCount_) {
+    if (auto page = loadPageAt(targetPage)) return page;
+  }
+
+  // Before the first incremental tick there may be no serialized page yet.
+  // Keep the old bounded preview path as a last resort for a caller that needs
+  // an immediate page (for example an anchor jump on a cold cache).
+  return buildPagePreview(spec.fontId, spec.lineCompression, spec.extraParagraphSpacing, spec.paragraphAlignment,
+                          spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled, spec.embeddedStyle,
+                          spec.imageRendering, spec.focusReadingEnabled, targetPage);
+}
+
 std::string Section::getTextFromSectionFile() {
   std::string fullText;
   auto p = this->loadPageFromSectionFile();

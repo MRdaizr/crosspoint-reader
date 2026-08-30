@@ -121,13 +121,11 @@ class Section {
                                          bool hyphenationEnabled, bool embeddedStyle, uint8_t imageRendering,
                                          bool focusReadingEnabled, uint16_t targetPage);
   // Public name used by the unified reader layer while an incremental build is
-  // catching up.  It delegates to the existing bounded preview parser and
-  // therefore preserves section v41 cache semantics.
-  std::unique_ptr<Page> loadPageDuringBuild(const ReaderRenderSpec& spec, uint16_t targetPage) {
-    return buildPagePreview(spec.fontId, spec.lineCompression, spec.extraParagraphSpacing, spec.paragraphAlignment,
-                            spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled, spec.embeddedStyle,
-                            spec.imageRendering, spec.focusReadingEnabled, targetPage);
-  }
+  // catching up.  If the requested page has already been serialized by the
+  // active parser, read it directly from the .building file.  Falling back to
+  // the committed partial or bounded preview keeps this API useful before the
+  // first build tick as well, without changing section v41 on-disk semantics.
+  std::unique_ptr<Page> loadPageDuringBuild(const ReaderRenderSpec& spec, uint16_t targetPage);
   std::unique_ptr<Page> loadPageFromSectionFile();
   std::string getTextFromSectionFile();
 

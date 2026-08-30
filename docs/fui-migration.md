@@ -59,9 +59,12 @@ not part of this target.
 The Text Settings screen is a four-tab FUI activity (Font, Size, Layout and
 Style). Size choices are physical point sizes discovered from the active SD
 family, with a live ParsedText preview and immediate persistence. The SD font
-management page lists installed families and uses the shared FontInstaller for
-safe deletion; large font downloads continue to use the existing web-server
-upload path.
+management page lists installed families, supports safe deletion, and exposes a
+Wi-Fi font browser. The browser streams the versioned `fonts.json` manifest to
+SD, downloads each `.cpfont` file directly to its family directory, validates
+the CPFONT header and manifest CRC32, and removes incomplete installs. The
+browser is intentionally limited to the existing Chinese/English/Japanese
+font packs; the web-server upload path remains available for local packs.
 
 To regenerate fonts on a development machine, set `NOTOSANS_SC_FONT` and
 `NOTOSANS_JP_FONT` to local font files and run

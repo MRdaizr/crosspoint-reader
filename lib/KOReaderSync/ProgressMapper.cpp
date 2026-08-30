@@ -9,6 +9,7 @@
 
 #include "ChapterXPathResolver.h"
 #include "Epub/Section.h"
+#include "Epub/VisibleTextUtils.h"
 #include "Epub/htmlEntities.h"
 #include "Utf8.h"
 
@@ -274,9 +275,7 @@ class ParagraphStreamer final : public Print {
   bool targetBodyText = false;
 
   bool isNonVisibleTag() const {
-    return strcasecmp(tagName, "head") == 0 || strcasecmp(tagName, "style") == 0 ||
-           strcasecmp(tagName, "script") == 0 || strcasecmp(tagName, "title") == 0 ||
-           strcasecmp(tagName, "rp") == 0;
+    return VisibleTextUtils::isNonVisibleElement(tagName);
   }
 
   static bool isAttrWhitespace(uint8_t c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
