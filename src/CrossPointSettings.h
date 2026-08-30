@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <iosfwd>
 
+#include <Epub/ReaderRenderSpec.h>
+
 class CrossPointSettings {
  private:
   // Private constructor for singleton
@@ -109,9 +111,12 @@ class CrossPointSettings {
   enum FONT_FAMILY { NOTOSERIF = 0, NOTOSANS = 1, FONT_FAMILY_COUNT };
   static constexpr uint8_t LEGACY_OPENDYSLEXIC = 2;
   static constexpr uint8_t BUILTIN_FONT_COUNT = FONT_FAMILY_COUNT;
-  // Font size options
-  enum FONT_SIZE { SMALL = 0, MEDIUM = 1, LARGE = 2, EXTRA_LARGE = 3, FONT_SIZE_COUNT };
-  enum LINE_COMPRESSION { TIGHT = 0, NORMAL = 1, WIDE = 2, LINE_COMPRESSION_COUNT };
+  // Reader font size is persisted as a physical point size.  Older binary and
+  // JSON files stored a 0..3 Small/Medium/Large/Extra-large slot; migration
+  // maps those values to 12/14/16/18pt.
+  static constexpr uint8_t LEGACY_FONT_SIZE_MAX = 3;
+  static constexpr uint8_t DEFAULT_FONT_POINT_SIZE = 14;
+  enum LINE_COMPRESSION { TIGHT = 0, NORMAL = 1, WIDE = 2, EXTRA_WIDE = 3, LINE_COMPRESSION_COUNT };
   enum PARAGRAPH_ALIGNMENT {
     JUSTIFIED = 0,
     LEFT_ALIGN = 1,
@@ -234,7 +239,7 @@ class CrossPointSettings {
   uint8_t frontButtonRight = FRONT_HW_RIGHT;
   // Reader font settings
   uint8_t fontFamily = NOTOSERIF;
-  uint8_t fontSize = MEDIUM;
+  uint8_t fontPointSize = DEFAULT_FONT_POINT_SIZE;
   uint8_t lineSpacing = NORMAL;
   uint8_t paragraphAlignment = JUSTIFIED;
   // Auto-sleep timeout setting (default 10 minutes). Legacy sleepTimeout enum values are migration-only.
@@ -244,7 +249,10 @@ class CrossPointSettings {
   uint8_t hyphenationEnabled = 0;
 
   // Reader screen margin settings
-  uint8_t screenMargin = 5;
+  static constexpr uint8_t SCREEN_MARGIN_MIN = 5;
+  static constexpr uint8_t SCREEN_MARGIN_MAX = 40;
+  static constexpr uint8_t SCREEN_MARGIN_STEP = 5;
+  uint8_t screenMargin = SCREEN_MARGIN_MIN;
   // OPDS browser settings
   char opdsServerUrl[128] = "";
   char opdsUsername[64] = "";
@@ -298,7 +306,7 @@ class CrossPointSettings {
 
   // Callback to resolve SD card font IDs. Set by SdCardFontSystem::begin().
   // Returns font ID or 0 if not found.
-  using SdFontIdResolver = int (*)(void* ctx, const char* familyName, uint8_t fontSize);
+  using SdFontIdResolver = int (*)(void* ctx, const char* familyName, uint8_t pointSize);
   SdFontIdResolver sdFontIdResolver = nullptr;
   void* sdFontResolverCtx = nullptr;
 
@@ -306,6 +314,7 @@ class CrossPointSettings {
     return (shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP) ? 10 : 400;
   }
   int getReaderFontId() const;
+  ReaderRenderSpec readerRenderSpec(uint16_t viewportWidth, uint16_t viewportHeight) const;
 
   // If count_only is true, returns the number of settings items that would be written.
   uint8_t writeSettings(HalFile& file, bool count_only = false) const;

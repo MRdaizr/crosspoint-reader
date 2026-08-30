@@ -12,6 +12,7 @@
 #include "ProgressMapper.h"
 #include "components/UITheme.h"
 #include "components/UiAppHelpers.h"
+#include "util/BookmarkFile.h"
 
 namespace fui = freeink::ui;
 
@@ -30,18 +31,8 @@ void EpubReaderBookmarksActivity::onEnter() {
     return;
   }
 
-  const std::string path = BookmarkUtil::getBookmarkPath(epubPath);
-  if (Storage.exists(path.c_str())) {
-    String json = Storage.readFile(path.c_str());
-    if (json.isEmpty()) {
-      LOG_ERR("EPB", "Failed to load bookmarks from %s. Empty bookmark file", path.c_str());
-      bookmarks.clear();
-      bookmarks.shrink_to_fit();
-    } else {
-      JsonSettingsIO::loadBookmarks(bookmarks, json.c_str());
-    }
-  } else {
-    LOG_DBG("EPB", "No bookmark file found at %s, starting with empty bookmarks", path.c_str());
+  if (!BookmarkFile::load(epubPath, bookmarks)) {
+    LOG_DBG("EPB", "No bookmark file found for %s, starting with empty bookmarks", epubPath.c_str());
     bookmarks.clear();
     bookmarks.shrink_to_fit();
   }
@@ -84,9 +75,7 @@ bool EpubReaderBookmarksActivity::handleButtons() {
       }
       if (deleteIndex >= 0 && deleteIndex < static_cast<int>(bookmarks.size())) {
         bookmarks.erase(bookmarks.begin() + deleteIndex);
-        const std::string path = BookmarkUtil::getBookmarkPath(epubPath);
-        Storage.mkdir(BookmarkUtil::getBookmarksDir().c_str());
-        JsonSettingsIO::saveBookmarks(bookmarks, path.c_str());
+        BookmarkFile::save(epubPath, bookmarks);
         if (bookmarks.empty()) {
           ActivityResult result;
           result.isCancelled = true;

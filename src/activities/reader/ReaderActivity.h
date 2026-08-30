@@ -7,6 +7,7 @@
 #include "activities/Activity.h"
 #include "activities/home/FileBrowserActivity.h"
 #include "activities/reader/EndOfBookOptions.h"
+#include <Epub/ReaderRenderSpec.h>
 
 class Epub;
 class Xtc;
@@ -50,6 +51,11 @@ class ReaderActivity : public Activity {
   void onGoToBmpViewer(const std::string& path);
 
   void onGoBack();
+
+  // Shared render contract for EPUB/TXT/XTC readers.  Concrete readers can
+  // pass this object to Section overloads (or their format-specific layout
+  // engines) without each screen re-reading settings independently.
+  ReaderRenderSpec currentReaderRenderSpec() const;
 
  public:
   explicit ReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string initialBookPath)

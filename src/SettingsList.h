@@ -134,11 +134,15 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         // version when SD fonts are installed.
         SettingInfo::Enum(StrId::STR_FONT_FAMILY, &CrossPointSettings::fontFamily,
                           {StrId::STR_NOTO_SERIF, StrId::STR_NOTO_SANS}, "fontFamily", StrId::STR_CAT_READER),
-        SettingInfo::Enum(StrId::STR_FONT_SIZE, &CrossPointSettings::fontSize,
-                          {StrId::STR_SMALL, StrId::STR_MEDIUM, StrId::STR_LARGE, StrId::STR_X_LARGE}, "fontSize",
-                          StrId::STR_CAT_READER),
+        // Physical point size is edited in TextSettingsActivity.  Keep a
+        // category-less value entry so the web settings API and persistence
+        // layer expose the stable `fontPointSize` key without duplicating a
+        // one-step-at-a-time control in the device settings list.
+        SettingInfo::Value(StrId::STR_FONT_SIZE, &CrossPointSettings::fontPointSize, {1, 255, 1}, "fontPointSize",
+                           StrId::STR_NONE_OPT),
         SettingInfo::Enum(StrId::STR_LINE_SPACING, &CrossPointSettings::lineSpacing,
-                          {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE}, "lineSpacing", StrId::STR_CAT_READER),
+                          {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE, StrId::STR_EXTRA_WIDE}, "lineSpacing",
+                          StrId::STR_CAT_READER),
         SettingInfo::Value(StrId::STR_SCREEN_MARGIN, &CrossPointSettings::screenMargin, {5, 40, 5}, "screenMargin",
                            StrId::STR_CAT_READER),
         SettingInfo::Enum(StrId::STR_PARA_ALIGNMENT, &CrossPointSettings::paragraphAlignment,

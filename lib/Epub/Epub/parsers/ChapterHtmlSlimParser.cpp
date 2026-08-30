@@ -20,6 +20,7 @@
 #include "Epub/converters/ImageDimsProbe.h"
 #include "Epub/converters/ImageToFramebufferDecoder.h"
 #include "Epub/htmlEntities.h"
+#include "Epub/VisibleTextUtils.h"
 
 // Minimum file size (in bytes) to show indexing popup - smaller chapters don't benefit from it
 constexpr size_t MIN_SIZE_FOR_POPUP = 10 * 1024;  // 10KB
@@ -113,8 +114,7 @@ const char* getAttribute(const XML_Char** atts, const char* attrName) {
 bool isNonNavigableInlineElement(const char* name) { return strcmp(name, "span") == 0; }
 
 bool isNonVisibleTextTag(const char* name) {
-  return strcasecmp(name, "head") == 0 || strcasecmp(name, "style") == 0 || strcasecmp(name, "script") == 0 ||
-         strcasecmp(name, "title") == 0 || strcasecmp(name, "rp") == 0;
+  return name && VisibleTextUtils::isNonVisibleElement(name);
 }
 
 bool isInternalEpubLink(const char* href) {

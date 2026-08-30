@@ -148,6 +148,11 @@ void ReaderActivity::onEnter() {
 
 void ReaderActivity::onGoBack() { finish(); }
 
+ReaderRenderSpec ReaderActivity::currentReaderRenderSpec() const {
+  return SETTINGS.readerRenderSpec(static_cast<uint16_t>(renderer.getScreenWidth()),
+                                   static_cast<uint16_t>(renderer.getScreenHeight()));
+}
+
 void ReaderActivity::clearEndOfBookOptionsIfNeeded(const bool atEndOfBook) {
   if (atEndOfBook || !endOfBookOptionsReady.load(std::memory_order_acquire)) return;
 

@@ -166,6 +166,10 @@ bool JsonSettingsIO::saveSettings(const CrossPointSettings& s, const char* path)
   doc["frontButtonRight"] = s.frontButtonRight;
   // Font family — uses dynamic getter/setter in SettingsList so the generic loop skips it.
   doc["fontFamily"] = s.fontFamily;
+  // Reader size is an actual point size since the text-settings migration.
+  // Keep the old key out of newly written files; the loader below accepts it
+  // for one-way migration from pre-1.5 settings.
+  doc["fontPointSize"] = s.fontPointSize;
   // SD card font family name — not in SettingsList, save manually
   if (s.sdFontFamilyName[0] != '\0') {
     doc["sdFontFamilyName"] = s.sdFontFamilyName;
@@ -264,6 +268,23 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
   s.frontButtonRight =
       clamp(doc["frontButtonRight"] | (uint8_t)S::FRONT_HW_RIGHT, S::FRONT_BUTTON_HARDWARE_COUNT, S::FRONT_HW_RIGHT);
   CrossPointSettings::validateFrontButtonMapping(s);
+
+  // Reader font size migration.  New files use fontPointSize directly.  A
+  // legacy fontSize value is unambiguous because old files stored only the
+  // four enum slots 0..3.
+  if (!doc["fontPointSize"].isNull()) {
+    const uint8_t stored = doc["fontPointSize"] | CrossPointSettings::DEFAULT_FONT_POINT_SIZE;
+    s.fontPointSize = stored >= 1 ? stored : CrossPointSettings::DEFAULT_FONT_POINT_SIZE;
+  } else if (!doc["fontSize"].isNull()) {
+    const uint8_t legacy = doc["fontSize"] | static_cast<uint8_t>(1);
+    if (legacy <= CrossPointSettings::LEGACY_FONT_SIZE_MAX) {
+      s.fontPointSize = static_cast<uint8_t>(12 + legacy * 2);
+      if (needsResave) *needsResave = true;
+    } else {
+      s.fontPointSize = CrossPointSettings::DEFAULT_FONT_POINT_SIZE;
+      if (needsResave) *needsResave = true;
+    }
+  }
 
   // Font family — uses dynamic getter/setter in SettingsList so the generic loop skips it.
   const uint8_t storedFontFamily = doc["fontFamily"] | (uint8_t)0;

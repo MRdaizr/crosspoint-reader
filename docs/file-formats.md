@@ -9,6 +9,12 @@ layouts. Cache invalidation continues to be controlled by each format's own
 version field (including the current section and CSS versions); SDK updates
 must not reuse those version numbers.
 
+Reader text settings now persist `fontPointSize` as a physical point size
+(12/14/16/18 for built-in faces, or the sizes installed by an SD family).
+Files containing the legacy `fontSize` slot are accepted once, mapped to the
+equivalent point size, and rewritten. This setting migration does not change
+the EPUB section version.
+
 ## `book.bin`
 
 ### Version 10
@@ -142,6 +148,12 @@ The section cache is intentionally invalidated when these semantics change. A
 section written with Version 40 or any earlier version (and partial caches from
 an older section format) are rejected and rebuilt;
 no attempt is made to reinterpret its serialized page payload.
+
+The reader exposes a `ReaderRenderSpec` containing all layout-affecting values
+and viewport dimensions. `Section` accepts this spec for full and incremental
+loads and provides `loadPageDuringBuild()` for bounded page previews; these are
+API compatibility layers over the existing Version 41 cache and do not alter
+the serialized header.
 
 ImHex pattern:
 

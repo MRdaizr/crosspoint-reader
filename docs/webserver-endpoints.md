@@ -210,12 +210,14 @@ Example item:
 
 ```json
 {
-  "key": "fontSize",
+  "key": "fontPointSize",
   "name": "Font Size",
   "category": "Reader",
-  "type": "enum",
-  "value": 1,
-  "options": ["Small", "Medium", "Large"]
+  "type": "value",
+  "value": 14,
+  "min": 1,
+  "max": 255,
+  "step": 1
 }
 ```
 
@@ -237,7 +239,7 @@ Applies a partial settings update from a JSON object.
 ```bash
 curl -X POST \
   -H "Content-Type: application/json" \
-  -d '{"fontSize":2,"showHiddenFiles":1}' \
+  -d '{"fontPointSize":16,"showHiddenFiles":1}' \
   http://crosspoint.local/api/settings
 ```
 

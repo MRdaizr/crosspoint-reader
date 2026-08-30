@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "Epub.h"
+#include "ReaderRenderSpec.h"
 
 class Page;
 class GfxRenderer;
@@ -71,16 +72,33 @@ class Section {
   bool loadSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                        uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
                        uint8_t imageRendering, bool focusReadingEnabled);
+  bool loadSectionFile(const ReaderRenderSpec& spec) {
+    return loadSectionFile(spec.fontId, spec.lineCompression, spec.extraParagraphSpacing, spec.paragraphAlignment,
+                           spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled, spec.embeddedStyle,
+                           spec.imageRendering, spec.focusReadingEnabled);
+  }
   bool clearCache() const;
   bool createSectionFile(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                          uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled, bool embeddedStyle,
                          uint8_t imageRendering, bool focusReadingEnabled,
                          const std::function<void()>& popupFn = nullptr,
                          const std::function<void(uint8_t)>& progressFn = nullptr);
+  bool createSectionFile(const ReaderRenderSpec& spec, const std::function<void()>& popupFn = nullptr,
+                         const std::function<void(uint8_t)>& progressFn = nullptr) {
+    return createSectionFile(spec.fontId, spec.lineCompression, spec.extraParagraphSpacing, spec.paragraphAlignment,
+                             spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled, spec.embeddedStyle,
+                             spec.imageRendering, spec.focusReadingEnabled, popupFn, progressFn);
+  }
   bool beginIncrementalBuild(int fontId, float lineCompression, bool extraParagraphSpacing, uint8_t paragraphAlignment,
                              uint16_t viewportWidth, uint16_t viewportHeight, bool hyphenationEnabled,
                              bool embeddedStyle, uint8_t imageRendering, bool focusReadingEnabled,
                              const std::function<void(uint8_t)>& progressFn = nullptr);
+  bool beginIncrementalBuild(const ReaderRenderSpec& spec, const std::function<void(uint8_t)>& progressFn = nullptr) {
+    return beginIncrementalBuild(spec.fontId, spec.lineCompression, spec.extraParagraphSpacing,
+                                 spec.paragraphAlignment, spec.viewportWidth, spec.viewportHeight,
+                                 spec.hyphenationEnabled, spec.embeddedStyle, spec.imageRendering,
+                                 spec.focusReadingEnabled, progressFn);
+  }
   enum class BuildResult { InProgress, Complete, PausedLowMemory, Failed };
   BuildResult buildNextChunk(uint8_t maxChunks = 1);
   bool isBuilding() const { return buildActive; }
@@ -102,6 +120,14 @@ class Section {
                                          uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,
                                          bool hyphenationEnabled, bool embeddedStyle, uint8_t imageRendering,
                                          bool focusReadingEnabled, uint16_t targetPage);
+  // Public name used by the unified reader layer while an incremental build is
+  // catching up.  It delegates to the existing bounded preview parser and
+  // therefore preserves section v41 cache semantics.
+  std::unique_ptr<Page> loadPageDuringBuild(const ReaderRenderSpec& spec, uint16_t targetPage) {
+    return buildPagePreview(spec.fontId, spec.lineCompression, spec.extraParagraphSpacing, spec.paragraphAlignment,
+                            spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled, spec.embeddedStyle,
+                            spec.imageRendering, spec.focusReadingEnabled, targetPage);
+  }
   std::unique_ptr<Page> loadPageFromSectionFile();
   std::string getTextFromSectionFile();
 

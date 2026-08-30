@@ -56,6 +56,13 @@ the built-in family continue through the existing SD-card font fallback.
 Arabic, Hebrew, Vietnamese, and other extra UI font packs are intentionally
 not part of this target.
 
+The Text Settings screen is a four-tab FUI activity (Font, Size, Layout and
+Style). Size choices are physical point sizes discovered from the active SD
+family, with a live ParsedText preview and immediate persistence. The SD font
+management page lists installed families and uses the shared FontInstaller for
+safe deletion; large font downloads continue to use the existing web-server
+upload path.
+
 To regenerate fonts on a development machine, set `NOTOSANS_SC_FONT` and
 `NOTOSANS_JP_FONT` to local font files and run
 `lib/EpdFont/scripts/convert-builtin-fonts.sh`, then regenerate `src/fontIds.h`.

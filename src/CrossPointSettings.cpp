@@ -6,9 +6,11 @@
 #include <Serialization.h>
 
 #include <cstring>
+#include <iterator>
 #include <string>
 
 #include "I18nKeys.h"
+#include "ReaderFontSizes.h"
 #include "fontIds.h"
 
 // Initialize the static instance
@@ -206,7 +208,11 @@ bool CrossPointSettings::loadFromBinaryFile() {
       }
     }
     if (++settingsRead >= fileSettingsCount) break;
-    readAndValidate(inputFile, fontSize, FONT_SIZE_COUNT);
+    // Binary settings v1 stored the abstract 0..3 font-size slot.  Keep the
+    // file layout readable and translate it immediately to a point size.
+    uint8_t legacyFontSize = 1;
+    readAndValidate(inputFile, legacyFontSize, LEGACY_FONT_SIZE_MAX + 1);
+    fontPointSize = static_cast<uint8_t>(12 + legacyFontSize * 2);
     if (++settingsRead >= fileSettingsCount) break;
     readAndValidate(inputFile, lineSpacing, LINE_COMPRESSION_COUNT);
     if (++settingsRead >= fileSettingsCount) break;
@@ -293,6 +299,8 @@ float CrossPointSettings::getReaderLineCompression() const {
         return 1.0f;
       case WIDE:
         return 1.1f;
+      case EXTRA_WIDE:
+        return 1.2f;
     }
   }
 
@@ -307,6 +315,8 @@ float CrossPointSettings::getReaderLineCompression() const {
           return 1.0f;
         case WIDE:
           return 1.1f;
+        case EXTRA_WIDE:
+          return 1.2f;
       }
     case NOTOSANS:
       switch (lineSpacing) {
@@ -317,6 +327,8 @@ float CrossPointSettings::getReaderLineCompression() const {
           return 0.95f;
         case WIDE:
           return 1.0f;
+        case EXTRA_WIDE:
+          return 1.05f;
       }
   }
 }
@@ -358,39 +370,42 @@ uint64_t CrossPointSettings::getDailyGoalMs() const {
   }
 }
 
+ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWidth,
+                                                       const uint16_t viewportHeight) const {
+  ReaderRenderSpec spec;
+  spec.fontId = getReaderFontId();
+  spec.lineCompression = getReaderLineCompression();
+  spec.extraParagraphSpacing = extraParagraphSpacing != 0;
+  spec.paragraphAlignment = paragraphAlignment;
+  spec.viewportWidth = viewportWidth;
+  spec.viewportHeight = viewportHeight;
+  spec.hyphenationEnabled = hyphenationEnabled != 0;
+  spec.embeddedStyle = embeddedStyle != 0;
+  spec.imageRendering = imageRendering;
+  spec.focusReadingEnabled = focusReadingEnabled != 0;
+  return spec;
+}
+
 int CrossPointSettings::getReaderFontId() const {
   // Check SD card font first
   if (sdFontFamilyName[0] != '\0' && sdFontIdResolver) {
-    int id = sdFontIdResolver(sdFontResolverCtx, sdFontFamilyName, fontSize);
+    int id = sdFontIdResolver(sdFontResolverCtx, sdFontFamilyName, fontPointSize);
     if (id != 0) return id;
     // Fall through to built-in if SD font not found
   }
 
-  switch (fontFamily) {
-    case NOTOSERIF:
+  const uint8_t pt = snapToNearestPointSize(BUILTIN_READER_POINT_SIZES,
+                                            std::size(BUILTIN_READER_POINT_SIZES), fontPointSize);
+  const bool sans = fontFamily == NOTOSANS;
+  switch (pt) {
+    case 12:
+      return sans ? NOTOSANS_12_FONT_ID : NOTOSERIF_12_FONT_ID;
+    case 16:
+      return sans ? NOTOSANS_16_FONT_ID : NOTOSERIF_16_FONT_ID;
+    case 18:
+      return sans ? NOTOSANS_18_FONT_ID : NOTOSERIF_18_FONT_ID;
+    case 14:
     default:
-      switch (fontSize) {
-        case SMALL:
-          return NOTOSERIF_12_FONT_ID;
-        case MEDIUM:
-        default:
-          return NOTOSERIF_14_FONT_ID;
-        case LARGE:
-          return NOTOSERIF_16_FONT_ID;
-        case EXTRA_LARGE:
-          return NOTOSERIF_18_FONT_ID;
-      }
-    case NOTOSANS:
-      switch (fontSize) {
-        case SMALL:
-          return NOTOSANS_12_FONT_ID;
-        case MEDIUM:
-        default:
-          return NOTOSANS_14_FONT_ID;
-        case LARGE:
-          return NOTOSANS_16_FONT_ID;
-        case EXTRA_LARGE:
-          return NOTOSANS_18_FONT_ID;
-      }
+      return sans ? NOTOSANS_14_FONT_ID : NOTOSERIF_14_FONT_ID;
   }
 }

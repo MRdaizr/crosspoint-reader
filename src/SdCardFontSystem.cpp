@@ -4,6 +4,7 @@
 #include <Logging.h>
 
 #include "CrossPointSettings.h"
+#include "ReaderFontSizes.h"
 #include "fontIds.h"
 
 namespace {
@@ -31,23 +32,13 @@ constexpr uint32_t CJK_PROBES[] = {
 
 }  // namespace
 
-namespace {
-
-static uint8_t fontSizeEnumFromSettings() {
-  uint8_t e = SETTINGS.fontSize;
-  if (e >= CrossPointSettings::FONT_SIZE_COUNT) e = 1;  // default to MEDIUM
-  return e;
-}
-
-}  // namespace
-
 void SdCardFontSystem::begin(GfxRenderer& renderer) {
   registry_.discover();
 
   // Register this system as the SD font ID resolver in settings.
   // Uses a static trampoline since CrossPointSettings stores a plain function pointer.
-  SETTINGS.sdFontIdResolver = [](void* ctx, const char* familyName, uint8_t fontSizeEnum) -> int {
-    return static_cast<SdCardFontSystem*>(ctx)->resolveFontId(familyName, fontSizeEnum);
+  SETTINGS.sdFontIdResolver = [](void* ctx, const char* familyName, uint8_t pointSize) -> int {
+    return static_cast<SdCardFontSystem*>(ctx)->resolveFontId(familyName, pointSize);
   };
   SETTINGS.sdFontResolverCtx = this;
 
@@ -55,7 +46,8 @@ void SdCardFontSystem::begin(GfxRenderer& renderer) {
   if (SETTINGS.sdFontFamilyName[0] != '\0') {
     const auto* family = registry_.findFamily(SETTINGS.sdFontFamilyName);
     if (family) {
-      if (manager_.loadFamily(*family, renderer, fontSizeEnumFromSettings())) {
+      if (manager_.loadFamily(*family, renderer, SETTINGS.fontPointSize)) {
+        SETTINGS.fontPointSize = manager_.currentPointSize();
         setupUiFallbacks(renderer);
         LOG_INF("SDFS", "Loaded SD card font family: %s (fontId=%d, size=%u)", SETTINGS.sdFontFamilyName,
                 manager_.getLoadedFontId(), manager_.currentPointSize());
@@ -87,7 +79,7 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
 
   const char* wantedFamily = SETTINGS.sdFontFamilyName;
   const std::string& currentFamily = manager_.currentFamilyName();
-  const uint8_t sizeEnum = fontSizeEnumFromSettings();
+  const uint8_t requestedPointSize = SETTINGS.fontPointSize;
 
   if (wantedFamily[0] == '\0') {
     if (!currentFamily.empty()) {
@@ -108,11 +100,11 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
       SETTINGS.sdFontFamilyName[0] = '\0';
       return;
     }
-    const auto* selected = family->findClosestReaderSize(sizeEnum);
+    const auto* selected = family->findNearestSize(requestedPointSize);
     const uint8_t wantedPt = selected ? selected->pointSize : 0;
     if (!registryWasDirty && wantedPt == manager_.currentPointSize()) return;
-    LOG_DBG("SDFS", "Reloading %s: size %u -> %u (enum %u)%s", wantedFamily, manager_.currentPointSize(), wantedPt,
-            sizeEnum, registryWasDirty ? " [registry dirty]" : "");
+    LOG_DBG("SDFS", "Reloading %s: size %u -> %u (requested %u)%s", wantedFamily, manager_.currentPointSize(),
+            wantedPt, requestedPointSize, registryWasDirty ? " [registry dirty]" : "");
   }
 
   if (!currentFamily.empty()) {
@@ -121,7 +113,8 @@ void SdCardFontSystem::ensureLoaded(GfxRenderer& renderer) {
 
   const auto* family = registry_.findFamily(wantedFamily);
   if (family) {
-    if (manager_.loadFamily(*family, renderer, sizeEnum)) {
+    if (manager_.loadFamily(*family, renderer, requestedPointSize)) {
+      SETTINGS.fontPointSize = manager_.currentPointSize();
       setupUiFallbacks(renderer);
       LOG_INF("SDFS", "Loaded SD card font family: %s (fontId=%d, size=%u)", wantedFamily,
               manager_.getLoadedFontId(), manager_.currentPointSize());
@@ -177,8 +170,8 @@ void SdCardFontSystem::releaseLoadedFont(GfxRenderer& renderer) {
   manager_.unloadAll(renderer);
 }
 
-int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t /*fontSizeEnum*/) const {
-  // The manager loads exactly one size (closest to SETTINGS.fontSize), so the
+int SdCardFontSystem::resolveFontId(const char* familyName, uint8_t /*pointSize*/) const {
+  // The manager loads exactly one size (nearest to SETTINGS.fontPointSize), so the
   // enum is implicit — always return the single loaded font ID for this family.
   // ensureLoaded() must have been called with the current settings before this.
   return manager_.getFontId(familyName);

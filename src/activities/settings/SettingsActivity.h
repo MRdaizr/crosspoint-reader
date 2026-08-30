@@ -23,6 +23,8 @@ enum class SettingAction {
   ClearPomodoroCache,
   SdFirmwareUpdate,
   Language,
+  TextSettings,
+  FontDownload,
 };
 
 struct SettingInfo {

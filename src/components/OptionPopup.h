@@ -32,6 +32,15 @@ class OptionPopup {
     finishShow(currentIndex, std::move(onSelect));
   }
 
+  // Runtime labels are used by point-size and margin pickers.  Keeping the
+  // same modal/input path avoids each settings page reimplementing a picker.
+  void show(StrId titleId, const std::vector<std::string>& options, const int currentIndex,
+            std::function<void(int)> onSelect) {
+    title_ = I18N.get(titleId);
+    options_ = options;
+    finishShow(currentIndex, std::move(onSelect));
+  }
+
   bool handleInput(GfxRenderer& renderer, MappedInputManager& input, const std::function<void()>& requestUpdate) {
     if (!active_) return false;
 

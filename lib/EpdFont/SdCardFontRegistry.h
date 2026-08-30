@@ -18,7 +18,11 @@ struct SdCardFontFamilyInfo {
   std::vector<SdCardFontFileInfo> files;
 
   const SdCardFontFileInfo* findFile(uint8_t size, uint8_t style = 0) const;
-  const SdCardFontFileInfo* findClosestReaderSize(uint8_t fontSizeEnum, uint8_t style = 0) const;
+  const SdCardFontFileInfo* findNearestSize(uint8_t pointSize, uint8_t style = 0) const;
+  // Compatibility alias for callers that still use the old method name.
+  const SdCardFontFileInfo* findClosestReaderSize(uint8_t pointSize, uint8_t style = 0) const {
+    return findNearestSize(pointSize, style);
+  }
   bool hasSize(uint8_t size) const;
   std::vector<uint8_t> availableSizes() const;
 };

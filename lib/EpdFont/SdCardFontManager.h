@@ -16,12 +16,12 @@ class SdCardFontManager {
   SdCardFontManager(const SdCardFontManager&) = delete;
   SdCardFontManager& operator=(const SdCardFontManager&) = delete;
 
-  // Load the font file whose physical point size is closest to the reader
-  // fontSizeEnum (SMALL=12, MEDIUM=14, LARGE=16, EXTRA_LARGE=18). Only one
+  // Load the font file whose physical point size is closest to the requested
+  // reader point size. Only one
   // .cpfont file is loaded; other sizes remain on disk. This keeps resident
   // interval + kern/ligature tables to one size's worth of memory.
   // Returns true on success.
-  bool loadFamily(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t fontSizeEnum);
+  bool loadFamily(const SdCardFontFamilyInfo& family, GfxRenderer& renderer, uint8_t pointSize);
 
   // Additively load an exact point-size file for a size-matched UI fallback.
   // Returns the registered font id, or 0 when that size is unavailable or the
