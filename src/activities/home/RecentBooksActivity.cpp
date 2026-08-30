@@ -55,6 +55,9 @@ void RecentBooksActivity::onEnter() {
 
   nav.selected = 0;
   sdFontSystem.ensureLoaded(renderer);
+  const int listFontId = sdFontSystem.currentFontId();
+  LOG_INF("RBA", "RecentBooks list font source=%s id=%d",
+          renderer.isSdCardFont(listFontId) ? "SD" : "builtin", listFontId);
 }
 
 void RecentBooksActivity::onExit() {

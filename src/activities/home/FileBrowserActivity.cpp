@@ -80,6 +80,9 @@ void FileBrowserActivity::onEnter() {
   }
 
   sdFontSystem.ensureLoaded(renderer);
+  const int listFontId = sdFontSystem.currentFontId();
+  LOG_INF("FBR", "FileBrowser list font source=%s id=%d",
+          renderer.isSdCardFont(listFontId) ? "SD" : "builtin", listFontId);
 
   // If Confirm was held while this activity opened (typical when launched from a menu), ignore
   // its release — otherwise we'd immediately auto-open whatever is at index 0.
