@@ -295,8 +295,6 @@ The Settings screen allows you to configure the device's behavior. There are a f
 
 - **Language**: Set the UI language. The built-in UI currently provides English, Simplified Chinese, and Japanese (`日本語`). Strings not yet translated in Japanese fall back to English.
 
-- **Manage Fonts**: Browse, download, and manage custom font families installed from the SD card. See [Custom Fonts (SD Card)](#38-custom-fonts-sd-card) for more information.
-
 #### 3.6.5 OPDS Servers (Multiple Libraries)
 
 CrossPoint supports saving multiple OPDS servers and switching between them when browsing catalogs.
@@ -505,11 +503,7 @@ To use custom sleep images, set the sleep screen mode to **Custom** or **Cover +
 
 CrossPoint supports loading additional fonts from the SD card, extending beyond the two built-in families (Noto Serif, Noto Sans). Custom fonts can include extended Unicode coverage, enabling CJK (Chinese, Japanese, Korean) and other scripts.
 
-There are three ways to install fonts:
-
-1. **Download from device (recommended):** Go to **Settings -> System -> Manage Fonts**, browse the available font families, and select one to download over Wi-Fi.
-2. **Upload via web interface:** While in **File Transfer** mode, open the web UI in a browser and navigate to the **Fonts** tab to upload `.cpfont` files.
-3. **Manual SD card copy:** Download font files from the [crosspoint-fonts repository](https://github.com/crosspoint-reader/crosspoint-fonts) and copy them to `/.fonts/` (preferred) or `/fonts/` on your SD card.
+Install fonts by downloading `.cpfont` files from the [crosspoint-fonts repository](https://github.com/crosspoint-reader/crosspoint-fonts) and copying them to `/.fonts/` (preferred) or `/fonts/` on your SD card.
 
 Once installed, custom fonts appear in **Settings → Reader → Font Family** alongside the built-in fonts.
 

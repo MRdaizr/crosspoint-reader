@@ -3,8 +3,6 @@
 #include <SdCardFontManager.h>
 #include <SdCardFontRegistry.h>
 
-#include <atomic>
-
 class GfxRenderer;
 
 /// Facade that owns the SD card font registry, manager, and resolver logic.
@@ -36,22 +34,6 @@ class SdCardFontSystem {
   /// Access the registry (e.g. for settings UI to enumerate available fonts).
   const SdCardFontRegistry& registry() const { return registry_; }
 
-  /// Non-const access to the registry (for FontInstaller).
-  SdCardFontRegistry& registry() { return registry_; }
-
-  /// Mark the registry as needing re-discovery.
-  /// Thread-safe: can be called from the web server task.
-  void markRegistryDirty() { registryDirty_.store(true, std::memory_order_release); }
-
-  /// If the registry is dirty, re-scan the SD card now and clear the flag.
-  /// Used by the web UI so uploaded/deleted fonts appear in the list
-  /// without waiting for the reader activity to run ensureLoaded().
-  void refreshIfDirty() {
-    if (registryDirty_.exchange(false, std::memory_order_acquire)) {
-      registry_.discover();
-    }
-  }
-
  private:
   // Register size-matched SD fonts as CJK fallbacks for the built-in UI faces.
   // The reader-size font remains the selected font for EPUB content; these
@@ -61,7 +43,6 @@ class SdCardFontSystem {
 
   SdCardFontRegistry registry_;
   SdCardFontManager manager_;
-  std::atomic<bool> registryDirty_{false};
 };
 
 // Global SD card font system instance (defined in main.cpp).

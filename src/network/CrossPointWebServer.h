@@ -142,32 +142,10 @@ class CrossPointWebServer {
   void handleToggleTodo();
   void handleDeleteTodo();
 
-  // Font management handlers
-  void handleFontsPage() const;
-  void handleFontList() const;
-  void handleFontUpload();
-  void handleFontUploadData();
-  void handleFontDelete();
-
   // Firmware update handlers
   void handleFirmwarePage() const;
   void handleFirmwareUpload();
   void handleFirmwareUploadData();
-
-  // Font upload state
-  struct FontUploadState {
-    HalFile file;
-    std::string familyName;
-    std::string filePath;
-    bool valid = false;
-    bool magicChecked = false;
-    size_t bytesWritten = 0;
-    static constexpr size_t BUFFER_SIZE = 4096;
-    std::vector<uint8_t> buffer;
-    size_t bufferPos = 0;
-
-    FontUploadState() { buffer.resize(BUFFER_SIZE); }
-  } fontUpload;
 
   struct FirmwareUploadState {
     HalFile file;

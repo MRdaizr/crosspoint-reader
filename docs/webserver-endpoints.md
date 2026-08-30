@@ -18,7 +18,6 @@ the IP address shown on the device screen.
 | `GET` | `/` | Home/status page |
 | `GET` | `/files` | File manager page |
 | `GET` | `/settings` | Web settings page |
-| `GET` | `/fonts` | SD-card font manager page |
 | `GET` | `/js/jszip.min.js` | JavaScript asset used by the file manager |
 
 ## Device Status
@@ -247,70 +246,6 @@ Successful response:
 
 ```text
 Applied 2 setting(s)
-```
-
-## Font Management API
-
-### `GET /api/fonts`
-
-Lists installed SD-card font families.
-
-```bash
-curl http://crosspoint.local/api/fonts
-```
-
-Response:
-
-```json
-{
-  "maxFamilies": 128,
-  "families": [
-    {
-      "name": "Literata",
-      "sizes": [12, 14, 16, 18],
-      "files": [
-        {"name": "Literata_12.cpfont", "size": 123456}
-      ]
-    }
-  ]
-}
-```
-
-### `POST /api/fonts/upload`
-
-Uploads one `.cpfont` file into a family folder.
-
-```bash
-curl -X POST \
-  -F "family=Literata" \
-  -F "file=@Literata_12.cpfont" \
-  http://crosspoint.local/api/fonts/upload
-```
-
-The handler validates the family name, `.cpfont` filename, and `CPFONT` magic
-bytes before accepting the file.
-
-Successful response:
-
-```json
-{"ok":true}
-```
-
-### `POST /api/fonts/delete`
-
-Deletes an installed font family.
-
-```bash
-curl -X POST \
-  -H "Content-Type: application/json" \
-  -d '{"family":"Literata"}' \
-  http://crosspoint.local/api/fonts/delete
-```
-
-Successful response:
-
-```json
-{"ok":true}
 ```
 
 ## OPDS Server API

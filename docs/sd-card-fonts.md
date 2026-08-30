@@ -5,23 +5,7 @@ with extended Unicode coverage (CJK, Cyrillic, Greek, etc.).
 
 ## Installing Fonts
 
-There are three ways to install fonts:
-
-### Option 1: Download from device (recommended)
-
-1. Connect your CrossPoint reader to Wi-Fi
-2. Go to **Settings > System > Manage Fonts**
-3. Browse available font families and tap to download
-4. Downloaded fonts appear immediately in **Settings > Reader > Font Family**
-
-### Option 2: Upload via web browser
-
-1. Start **File Transfer** and connect through **Join Network** or **Create Hotspot**
-2. Open the web interface URL shown on the reader
-3. Navigate to the **Fonts** tab
-4. Upload `.cpfont` files using the upload form
-
-### Option 3: Manual SD card copy
+Install fonts by manually copying the `.cpfont` files to the SD card:
 
 1. Download font files from the
    [crosspoint-fonts repository](https://github.com/crosspoint-reader/crosspoint-fonts)
@@ -50,7 +34,8 @@ There are three ways to install fonts:
                ├── Merriweather_12.cpfont
                └── ...
 
-3. Insert the SD card and power on your CrossPoint reader
+3. Insert the SD card and power on your CrossPoint reader. The font family
+   appears in **Settings → Reader → Font Family** after boot.
 
 ## Available Pre-Built Fonts
 
@@ -123,4 +108,4 @@ To list all presets with codepoint counts:
 
 `--force-autohint` — force FreeType's auto-hinter instead of the font's native hinting (useful when a font's built-in hints produce poor results at small sizes).
 
-Install custom fonts via the web interface or manual SD card copy.
+Install custom fonts by copying them to the SD card.

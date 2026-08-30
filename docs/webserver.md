@@ -1,7 +1,7 @@
 # Web Server Guide
 
 This guide explains how to use CrossPoint Reader's built-in web server for file
-transfer, device settings, Wi-Fi/OPDS management, and SD-card font management.
+transfer, device settings, and Wi-Fi/OPDS management.
 
 ## Overview
 
@@ -12,7 +12,6 @@ The web server is available while the device is in **File Transfer** or
 - Create folders
 - Edit many device settings from a browser
 - Manage saved Wi-Fi networks and OPDS servers
-- Upload and delete `.cpfont` SD-card font families
 - Accept WebDAV clients and Calibre wireless uploads
 
 The server does not require authentication. Use it only on trusted private
@@ -106,16 +105,6 @@ cards for:
 Passwords are accepted when adding or editing entries, but saved passwords are
 not returned by the API.
 
-### Fonts
-
-The Fonts page lists installed SD-card font families and lets you upload
-`.cpfont` files. Upload files from one font family at a time. The server validates
-the font family name, filename, and `.cpfont` magic bytes before accepting the
-upload.
-
-Installed fonts appear in **Settings > Reader > Font Family** after the font
-registry refreshes.
-
 ## Command Line Use
 
 Power users can use `curl`, WebDAV clients, or WebSocket clients while the web
@@ -137,7 +126,7 @@ Endpoint details are documented in [webserver-endpoints.md](./webserver-endpoint
 1. Use **Create Hotspot** when no trusted network is available.
 2. Prefer `crosspoint.local` when available, but keep the displayed IP address as a fallback.
 3. Move closer to the router if upload progress stalls in Join Network mode.
-4. Upload custom fonts through the Fonts page or copy them to `/.fonts/` or `/fonts/` on the SD card.
+4. Copy custom `.cpfont` font families to `/.fonts/` or `/fonts/` on the SD card.
 5. Exit File Transfer mode when finished to conserve battery.
 
 ## Related Documentation
