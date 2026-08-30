@@ -27,6 +27,11 @@ constexpr unsigned long GO_HOME_MS = 1000;
 constexpr size_t NAME_BUFFER_SIZE = 500;
 }  // namespace
 
+// Row caches are built before the display helpers' definitions below, so keep
+// their declarations visible to rebuildRowItems().
+std::string getFileName(std::string filename);
+std::string getFileExtension(std::string filename);
+
 void FileBrowserActivity::loadFiles() {
   files.clear();
 
