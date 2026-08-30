@@ -162,6 +162,10 @@ void TxtReaderActivity::loop() {
                                renderer, mappedInput, txt ? txt->getTitle() : "", page + 1, pageCount,
                                progressPercent, SETTINGS.orientation),
                            [this](const ActivityResult& result) {
+                             if (!std::holds_alternative<TxtMenuResult>(result.data)) {
+                               LOG_ERR("TRD", "TXT reader menu returned an unexpected result");
+                               return;
+                             }
                              const auto& menu = std::get<TxtMenuResult>(result.data);
                              applyOrientation(menu.orientation);
                              if (!result.isCancelled) {
@@ -362,8 +366,10 @@ void TxtReaderActivity::onReaderMenuConfirm(TxtReaderMenuActivity::MenuAction ac
       const int initialPercent = pageCount > 0 ? static_cast<int>((page + 1) * 100.0f / pageCount + 0.5f) : 0;
       startActivityForResult(std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
                              [this](const ActivityResult& result) {
-                               if (!result.isCancelled) {
+                               if (!result.isCancelled && std::holds_alternative<PercentResult>(result.data)) {
                                  jumpToPercent(std::get<PercentResult>(result.data).percent);
+                               } else if (!result.isCancelled) {
+                                 LOG_ERR("TRD", "Percent picker returned an unexpected result");
                                }
                              });
       break;

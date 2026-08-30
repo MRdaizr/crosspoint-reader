@@ -83,8 +83,10 @@ void XtcReaderActivity::loop() {
       startActivityForResult(
           std::make_unique<XtcReaderChapterSelectionActivity>(renderer, mappedInput, xtc, currentPage),
           [this](const ActivityResult& result) {
-            if (!result.isCancelled) {
+            if (!result.isCancelled && std::holds_alternative<PageResult>(result.data)) {
               currentPage = std::get<PageResult>(result.data).page;
+            } else if (!result.isCancelled) {
+              LOG_ERR("XTR", "XTC chapter picker returned an unexpected result");
             }
           });
     }
