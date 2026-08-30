@@ -24,6 +24,31 @@ bool ReaderActivity::isTxtFile(const std::string& path) {
 
 bool ReaderActivity::isBmpFile(const std::string& path) { return FsHelpers::hasBmpExtension(path); }
 
+std::unique_ptr<ReaderActivity> ReaderActivity::create(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                                       std::string path, const bool allowFastInitialRefresh) {
+  if (path.empty()) {
+    LOG_ERR("READER", "Cannot create reader for an empty path");
+    return nullptr;
+  }
+
+  // The factory only selects the format-specific Activity.  Each concrete
+  // reader loads its book in onEnter(), so a failed allocation or malformed
+  // file follows the same deferred ActivityManager lifecycle as every other
+  // screen and never performs ZIP/SD work on the caller's stack.
+  if (isXtcFile(path)) {
+    return makeUniqueNoThrow<XtcReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
+  }
+  if (isTxtFile(path)) {
+    return makeUniqueNoThrow<TxtReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
+  }
+  if (isBmpFile(path)) {
+    // Bitmap pages are not text readers; preserve the existing viewer path by
+    // returning nullptr so ActivityManager can dispatch it separately.
+    return nullptr;
+  }
+  return makeUniqueNoThrow<EpubReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
+}
+
 std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
   if (!Storage.exists(path.c_str())) {
     LOG_ERR("READER", "File does not exist: %s", path.c_str());

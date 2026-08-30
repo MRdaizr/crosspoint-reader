@@ -166,11 +166,28 @@ void moveFinishedBookToReadFolder(const std::string& srcPath, const std::string&
 
 }  // namespace
 
+bool EpubReaderActivity::loadBook() {
+  if (epub) return true;
+  if (bookPath.empty()) {
+    LOG_ERR("ERS", "Cannot load EPUB with an empty path");
+    return false;
+  }
+  auto loaded = ReaderActivity::loadEpub(bookPath);
+  if (!loaded) return false;
+  epub = std::shared_ptr<Epub>(std::move(loaded));
+  return true;
+}
+
 void EpubReaderActivity::onEnter() {
   Activity::onEnter();
 
-  if (!epub) {
+  if (!loadBook()) {
+    finish();
     return;
+  }
+
+  if (allowFastInitialRefresh_) {
+    pagesUntilFullRefresh = std::max(SETTINGS.getRefreshFrequency(), 2);
   }
 
   currentPageVisibleOffset.reset();
@@ -1187,6 +1204,19 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     // indexed. Rebase as soon as the active build reaches it; this avoids
     // waiting for a large chapter to finish before a bookmark/sync jump lands.
     applyCachedVisibleTextOffset();
+
+    // Anchors follow the same incremental rule as visible offsets.  The HTML
+    // parser may discover an id several pages ahead of the last flushed page;
+    // Section::findAnchorDuringBuild() deliberately hides that future page so
+    // this jump is applied only when it is safe to render immediately.
+    if (!pendingAnchor.empty()) {
+      if (const auto page = section->findAnchorDuringBuild(pendingAnchor)) {
+        section->currentPage = *page;
+        LOG_DBG("ERS", "Resolved incremental anchor '%s' to page %d", pendingAnchor.c_str(), *page);
+        pendingAnchor.clear();
+        pageRenderRequested = true;
+      }
+    }
 
     if (buildResult == Section::BuildResult::Complete) {
       // Anchor and percentage navigation need the completed page table for an

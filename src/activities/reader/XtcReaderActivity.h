@@ -32,10 +32,14 @@ class XtcReaderActivity final : public ReaderActivity {
   StatusBarInfo getStatusBarInfo() const;
   void saveProgress() const;
   void loadProgress();
+  bool loadBook();
   bool isAtEndOfBook() const override;
   void onReturnFromEndOfBook() override;
 
  public:
+  explicit XtcReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
+                             bool allowFastInitialRefresh = false)
+      : ReaderActivity("XtcReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
   explicit XtcReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Xtc> xtc)
       : ReaderActivity("XtcReader", renderer, mappedInput, xtc ? xtc->getPath() : ""), xtc(std::move(xtc)) {}
   void onEnter() override;

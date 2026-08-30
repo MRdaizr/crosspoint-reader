@@ -120,6 +120,7 @@ class EpubReaderActivity final : public ReaderActivity {
   void pageTurn(bool isForwardTurn);
   void applyPageTurnLocked(bool isForwardTurn);
   void loadCachedBookmarks();
+  bool loadBook();
   void addBookmark();
   void updateBookmarkFlag();
 
@@ -131,6 +132,9 @@ class EpubReaderActivity final : public ReaderActivity {
   void onReturnFromEndOfBook() override;
 
  public:
+  explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
+                              bool allowFastInitialRefresh = false)
+      : ReaderActivity("EpubReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub)
       : ReaderActivity("EpubReader", renderer, mappedInput, epub ? epub->getPath() : ""), epub(std::move(epub)) {}
   void onEnter() override;

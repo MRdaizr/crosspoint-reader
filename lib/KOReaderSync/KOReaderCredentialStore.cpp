@@ -6,6 +6,8 @@
 #include <ObfuscationUtils.h>
 #include <Serialization.h>
 
+#include <cstring>
+
 #include "KOReaderJsonIO.h"
 
 // Initialize the static instance
@@ -167,6 +169,18 @@ std::string KOReaderCredentialStore::getBaseUrl() const {
   }
 
   return url;
+}
+
+bool KOReaderCredentialStore::usesCrossPointSyncServer() const {
+  const std::string url = getBaseUrl();
+  constexpr char HTTPS_PREFIX[] = "https://sync.crosspointreader.com";
+  constexpr char HTTP_PREFIX[] = "http://sync.crosspointreader.com";
+  const auto matches = [&url](const char* prefix) {
+    const size_t length = strlen(prefix);
+    if (url.compare(0, length, prefix) != 0) return false;
+    return url.size() == length || url[length] == '/' || url[length] == ':';
+  };
+  return matches(HTTPS_PREFIX) || matches(HTTP_PREFIX);
 }
 
 void KOReaderCredentialStore::setMatchMethod(DocumentMatchMethod method) {

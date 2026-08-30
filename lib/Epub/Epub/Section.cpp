@@ -168,13 +168,14 @@ void Section::preserveIncrementalBuild() {
   }
   buildLut.clear();
   buildActive = false;
+  buildHtmlReused_ = false;
   builtPageCount = 0;
   resumePageCount = 0;
 }
 
-void Section::discardIncrementalBuild() {
+void Section::discardIncrementalBuild(const bool keepHtml) {
   preserveIncrementalBuild();
-  if (!buildHtmlPath.empty() && Storage.exists(buildHtmlPath.c_str())) {
+  if (!keepHtml && !buildHtmlPath.empty() && Storage.exists(buildHtmlPath.c_str())) {
     Storage.remove(buildHtmlPath.c_str());
   }
   if (Storage.exists(buildFilePath.c_str())) {
@@ -185,6 +186,7 @@ void Section::discardIncrementalBuild() {
   }
   resumePageCount = 0;
   builtPageCount = 0;
+  buildHtmlReused_ = keepHtml;
 }
 
 bool Section::commitIncrementalBuild(const uint8_t version, const uint32_t bytesConsumed,
@@ -283,6 +285,7 @@ bool Section::finishIncrementalBuild() {
   buildParser.reset();
   buildLut.clear();
   buildActive = false;
+  buildHtmlReused_ = false;
   resumePageCount = 0;
   if (!committed) return false;
   partial_ = false;
@@ -744,6 +747,7 @@ bool Section::resumeIncrementalBuild(
   pageCount = std::max(partial_ ? partialPageCount_ : static_cast<uint16_t>(0), builtPageCount);
   resumePageCount = builtPageCount;
   buildActive = true;
+  buildHtmlReused_ = true;
   buildParser = std::make_unique<ChapterHtmlSlimParser>(
       epub, buildHtmlPath, renderer, fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
       viewportHeight, hyphenationEnabled, focusReadingEnabled,
@@ -776,7 +780,8 @@ bool Section::beginIncrementalBuild(
                              progressFn)) {
     return true;
   }
-  discardIncrementalBuild();
+  const bool reuseHtml = hasHtmlCache();
+  discardIncrementalBuild(reuseHtml);
   // Keep a previously committed partial prefix available while this fresh
   // parser catches up from the beginning of the chapter.
   pageCount = partial_ ? partialPageCount_ : 0;
@@ -785,20 +790,25 @@ bool Section::beginIncrementalBuild(
   const auto sectionsDir = epub->getCachePath() + "/sections";
   Storage.mkdir(sectionsDir.c_str());
   Storage.remove(buildFilePath.c_str());
-  Storage.remove(buildHtmlPath.c_str());
 
   const auto localPath = epub->getSpineItem(spineIndex).href;
-  bool streamed = false;
-  for (int attempt = 0; attempt < 3 && !streamed; attempt++) {
-    HalFile tmpHtml;
-    if (!Storage.openFileForWrite("SCT", buildHtmlPath, tmpHtml)) {
-      continue;
-    }
-    streamed = epub->readItemContentsToStream(localPath, tmpHtml, 1024);
-    tmpHtml.close();
-    if (!streamed) {
-      Storage.remove(buildHtmlPath.c_str());
-      delay(50);
+  // A completed/partial section may leave the streamed HTML behind. Reusing
+  // it avoids inflating a large ZIP entry again when only layout settings
+  // changed. The parser still validates the content before producing pages.
+  bool streamed = reuseHtml;
+  buildHtmlReused_ = reuseHtml;
+  if (!streamed) {
+    for (int attempt = 0; attempt < 3 && !streamed; attempt++) {
+      HalFile tmpHtml;
+      if (!Storage.openFileForWrite("SCT", buildHtmlPath, tmpHtml)) {
+        continue;
+      }
+      streamed = epub->readItemContentsToStream(localPath, tmpHtml, 1024);
+      tmpHtml.close();
+      if (!streamed) {
+        Storage.remove(buildHtmlPath.c_str());
+        delay(50);
+      }
     }
   }
   if (!streamed || !Storage.openFileForWrite("SCT", buildFilePath, buildFile)) {
@@ -953,9 +963,13 @@ void Section::suspendBuild() {
   if (buildFile) buildFile.close();
   if (!committed) Storage.remove(buildFilePath.c_str());
   Storage.remove(buildIndexPath.c_str());
-  Storage.remove(buildHtmlPath.c_str());
+  // Keep a known-good streamed HTML cache for the next layout-only rebuild.
+  // Fresh streams (buildHtmlReused_ == false) are still discarded on suspend
+  // to preserve the old cache footprint.
+  if (!buildHtmlReused_) Storage.remove(buildHtmlPath.c_str());
   buildLut.clear();
   buildActive = false;
+  buildHtmlReused_ = false;
   resumePageCount = 0;
   pageCount = partial_ ? partialPageCount_ : 0;
   builtPageCount = 0;
@@ -1139,6 +1153,34 @@ std::unique_ptr<Page> Section::loadPageFromSectionFile() {
   return loadPageAt(currentPage);
 }
 
+std::unique_ptr<Page> Section::loadPage(const int page) {
+  if (page < 0) return nullptr;
+
+  // A live build keeps its write handle open.  Read an already-flushed page
+  // through a separate handle so deserialization never moves the append
+  // cursor (and therefore cannot corrupt the next checkpoint).
+  if (buildActive && page < static_cast<int>(buildLut.size())) {
+    HalFile partialFile;
+    if (!Storage.openFileForRead("SCT", buildFilePath, partialFile)) return nullptr;
+    const auto& entry = buildLut[static_cast<size_t>(page)];
+    if (entry.fileOffset < HEADER_SIZE || entry.fileOffset >= partialFile.size()) {
+      partialFile.close();
+      return nullptr;
+    }
+    partialFile.seek(entry.fileOffset);
+    auto result = Page::deserialize(partialFile);
+    if (result) result->visibleTextOffset = entry.visibleTextOffset;
+    partialFile.close();
+    return result;
+  }
+
+  // During a rebuild the committed partial prefix remains readable until the
+  // new parser reaches those pages again.
+  if (buildActive && (!partial_ || page >= static_cast<int>(partialPageCount_))) return nullptr;
+  if (!buildActive && page >= static_cast<int>(pageCount)) return nullptr;
+  return loadPageAt(page);
+}
+
 std::unique_ptr<Page> Section::loadPageDuringBuild(const ReaderRenderSpec& spec, const uint16_t targetPage) {
   // A page produced by the active parser is already complete and flushed to
   // the checkpoint file. Read it without touching the parser's write cursor;
@@ -1176,7 +1218,7 @@ std::unique_ptr<Page> Section::loadPageDuringBuild(const ReaderRenderSpec& spec,
 
 std::string Section::getTextFromSectionFile() {
   std::string fullText;
-  auto p = this->loadPageFromSectionFile();
+  auto p = loadPage(currentPage);
   if (p) {
     for (const auto& el : p->elements) {
       if (el->getTag() == TAG_PageLine) {
@@ -1263,6 +1305,33 @@ std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) con
 
   f.close();
   return std::nullopt;
+}
+
+std::optional<uint16_t> Section::findAnchorDuringBuild(const std::string& anchor) const {
+  if (!buildActive || !buildParser) return std::nullopt;
+  for (const auto& entry : buildParser->getAnchors()) {
+    // ChapterHtmlSlimParser records anchors as soon as it sees the element,
+    // while the containing page is flushed later.  Expose only serialized
+    // pages so a caller can immediately load the returned page.
+    if (entry.first == anchor && entry.second < builtPageCount) {
+      return entry.second;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<uint16_t> Section::findAnchor(const std::string& anchor) const {
+  if (const auto page = findAnchorDuringBuild(anchor)) return page;
+  return getPageForAnchor(anchor);
+}
+
+bool Section::hasHtmlCache() const {
+  if (!Storage.exists(buildHtmlPath.c_str())) return false;
+  HalFile html;
+  if (!Storage.openFileForRead("SCT", buildHtmlPath, html)) return false;
+  const bool valid = html.size() > 0;
+  html.close();
+  return valid;
 }
 
 std::optional<uint16_t> Section::getPageForParagraphIndex(const uint16_t pIndex) const {

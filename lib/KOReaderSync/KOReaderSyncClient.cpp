@@ -6,6 +6,7 @@
 #include <base64.h>
 
 #include <string>
+#include <utility>
 
 #include "KOReaderCredentialStore.h"
 
@@ -146,6 +147,38 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
     outProgress.deviceId = doc["device_id"].as<std::string>();
     outProgress.timestamp = doc["timestamp"].as<int64_t>();
 
+    outProgress.metadata.reset();
+    if (KOREADER_STORE.getSendMetadata()) {
+      const JsonObjectConst metadata = doc["metadata"].as<JsonObjectConst>();
+      if (!metadata.isNull()) {
+        KOReaderMetadata value;
+        value.filename = metadata["filename"].as<const char*>() ? metadata["filename"].as<const char*>() : "";
+        value.title = metadata["title"].as<const char*>() ? metadata["title"].as<const char*>() : "";
+        value.authors = metadata["authors"].as<const char*>() ? metadata["authors"].as<const char*>() : "";
+        outProgress.metadata = std::move(value);
+      }
+    }
+
+    // The rich position is a CrossPoint extension and must never be sent to
+    // or trusted from arbitrary KOSync-compatible servers.
+    outProgress.position.reset();
+    if (KOREADER_STORE.usesCrossPointSyncServer()) {
+      const JsonObjectConst position = doc["position"].as<JsonObjectConst>();
+      if (!position.isNull()) {
+        KOReaderRichPosition value;
+        value.pctQ = position["pctQ"].as<uint32_t>();
+        value.spineIndex = position["spine"].as<uint16_t>();
+        value.pageNumber = position["page"].as<uint16_t>();
+        const uint16_t pages = position["pages"].as<uint16_t>();
+        value.totalPages = pages > 0 ? pages : 1;
+        const uint16_t paragraph = position["para"].as<uint16_t>();
+        if (paragraph > 0) value.paragraphIndex = paragraph;
+        const char* xpath = position["xpath"].as<const char*>();
+        if (xpath) value.xpath = xpath;
+        outProgress.position = std::move(value);
+      }
+    }
+
     LOG_DBG("KOSync", "Got progress: %.2f%% at %s", outProgress.percentage * 100, outProgress.progress.c_str());
     return OK;
   }
@@ -173,6 +206,26 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
   doc["percentage"] = progress.percentage;
   doc["device"] = DEVICE_NAME;
   doc["device_id"] = DEVICE_ID;
+
+  if (progress.metadata.has_value()) {
+    auto metadata = doc["metadata"].to<JsonObject>();
+    metadata["filename"] = progress.metadata->filename;
+    metadata["title"] = progress.metadata->title;
+    metadata["authors"] = progress.metadata->authors;
+  }
+
+  if (progress.position.has_value() && KOREADER_STORE.usesCrossPointSyncServer()) {
+    const auto& position = *progress.position;
+    auto rich = doc["position"].to<JsonObject>();
+    rich["pctQ"] = position.pctQ;
+    rich["spine"] = position.spineIndex;
+    rich["page"] = position.pageNumber;
+    rich["pages"] = position.totalPages > 0 ? position.totalPages : 1;
+    if (position.paragraphIndex.has_value()) rich["para"] = *position.paragraphIndex;
+    // Keep the server-side validation limit in the client as well.  Oversized
+    // XPath strings are omitted rather than rejecting an otherwise valid sync.
+    if (!position.xpath.empty() && position.xpath.size() <= 120) rich["xpath"] = position.xpath;
+  }
 
   std::string body;
   serializeJson(doc, body);

@@ -22,10 +22,16 @@ class ReaderActivity : public Activity {
  protected:
   // Constructor for concrete format readers.  The public constructor below is
   // retained as the dispatcher entry point used by ActivityManager.
-  ReaderActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath)
-      : Activity(name, renderer, mappedInput), bookPath(std::move(bookPath)) {}
+  ReaderActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
+                 bool allowFastInitialRefresh = false)
+      : Activity(name, renderer, mappedInput), bookPath(std::move(bookPath)),
+        allowFastInitialRefresh_(allowFastInitialRefresh) {}
 
   std::string bookPath;
+  // Kept in the common layer so all format readers can opt into the same
+  // first-open refresh cadence when launched by ActivityManager. Existing X4
+  // callers default to false and retain their current refresh behavior.
+  bool allowFastInitialRefresh_ = false;
   std::unique_ptr<EndOfBookOptions> endOfBookOptions;
   std::atomic<bool> endOfBookOptionsReady{false};
 
@@ -62,6 +68,12 @@ class ReaderActivity : public Activity {
  public:
   explicit ReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string initialBookPath)
       : Activity("Reader", renderer, mappedInput), initialBookPath(std::move(initialBookPath)) {}
+
+  // Construct the concrete format reader directly. This mirrors the upstream
+  // ReaderActivity factory while retaining the legacy dispatcher constructor
+  // above for callers that still use it.
+  static std::unique_ptr<ReaderActivity> create(GfxRenderer& renderer, MappedInputManager& mappedInput,
+                                                std::string path, bool allowFastInitialRefresh = false);
   void onEnter() override;
   bool isReaderActivity() const override { return true; }
 };

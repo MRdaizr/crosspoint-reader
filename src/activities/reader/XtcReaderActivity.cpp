@@ -11,6 +11,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Logging.h>
 
 #include <algorithm>
 
@@ -27,11 +28,28 @@
 #include "fontIds.h"
 #include "util/AchievementPopupUtils.h"
 
+bool XtcReaderActivity::loadBook() {
+  if (xtc) return true;
+  if (bookPath.empty()) {
+    LOG_ERR("XTR", "Cannot load XTC with an empty path");
+    return false;
+  }
+  auto loaded = ReaderActivity::loadXtc(bookPath);
+  if (!loaded) return false;
+  xtc = std::move(loaded);
+  return true;
+}
+
 void XtcReaderActivity::onEnter() {
   Activity::onEnter();
 
-  if (!xtc) {
+  if (!loadBook()) {
+    finish();
     return;
+  }
+
+  if (allowFastInitialRefresh_) {
+    pagesUntilFullRefresh = std::max(SETTINGS.getRefreshFrequency(), 2);
   }
 
   xtc->setupCacheDir();

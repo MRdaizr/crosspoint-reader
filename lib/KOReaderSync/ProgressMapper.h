@@ -2,7 +2,10 @@
 #include <Epub.h>
 #include <GfxRenderer.h>
 
+#include "KOReaderSyncClient.h"
+
 #include <memory>
+#include <optional>
 #include <string>
 
 /**
@@ -66,6 +69,14 @@ class ProgressMapper {
   static CrossPointPosition toCrossPoint(const std::shared_ptr<Epub>& epub, const SavedProgressPosition& savedPos,
                                          GfxRenderer& renderer, int currentSpineIndex = -1,
                                          int totalPagesInCurrentSpine = 0, int fallbackTotalPages = 0);
+
+  // Resolve the optional CrossPoint sync-server position extension.  The
+  // standard KOReader XPath remains authoritative; this path is a fallback
+  // for rich page/paragraph hints when the XPath cannot be resolved locally.
+  static std::optional<CrossPointPosition> fromRichPosition(const std::shared_ptr<Epub>& epub,
+                                                             const KOReaderRichPosition& rich,
+                                                             GfxRenderer& renderer,
+                                                             bool xpathAlreadyTried = false);
 
   // Map a canonical chapter-local fraction to the current reader's page grid.
   // Used by WeRead, whose chapter UID/offset is authoritative even when page

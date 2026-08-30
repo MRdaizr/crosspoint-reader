@@ -112,8 +112,12 @@ class TxtReaderActivity final : public ReaderActivity {
   void loadProgress();
   bool isAtEndOfBook() const override;
   void onReturnFromEndOfBook() override;
+  bool loadBook();
 
  public:
+  explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
+                             bool allowFastInitialRefresh = false)
+      : ReaderActivity("TxtReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
   explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Txt> txt)
       : ReaderActivity("TxtReader", renderer, mappedInput, txt ? txt->getPath() : ""), txt(std::move(txt)) {}
   void onEnter() override;

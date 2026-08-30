@@ -151,9 +151,18 @@ no attempt is made to reinterpret its serialized page payload.
 
 The reader exposes a `ReaderRenderSpec` containing all layout-affecting values
 and viewport dimensions. `Section` accepts this spec for full and incremental
-loads and provides `loadPageDuringBuild()` for bounded page previews; these are
-API compatibility layers over the existing Version 41 cache and do not alter
-the serialized header.
+loads and provides `loadPageDuringBuild()` for bounded page previews. The
+`loadPage()`, `findAnchorDuringBuild()` and `buildReachedVisibleTextOffset()`
+helpers expose only pages/anchors already flushed to the incremental cache;
+callers keep unresolved content targets pending instead of falling back to an
+obsolete page number. A streamed chapter HTML file is retained after a
+successful layout and reused when a later build changes only the render spec.
+These APIs do not alter the serialized Version 41 header.
+
+Bookmark and KOReader progress records continue to store the visible-text
+offset. KOReader's optional CrossPoint rich position (page/paragraph hints and
+XPath) is accepted and emitted only for the CrossPoint sync endpoint; standard
+KOReader-compatible servers receive the original protocol fields unchanged.
 
 ImHex pattern:
 

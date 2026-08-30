@@ -5,6 +5,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
+#include <Logging.h>
 #include <Serialization.h>
 #include <Utf8.h>
 
@@ -88,11 +89,28 @@ size_t fittingPrefix(const GfxRenderer& renderer, const int fontId, const std::s
 }
 }  // namespace
 
+bool TxtReaderActivity::loadBook() {
+  if (txt) return true;
+  if (bookPath.empty()) {
+    LOG_ERR("TRD", "Cannot load TXT with an empty path");
+    return false;
+  }
+  auto loaded = ReaderActivity::loadTxt(bookPath);
+  if (!loaded) return false;
+  txt = std::move(loaded);
+  return true;
+}
+
 void TxtReaderActivity::onEnter() {
   Activity::onEnter();
 
-  if (!txt) {
+  if (!loadBook()) {
+    finish();
     return;
+  }
+
+  if (allowFastInitialRefresh_) {
+    pagesUntilFullRefresh = std::max(SETTINGS.getRefreshFrequency(), 2);
   }
 
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);

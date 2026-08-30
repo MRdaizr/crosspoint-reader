@@ -205,6 +205,17 @@ void KOReaderSyncActivity::performSync() {
 
   SavedProgressPosition koPos = {remoteProgress.progress, remoteProgress.percentage};
   remotePosition = ProgressMapper::toCrossPoint(epub, koPos, renderer, currentSpineIndex, totalPagesInSpine);
+  if (!remotePosition.hasVisibleTextOffset && remoteProgress.position.has_value()) {
+    // The standard XPath is attempted first.  If it cannot be resolved (for
+    // example after a publisher rewrites the XHTML), use the CrossPoint rich
+    // position as a bounded page/paragraph fallback.
+    const bool sameXPath = remoteProgress.position->xpath == remoteProgress.progress;
+    if (const auto richMapped = ProgressMapper::fromRichPosition(epub, *remoteProgress.position, renderer, sameXPath)) {
+      remotePosition = *richMapped;
+      LOG_DBG("KOSync", "Applied rich remote position: spine=%d page=%d/%d", remotePosition.spineIndex,
+              remotePosition.pageNumber, remotePosition.totalPages);
+    }
+  }
 
   // localProgress was pre-computed in EpubReaderActivity before the Epub was released.
   {
@@ -234,6 +245,33 @@ void KOReaderSyncActivity::performUpload() {
   progress.document = documentHash;
   progress.progress = localProgress.xpath;
   progress.percentage = localProgress.percentage;
+
+  // Send the page/paragraph hints only to the CrossPoint endpoint.  The
+  // standard KOReader service rejects unknown position fields, while the
+  // CrossPoint server can use them for lossless same-device re-pagination.
+  if (KOREADER_STORE.usesCrossPointSyncServer()) {
+    KOReaderRichPosition position;
+    const float percentage = std::clamp(localProgress.percentage, 0.0f, 1.0f);
+    position.pctQ = static_cast<uint32_t>(percentage * 1000000.0f + 0.5f);
+    position.spineIndex = static_cast<uint16_t>(std::max(0, currentSpineIndex));
+    position.pageNumber = static_cast<uint16_t>(std::max(0, currentPage));
+    position.totalPages = static_cast<uint16_t>(std::max(1, totalPagesInSpine));
+    position.paragraphIndex = currentParagraphIndex;
+    position.xpath = localProgress.xpath;
+    progress.position = std::move(position);
+  }
+
+  if (KOREADER_STORE.getSendMetadata()) {
+    ensureEpubLoaded();
+    KOReaderMetadata metadata;
+    const size_t slash = epubPath.rfind('/');
+    metadata.filename = slash == std::string::npos ? epubPath : epubPath.substr(slash + 1);
+    if (epub) {
+      metadata.title = epub->getTitle();
+      metadata.authors = epub->getAuthor();
+    }
+    progress.metadata = std::move(metadata);
+  }
 
   const auto result = KOReaderSyncClient::updateProgress(progress);
 
@@ -301,7 +339,10 @@ void KOReaderSyncActivity::onExit() {
 
 void KOReaderSyncActivity::chooseResultOption() {
   if (selectedOption == 0) {
-    saveProgressAndReturn(remotePosition.spineIndex, remotePosition.pageNumber);
+    const std::optional<uint32_t> visibleOffset = remotePosition.hasVisibleTextOffset
+                                                       ? std::optional<uint32_t>(remotePosition.visibleTextOffset)
+                                                       : std::nullopt;
+    saveProgressAndReturn(remotePosition.spineIndex, remotePosition.pageNumber, visibleOffset);
   } else {
     performUpload();
   }
@@ -514,12 +555,9 @@ void KOReaderSyncActivity::loop() {
     }
 
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-      if (selectedOption == 0) {
-        saveProgressAndReturn(remotePosition.spineIndex, remotePosition.pageNumber);
-      } else if (selectedOption == 1) {
-        // Upload local progress
-        performUpload();
-      }
+      // Keep physical-button activation on the same path as FUI row taps so
+      // visible-text offsets from a rich remote position are preserved.
+      chooseResultOption();
     }
 
     if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {

@@ -1,6 +1,27 @@
 #pragma once
 #include <cstdint>
+#include <optional>
 #include <string>
+
+// Optional document metadata sent alongside progress uploads.  The official
+// KOReader server ignores this extension; CrossPoint sync uses it for
+// diagnostics and book identification.
+struct KOReaderMetadata {
+  std::string filename;
+  std::string title;
+  std::string authors;
+};
+
+// Lossless CrossPoint position extension.  Page numbers are only hints when
+// layouts differ; the XPath/visible-text offset remains the content anchor.
+struct KOReaderRichPosition {
+  uint32_t pctQ = 0;  // percentage in the range 0..1,000,000
+  uint16_t spineIndex = 0;
+  uint16_t pageNumber = 0;
+  uint16_t totalPages = 1;
+  std::optional<uint16_t> paragraphIndex;
+  std::string xpath;
+};
 
 /**
  * Progress data from KOReader sync server.
@@ -12,6 +33,8 @@ struct KOReaderProgress {
   std::string device;    // Device name
   std::string deviceId;  // Device ID
   int64_t timestamp;     // Unix timestamp of last update
+  std::optional<KOReaderMetadata> metadata;
+  std::optional<KOReaderRichPosition> position;
 };
 
 /**

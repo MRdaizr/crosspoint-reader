@@ -34,6 +34,10 @@ class Section {
   std::unique_ptr<ChapterHtmlSlimParser> buildParser;
   CssParser* buildCssParser = nullptr;
   bool buildActive = false;
+  // The streamed HTML may be retained across a layout-only rebuild.  Keep the
+  // flag separate from buildActive so cleanup can remove a malformed fresh
+  // stream while preserving a known-good cache for the next resume.
+  bool buildHtmlReused_ = false;
   bool lowMemoryPauseLogged = false;
   uint16_t resumePageCount = 0;
   uint16_t builtPageCount = 0;
@@ -55,7 +59,7 @@ class Section {
                                      uint32_t visibleTextOffset);
   bool finishIncrementalBuild();
   bool commitIncrementalBuild(uint8_t version, uint32_t bytesConsumed, uint32_t totalBytes);
-  void discardIncrementalBuild();
+  void discardIncrementalBuild(bool keepHtml = false);
   void preserveIncrementalBuild();
   std::unique_ptr<Page> loadPageAt(int page) const;
   bool resumeIncrementalBuild(int fontId, float lineCompression, bool extraParagraphSpacing,
@@ -127,10 +131,27 @@ class Section {
   // first build tick as well, without changing section v41 on-disk semantics.
   std::unique_ptr<Page> loadPageDuringBuild(const ReaderRenderSpec& spec, uint16_t targetPage);
   std::unique_ptr<Page> loadPageFromSectionFile();
+  // Read a page through the active incremental build when available, falling
+  // back to the committed (final or partial) section file.  Keeping this
+  // lookup independent from currentPage lets bookmark/KOReader resolution
+  // inspect a target page while the parser is still catching up.
+  std::unique_ptr<Page> loadPage(int page);
   std::string getTextFromSectionFile();
 
   // Look up the page number for an anchor id from the section cache file.
   std::optional<uint16_t> getPageForAnchor(const std::string& anchor) const;
+
+  // Resolve an anchor from the parser's in-memory map.  Only pages that have
+  // already been serialized are returned; an anchor may be observed before
+  // its containing page is flushed, in which case the caller should keep the
+  // target pending and let the next build slice advance.
+  std::optional<uint16_t> findAnchorDuringBuild(const std::string& anchor) const;
+  std::optional<uint16_t> findAnchor(const std::string& anchor) const;
+
+  // True when the streamed chapter HTML is available in the section cache.
+  // Reusing it avoids inflating the same ZIP entry again during a resumed
+  // incremental build.  The file is still validated by the parser.
+  bool hasHtmlCache() const;
 
   // Get the page count from the section cache file without fully loading it.
   std::optional<uint16_t> getCachedPageCount() const;
@@ -151,4 +172,12 @@ class Section {
   // preferFirstAtOffset is true, ties caused by zero-width content (for
   // example an image-only page) select the first page at that offset.
   std::optional<uint16_t> getPageForVisibleTextOffset(uint32_t offset, bool preferFirstAtOffset = false) const;
+
+  // True when the active parser has emitted a page at or beyond a visible
+  // offset.  This is the content-based counterpart of hasBuiltPage() and is
+  // used to decide whether a KOReader/bookmark jump can be applied now or
+  // must wait for another parser slice.
+  bool buildReachedVisibleTextOffset(uint32_t offset) const {
+    return buildActive && !buildLut.empty() && offset <= buildLut.back().visibleTextOffset;
+  }
 };

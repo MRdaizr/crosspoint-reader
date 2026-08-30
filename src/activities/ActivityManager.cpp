@@ -1,6 +1,7 @@
 #include "ActivityManager.h"
 
 #include <FontCacheManager.h>
+#include <FsHelpers.h>
 #include <HalPowerManager.h>
 
 #include <algorithm>
@@ -18,6 +19,7 @@
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
+#include "util/BmpViewerActivity.h"
 #include "util/FullScreenMessageActivity.h"
 
 // The main loop and the render task may run on different cores on FreeRTOS
@@ -222,7 +224,25 @@ void ActivityManager::goToExtensions() {
 }
 
 void ActivityManager::goToReader(std::string path) {
-  replaceActivity(std::make_unique<ReaderActivity>(renderer, mappedInput, std::move(path)));
+  if (path.empty()) {
+    LOG_ERR("ACT", "Cannot open an empty reader path");
+    goToFileBrowser("/");
+    return;
+  }
+
+  // Images are handled by the dedicated viewer.  Keep this dispatch here so
+  // the shared ReaderActivity factory only ever returns a text/book reader.
+  if (FsHelpers::hasBmpExtension(path)) {
+    replaceActivity(std::make_unique<BmpViewerActivity>(renderer, mappedInput, std::move(path)));
+    return;
+  }
+
+  auto reader = ReaderActivity::create(renderer, mappedInput, std::move(path));
+  if (!reader) {
+    LOG_ERR("ACT", "Failed to create reader activity");
+    return;
+  }
+  replaceActivity(std::move(reader));
 }
 
 void ActivityManager::goToSleep(bool fromTimeout) {
