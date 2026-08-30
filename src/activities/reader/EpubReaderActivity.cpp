@@ -1151,6 +1151,11 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
   const uint16_t viewportWidth = renderer.getScreenWidth() - orientedMarginLeft - orientedMarginRight;
   const uint16_t viewportHeight = renderer.getScreenHeight() - orientedMarginTop - orientedMarginBottom;
+  // Snapshot all layout inputs once for this render pass.  Incremental builds
+  // and cache validation must use exactly the same font/CSS/layout contract as
+  // the page that will be rendered below; repeatedly reading SETTINGS while a
+  // settings activity is closing can otherwise mix two contracts.
+  const ReaderRenderSpec renderSpec = currentReaderRenderSpec(viewportWidth, viewportHeight);
 
   int8_t queuedTurns = queuedPageTurns.load();
   if (queuedTurns != 0 && section) {
@@ -1238,10 +1243,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     currentPageVisibleOffset.reset();
     section = std::unique_ptr<Section>(new Section(epub, currentSpineIndex, renderer));
 
-    const bool sectionCacheLoaded = section->loadSectionFile(
-        SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
-        SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
-        SETTINGS.embeddedStyle, SETTINGS.imageRendering, SETTINGS.focusReadingEnabled);
+    const bool sectionCacheLoaded = section->loadSectionFile(renderSpec);
     if (!sectionCacheLoaded || section->isPartial()) {
       LOG_DBG("ERS", section->isPartial() ? "Partial section cache found, extending..." : "Cache not found, building...");
 
@@ -1255,10 +1257,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         // the beginning so it can extend the committed prefix in the
         // background; loadPageFromSectionFile() falls back to the old file
         // until the new parser reaches the requested page.
-        if (section->beginIncrementalBuild(
-                SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
-                SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
-                SETTINGS.embeddedStyle, SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, preloadProgressFn)) {
+        if (section->beginIncrementalBuild(renderSpec, preloadProgressFn)) {
           const int requestedPage = pendingPageJump.has_value() ? static_cast<int>(*pendingPageJump) : nextPageNumber;
           pendingPageJump.reset();
           if (requestedPage >= section->pageCount) {
@@ -1284,10 +1283,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       // a large CJK paragraph. Resume the prefix and let normal slices reach
       // the requested page instead.
       if (!loadedPartial && canPreviewBeforeFullBuild && previewPageNumber >= 0 && section->hasIncrementalBuildCheckpoint() &&
-          section->beginIncrementalBuild(
-              SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
-              SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
-              SETTINGS.embeddedStyle, SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, preloadProgressFn)) {
+          section->beginIncrementalBuild(renderSpec, preloadProgressFn)) {
         const uint16_t requestedPage = static_cast<uint16_t>(previewPageNumber);
         pendingPageJump.reset();
         beginPreloadProgress();
@@ -1306,7 +1302,6 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       }
 
       if (!loadedPartial && canPreviewBeforeFullBuild && previewPageNumber >= 0) {
-        const ReaderRenderSpec renderSpec = SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
         auto previewPage = section->loadPageDuringBuild(renderSpec, static_cast<uint16_t>(previewPageNumber));
         if (previewPage) {
           section->currentPage = previewPageNumber;
@@ -1324,10 +1319,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
           // Keep the preview on screen and build the remaining cache in small
           // slices. This also applies to resumed positions and chapter jumps.
-          if (section->beginIncrementalBuild(
-                  SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
-                  SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
-                  SETTINGS.embeddedStyle, SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, preloadProgressFn)) {
+          if (section->beginIncrementalBuild(renderSpec, preloadProgressFn)) {
             beginPreloadProgress();
             pageRenderRequested = false;
             lastIncrementalBuildTick = millis() - INCREMENTAL_BUILD_TICK_MS;
@@ -1335,11 +1327,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           }
 
           beginPreloadProgress();
-          if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
-                                          SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
-                                          viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                          SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, nullptr,
-                                          preloadProgressFn)) {
+          if (!section->createSectionFile(renderSpec, nullptr, preloadProgressFn)) {
             LOG_ERR("ERS", "Failed to persist page data to SD after preview");
             updatePreloadProgress(100);
             section.reset();
@@ -1348,10 +1336,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
           }
           updatePreloadProgress(100);
 
-          if (section->loadSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
-                                       SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
-                                       viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                       SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
+          if (section->loadSectionFile(renderSpec)) {
             if (cachedChapterTotalPageCount > 0) {
               if (currentSpineIndex == cachedSpineIndex && section->pageCount != cachedChapterTotalPageCount) {
                 float progress = static_cast<float>(section->currentPage) / static_cast<float>(cachedChapterTotalPageCount);
@@ -1377,10 +1362,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
       // the section table exists. Start from page zero and let the incremental
       // builder finish in slices; exact positioning is applied on completion.
       if (!loadedPartial && !pendingPageJump.has_value() && (pendingPercentJump || !pendingAnchor.empty()) &&
-          section->beginIncrementalBuild(
-              SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
-              SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
-              SETTINGS.embeddedStyle, SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, preloadProgressFn)) {
+          section->beginIncrementalBuild(renderSpec, preloadProgressFn)) {
         section->currentPage = 0;
         pageRenderRequested = true;
         beginPreloadProgress();
@@ -1390,11 +1372,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
 
       if (!loadedPartial) {
         beginPreloadProgress();
-        if (!section->createSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
-                                      SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
-                                      viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                      SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, popupFn,
-                                      preloadProgressFn)) {
+        if (!section->createSectionFile(renderSpec, popupFn, preloadProgressFn)) {
           LOG_ERR("ERS", "Failed to persist page data to SD");
           updatePreloadProgress(100);
           section.reset();
@@ -1561,20 +1539,15 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
   clearNextChapterPreload();
 
   Section cachedNextSection(epub, nextSpineIndex, renderer);
-  if (cachedNextSection.loadSectionFile(SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(),
-                                        SETTINGS.extraParagraphSpacing, SETTINGS.paragraphAlignment, viewportWidth,
-                                        viewportHeight, SETTINGS.hyphenationEnabled, SETTINGS.embeddedStyle,
-                                        SETTINGS.imageRendering, SETTINGS.focusReadingEnabled)) {
+  const ReaderRenderSpec renderSpec = currentReaderRenderSpec(viewportWidth, viewportHeight);
+  if (cachedNextSection.loadSectionFile(renderSpec)) {
     if (!cachedNextSection.isPartial()) return;
     LOG_DBG("ERS", "Next chapter has a partial section cache; extending it in preload");
   }
 
   nextChapterPreload = std::make_unique<Section>(epub, nextSpineIndex, renderer);
   const auto preloadProgressFn = [this](const uint8_t progress) { updatePreloadProgress(progress); };
-  if (!nextChapterPreload->beginIncrementalBuild(
-          SETTINGS.getReaderFontId(), SETTINGS.getReaderLineCompression(), SETTINGS.extraParagraphSpacing,
-          SETTINGS.paragraphAlignment, viewportWidth, viewportHeight, SETTINGS.hyphenationEnabled,
-          SETTINGS.embeddedStyle, SETTINGS.imageRendering, SETTINGS.focusReadingEnabled, preloadProgressFn)) {
+  if (!nextChapterPreload->beginIncrementalBuild(renderSpec, preloadProgressFn)) {
     LOG_ERR("ERS", "Failed to start next-chapter preload: %d", nextSpineIndex);
     clearNextChapterPreload();
     return;

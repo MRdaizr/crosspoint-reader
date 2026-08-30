@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -56,6 +57,7 @@ class ReaderActivity : public Activity {
   // pass this object to Section overloads (or their format-specific layout
   // engines) without each screen re-reading settings independently.
   ReaderRenderSpec currentReaderRenderSpec() const;
+  ReaderRenderSpec currentReaderRenderSpec(uint16_t viewportWidth, uint16_t viewportHeight) const;
 
  public:
   explicit ReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string initialBookPath)

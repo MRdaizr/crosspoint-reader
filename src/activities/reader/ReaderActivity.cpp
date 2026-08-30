@@ -153,6 +153,11 @@ ReaderRenderSpec ReaderActivity::currentReaderRenderSpec() const {
                                    static_cast<uint16_t>(renderer.getScreenHeight()));
 }
 
+ReaderRenderSpec ReaderActivity::currentReaderRenderSpec(const uint16_t viewportWidth,
+                                                         const uint16_t viewportHeight) const {
+  return SETTINGS.readerRenderSpec(viewportWidth, viewportHeight);
+}
+
 void ReaderActivity::clearEndOfBookOptionsIfNeeded(const bool atEndOfBook) {
   if (atEndOfBook || !endOfBookOptionsReady.load(std::memory_order_acquire)) return;
 
