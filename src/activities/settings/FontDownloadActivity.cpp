@@ -27,7 +27,7 @@ void FontDownloadActivity::refreshFamilies() {
   families_.clear();
   families_.reserve(sdFontSystem.registry().getFamilies().size());
   for (const auto& family : sdFontSystem.registry().getFamilies()) families_.push_back(family.name);
-  rowValues_.assign(families_.size(), {});
+  rowValues_.assign(families_.size(), std::string());
   rowItems_.clear();
   rowItems_.reserve(families_.size());
   for (size_t i = 0; i < families_.size(); ++i) {

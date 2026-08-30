@@ -74,7 +74,7 @@ void TextSettingsActivity::onEnter() {
 }
 
 void TextSettingsActivity::rebuildRowItems() {
-  rowValues_.assign(listCount(), {});
+  rowValues_.assign(static_cast<size_t>(listCount()), std::string());
   rowItems_.clear();
   rowItems_.reserve(listCount());
   for (int i = 0; i < listCount(); ++i) {
