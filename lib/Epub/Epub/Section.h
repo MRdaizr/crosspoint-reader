@@ -35,6 +35,15 @@ class Section {
   bool buildActive = false;
   bool lowMemoryPauseLogged = false;
   uint16_t resumePageCount = 0;
+  uint16_t builtPageCount = 0;
+
+  // A committed partial cache is a readable page prefix.  Keep its watermark
+  // separate from pages produced by the currently active parser so a rebuild
+  // can extend an old prefix without exposing an incomplete trailing page.
+  bool partial_ = false;
+  uint16_t partialPageCount_ = 0;
+  uint32_t partialBytesConsumed_ = 0;
+  uint32_t partialTotalBytes_ = 0;
 
   void writeSectionFileHeader(HalFile& target, int fontId, float lineCompression, bool extraParagraphSpacing,
                               uint8_t paragraphAlignment,
@@ -44,8 +53,10 @@ class Section {
   uint32_t onIncrementalPageComplete(std::unique_ptr<Page> page, uint16_t paragraphIndex, uint16_t listItemIndex,
                                      uint32_t visibleTextOffset);
   bool finishIncrementalBuild();
+  bool commitIncrementalBuild(uint8_t version, uint32_t bytesConsumed, uint32_t totalBytes);
   void discardIncrementalBuild();
   void preserveIncrementalBuild();
+  std::unique_ptr<Page> loadPageAt(int page) const;
   bool resumeIncrementalBuild(int fontId, float lineCompression, bool extraParagraphSpacing,
                               uint8_t paragraphAlignment, uint16_t viewportWidth, uint16_t viewportHeight,
                               bool hyphenationEnabled, bool embeddedStyle, uint8_t imageRendering,
@@ -73,6 +84,15 @@ class Section {
   enum class BuildResult { InProgress, Complete, PausedLowMemory, Failed };
   BuildResult buildNextChunk(uint8_t maxChunks = 1);
   bool isBuilding() const { return buildActive; }
+  bool isPartial() const { return partial_; }
+  uint16_t estimatedTotalPages() const;
+  // Persist the pages already produced by an active parser as a readable
+  // partial section.  This is used by the destructor and therefore covers
+  // navigation, sleep and other activity teardown paths.
+  void suspendBuild();
+  // Drop an active build and any partial cache after an unrecoverable parse or
+  // page-deserialization error.
+  void abandonBuild();
   bool hasIncrementalBuildCheckpoint() const {
     return Storage.exists(buildFilePath.c_str()) && Storage.exists(buildHtmlPath.c_str()) &&
            Storage.exists(buildIndexPath.c_str());

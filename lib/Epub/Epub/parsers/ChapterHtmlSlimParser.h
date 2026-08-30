@@ -206,6 +206,11 @@ class ChapterHtmlSlimParser {
   bool beginParsing();
   ParseResult parseNextChunk(uint8_t maxChunks = 1);
   bool isParsing() const { return parseStarted && !parseFinished; }
+  // Progress watermarks are used by Section when an incremental build is
+  // suspended and persisted as a partial cache.  They intentionally expose
+  // only the input stream position, not parser internals.
+  size_t parseBytesConsumed() const { return inputFile ? inputFile.position() : 0; }
+  size_t parseTotalBytes() const { return totalBytes; }
   void addLineToPage(std::shared_ptr<TextBlock> line, uint32_t visibleTextOffset);
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
 };

@@ -97,13 +97,13 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 35
+### Version 41
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
 
-Version 35 includes:
+Version 41 includes:
 
 - cache-busting fields for paragraph alignment, hyphenation, embedded CSS,
   image rendering mode, and Focus Reading
@@ -125,9 +125,22 @@ Version 35 includes:
   carry the `RUBY_CONTINUE` style bit and are kept together during line breaking
 - Ruby follower tokens use an explicit no-break boundary, preventing a grouped
   annotation from being split across pages when CJK token spacing is present
+- Ruby/CJK justification, Focus Reading, image-margin, Ruby soft-flush, and
+  positioned table-row layout semantics from versions 36–41
+
+An in-progress build writes version `0` until all page records and lookup tables
+are complete. If the reader is closed after at least one complete page, it may
+commit a readable partial cache using the derived sentinel
+`0xFE - (41 - 28) = 0xF1`. A partial cache contains only its known page prefix,
+all lookup tables for that prefix, and two trailing `uint32_t` values
+(`bytesConsumed`, `totalBytes`) after the visible-text LUT. It is displayed
+immediately on the next open and rebuilt in the background. Version `0`, `0xF1`
+from another section format, truncated tables, and old versions are rejected
+and rebuilt; no old page payload is reinterpreted.
 
 The section cache is intentionally invalidated when these semantics change. A
-section written with Version 34 (or any earlier version) is rejected and rebuilt;
+section written with Version 40 or any earlier version (and partial caches from
+an older section format) are rejected and rebuilt;
 no attempt is made to reinterpret its serialized page payload.
 
 ImHex pattern:
@@ -137,7 +150,8 @@ import std.mem;
 import std.string;
 import std.core;
 
-#define EXPECTED_VERSION 35
+#define EXPECTED_VERSION 41
+#define PARTIAL_VERSION 0xF1
 #define MAX_STRING_LENGTH 65535
 #define FOOTNOTE_NUMBER_LEN 32
 #define FOOTNOTE_HREF_LEN 256
@@ -289,7 +303,7 @@ struct ParagraphLut {
 
 struct SectionBin {
     u8 version;
-    if (version != EXPECTED_VERSION) {
+    if (version != EXPECTED_VERSION && version != PARTIAL_VERSION) {
         std::error(std::format("Unsupported version: {} (expected {})", version, EXPECTED_VERSION));
     }
 
@@ -309,6 +323,7 @@ struct SectionBin {
     u32 anchorMapOffset;
     u32 paragraphLutOffset;
     u32 listItemLutOffset;
+    u32 visibleTextLutOffset;
 
     Page pages[pageCount];
 
@@ -329,6 +344,15 @@ struct SectionBin {
 
     if (listItemLutOffset != 0 && paragraphLutOffset != 0) {
         u16 listItemIndex[paragraphLut.count] @ listItemLutOffset;
+    }
+
+    if (visibleTextLutOffset != 0) {
+        u32 visibleTextOffset[pageCount] @ visibleTextLutOffset;
+    }
+
+    if (version == PARTIAL_VERSION) {
+        u32 bytesConsumed;
+        u32 totalBytes;
     }
 };
 

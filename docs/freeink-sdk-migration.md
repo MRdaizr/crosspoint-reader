@@ -12,10 +12,12 @@ than the retired `open-x4-sdk` fork.
 - Deferred profiles: X4 Pro touch/frontlight/USB MSC/PSRAM
 
 The SDK switch does not change EPUB, settings, bookmarks, reading progress or
-image/font cache formats. The current branch's EPUB section version (35) and
+image/font cache formats. The current branch's EPUB section version (41) and
 CSS cache version (10) remain the source of truth; incompatible caches are
-rebuilt by their normal version checks. In particular, section 34-or-earlier
-and CSS 9-or-earlier files are discarded and rebuilt, while user settings,
+rebuilt by their normal version checks. A suspended section may use the
+version-41 partial sentinel (`0xF1`) and is extended lazily on the next open.
+Section 40-or-earlier (including older partial sentinels) and CSS 9-or-earlier
+files are discarded and rebuilt, while user settings,
 bookmarks and reading progress are kept.
 
 ## HAL boundary

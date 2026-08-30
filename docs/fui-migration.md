@@ -74,8 +74,10 @@ button map remain fallback paths when a board profile is unavailable.
 
 ## Caches and rollback
 
-FUI changes do not alter the current EPUB section (35), CSS cache (10), image,
-bookmark, or reading-state formats.  Existing section 34-or-earlier and CSS
+FUI changes do not alter the current EPUB section (41), CSS cache (10), image,
+bookmark, or reading-state formats. A version-41 partial section cache stores
+the readable page prefix and parse watermark and is extended on the next open.
+Existing section 40-or-earlier (including older partial sentinels) and CSS
 9-or-earlier files are rejected by their normal version checks and rebuilt;
 user settings, bookmarks, and reading progress are retained.  To roll back this
 UI migration, restore the previous application commit while leaving the
