@@ -394,14 +394,23 @@ void FileBrowserActivity::drawChrome() {
 
 void FileBrowserActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
+  // FUI's font fields are slots, while DynamicFont returns the concrete
+  // GfxRenderer/SD-card font ID.  Start each build from the bundled UI faces;
+  // a CJK filename below will rebind the small slot to the selected SD font.
+  uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_SMALL, UI_10_FONT_ID);
+  uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_BODY, UI_12_FONT_ID);
   const int pathFontId = DynamicFont::fontForCjkText(renderer, basepath.c_str(), SMALL_FONT_ID);
   const int pathReserved = renderer.getLineHeight(pathFontId) + metrics.verticalSpacing;
   screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
                                       static_cast<int16_t>(metrics.buttonHintsHeight + pathReserved), 0});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   if (files.empty()) {
-    screen.centeredText(mode == Mode::PickFirmware ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND),
-                        screen.theme().bodyText);
+    const char* emptyMessage = mode == Mode::PickFirmware ? tr(STR_NO_BIN_FILES) : tr(STR_NO_FILES_FOUND);
+    const int emptyFontId = DynamicFont::fontForCjkText(renderer, emptyMessage, UI_12_FONT_ID);
+    uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_BODY, emptyFontId);
+    fui::TextStyle emptyStyle = screen.theme().bodyText;
+    emptyStyle.bold = !renderer.isSdCardFont(emptyFontId);
+    screen.centeredText(emptyMessage, emptyStyle);
     return;
   }
   rowLabels.clear(); rowValues.clear(); rowItems.clear();
@@ -418,10 +427,34 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
     item.icon = {};
     rowItems.push_back(item);
   }
+
+  // A FUI list has one shared label slot.  Bind it to the selected SD face
+  // when any filename contains CJK so Chinese/Japanese/Korean names use the
+  // same dynamic fallback as the legacy browser.  English-only directories
+  // keep the bundled UI face and do not touch the SD glyph cache.
+  int listFontId = UI_10_FONT_ID;
+  for (const auto& label : rowLabels) {
+    const int candidate = DynamicFont::fontForCjkText(renderer, label.c_str(), UI_10_FONT_ID);
+    if (renderer.isSdCardFont(candidate)) {
+      listFontId = candidate;
+      break;
+    }
+  }
+  uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_SMALL, listFontId);
+
   fui::ListProps props;
   props.items = rowItems.data(); props.count = static_cast<uint16_t>(rowItems.size()); props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch; props.valueInset = 8; props.labelText = screen.theme().smallText; props.labelText.maxLines = 2;
-  syncListViewport(screen, props); screen.list(props);
+  syncListViewport(screen, props);
+  if (renderer.isSdCardFont(listFontId)) {
+    const int first = std::clamp(nav.top, 0, static_cast<int>(rowLabels.size()));
+    const int count = std::min(static_cast<int>(rowLabels.size()) - first, std::max(1, nav.visibleRows));
+    for (int i = 0; i < count; ++i) {
+      DynamicFont::prewarmIfSdFont(renderer, listFontId, rowLabels[static_cast<size_t>(first + i)]);
+    }
+    DynamicFont::prewarmIfSdFont(renderer, listFontId, "\xe2\x80\xa6");
+  }
+  screen.list(props);
 }
 
 void FileBrowserActivity::activateIndex(const int index) {

@@ -12,6 +12,7 @@
 #include "SdCardFontSystem.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "components/UITheme.h"
+#include "fontIds.h"
 #include "util/DynamicFont.h"
 
 namespace fui = freeink::ui;
@@ -141,11 +142,21 @@ void RecentBooksActivity::activateIndex(const int index) {
 
 void RecentBooksActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
+  // FUI stores font references as slots. Reset the slots before inspecting
+  // this list so a previous CJK page cannot leave an SD face bound for an
+  // unrelated English-only repaint.
+  uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_SMALL, UI_10_FONT_ID);
+  uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_BODY, UI_12_FONT_ID);
   screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
                                       static_cast<int16_t>(metrics.buttonHintsHeight), 0});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   if (recentBooks.empty()) {
-    screen.centeredText(tr(STR_NO_RECENT_BOOKS), screen.theme().bodyText);
+    const char* emptyMessage = tr(STR_NO_RECENT_BOOKS);
+    const int emptyFontId = DynamicFont::fontForCjkText(renderer, emptyMessage, UI_12_FONT_ID);
+    uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_BODY, emptyFontId);
+    fui::TextStyle emptyStyle = screen.theme().bodyText;
+    emptyStyle.bold = !renderer.isSdCardFont(emptyFontId);
+    screen.centeredText(emptyMessage, emptyStyle);
     return;
   }
   rowLabels.clear(); rowSubtitles.clear(); rowItems.clear();
@@ -156,9 +167,44 @@ void RecentBooksActivity::buildScreen(UiScreen& screen) {
     fui::ListItem item; item.label = rowLabels.back().c_str(); item.subtitle = rowSubtitles.back().empty() ? nullptr : rowSubtitles.back().c_str();
     item.actionValue = static_cast<int16_t>(i); item.icon = {}; rowItems.push_back(item);
   }
+
+  // Recent-book rows use the FUI small-text slot for both title and author.
+  // Select the SD face when either part contains CJK, matching the old GUI
+  // list's DynamicFont fallback without changing list navigation.
+  int listFontId = UI_10_FONT_ID;
+  for (size_t i = 0; i < recentBooks.size(); ++i) {
+    const int titleFontId = DynamicFont::fontForCjkText(renderer, rowLabels[i].c_str(), UI_10_FONT_ID);
+    if (renderer.isSdCardFont(titleFontId)) {
+      listFontId = titleFontId;
+      break;
+    }
+    const int authorFontId = DynamicFont::fontForCjkText(renderer, rowSubtitles[i].c_str(), UI_10_FONT_ID);
+    if (renderer.isSdCardFont(authorFontId)) {
+      listFontId = authorFontId;
+      break;
+    }
+  }
+  const bool usingSdFont = renderer.isSdCardFont(listFontId);
+  uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_SMALL, listFontId);
+
   fui::ListProps props; props.items = rowItems.data(); props.count = static_cast<uint16_t>(rowItems.size()); props.action = ACTION_ROW;
-  props.inputMask = fui::InputTouch | fui::InputLongPress; props.subtitleText = screen.theme().smallText; props.subtitleText.maxLines = 1;
-  syncListViewport(screen, props, true); screen.list(props);
+  props.inputMask = fui::InputTouch | fui::InputLongPress;
+  props.subtitleText = screen.theme().smallText; props.subtitleText.maxLines = 1;
+  fui::TextStyle label = screen.theme().smallText;
+  label.bold = !usingSdFont;
+  props.labelText = label;
+  syncListViewport(screen, props, true);
+  if (usingSdFont) {
+    const int first = std::clamp(nav.top, 0, static_cast<int>(rowLabels.size()));
+    const int count = std::min(static_cast<int>(rowLabels.size()) - first, std::max(1, nav.visibleRows));
+    for (int i = 0; i < count; ++i) {
+      const size_t row = static_cast<size_t>(first + i);
+      DynamicFont::prewarmIfSdFont(renderer, listFontId, rowLabels[row]);
+      DynamicFont::prewarmIfSdFont(renderer, listFontId, rowSubtitles[row]);
+    }
+    DynamicFont::prewarmIfSdFont(renderer, listFontId, "\xe2\x80\xa6");
+  }
+  screen.list(props);
 }
 
 void RecentBooksActivity::drawFooter() {
