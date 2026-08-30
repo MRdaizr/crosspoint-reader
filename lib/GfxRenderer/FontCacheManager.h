@@ -18,9 +18,12 @@ class FontCacheManager {
 
   void clearCache();
   void releaseSdFontCaches();
-  void prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F);
-  void prewarmCache(int fontId, TextGetter getter, const void* ctx, uint32_t textCount,
-                    uint8_t styleMask = 0x0F);
+  // Returns the number of codepoints not covered by an SD font.  Callers may
+  // ignore the result; the return value is used by list diagnostics to tell
+  // a missing glyph from a layout truncation.
+  int prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F);
+  int prewarmCache(int fontId, TextGetter getter, const void* ctx, uint32_t textCount,
+                   uint8_t styleMask = 0x0F);
   void logStats(const char* label = "render");
   void resetStats();
   // True when a render may touch compressed/SD glyphs that benefit from a

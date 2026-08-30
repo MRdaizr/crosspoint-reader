@@ -190,8 +190,14 @@ void RecentBooksActivity::buildScreen(UiScreen& screen) {
     const int count = std::min(static_cast<int>(rowLabels.size()) - first, std::max(1, nav.visibleRows));
     for (int i = 0; i < count; ++i) {
       const size_t row = static_cast<size_t>(first + i);
-      DynamicFont::prewarmIfSdFont(renderer, listFontId, rowLabels[row]);
-      DynamicFont::prewarmIfSdFont(renderer, listFontId, rowSubtitles[row]);
+      const int titleMissed = DynamicFont::prewarmIfSdFont(renderer, listFontId, rowLabels[row]);
+      const int authorMissed = DynamicFont::prewarmIfSdFont(renderer, listFontId, rowSubtitles[row]);
+      if (titleMissed > 0 || authorMissed > 0) {
+        LOG_INF("RBA", "row=%d SD glyph miss: titleBytes=%u missed=%d authorBytes=%u missed=%d title='%s' author='%s'",
+                first + i, static_cast<unsigned>(rowLabels[row].size()), titleMissed,
+                static_cast<unsigned>(rowSubtitles[row].size()), authorMissed, rowLabels[row].c_str(),
+                rowSubtitles[row].c_str());
+      }
     }
     DynamicFont::prewarmIfSdFont(renderer, listFontId, "\xe2\x80\xa6");
   }

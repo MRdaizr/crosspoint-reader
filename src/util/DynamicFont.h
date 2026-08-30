@@ -79,19 +79,22 @@ inline int fontForSdCardText(const GfxRenderer& renderer, int fallbackFontId) {
   return fallbackFontId;
 }
 
-inline void prewarmIfSdFont(const GfxRenderer& renderer, int fontId, const std::string& text, uint8_t styleMask = 0x01) {
-  if (text.empty() || !renderer.isSdCardFont(fontId)) return;
+inline int prewarmIfSdFont(const GfxRenderer& renderer, int fontId, const std::string& text,
+                           uint8_t styleMask = 0x01) {
+  if (text.empty() || !renderer.isSdCardFont(fontId)) return 0;
   if (auto* fontCache = renderer.getFontCacheManager()) {
-    fontCache->prewarmCache(fontId, text.c_str(), styleMask);
+    return fontCache->prewarmCache(fontId, text.c_str(), styleMask);
   }
+  return 0;
 }
 
-inline void prewarmIfSdFont(const GfxRenderer& renderer, int fontId, FontCacheManager::TextGetter getter,
-                            const void* ctx, uint32_t textCount, uint8_t styleMask = 0x01) {
-  if (getter == nullptr || textCount == 0 || !renderer.isSdCardFont(fontId)) return;
+inline int prewarmIfSdFont(const GfxRenderer& renderer, int fontId, FontCacheManager::TextGetter getter,
+                           const void* ctx, uint32_t textCount, uint8_t styleMask = 0x01) {
+  if (getter == nullptr || textCount == 0 || !renderer.isSdCardFont(fontId)) return 0;
   if (auto* fontCache = renderer.getFontCacheManager()) {
-    fontCache->prewarmCache(fontId, getter, ctx, textCount, styleMask);
+    return fontCache->prewarmCache(fontId, getter, ctx, textCount, styleMask);
   }
+  return 0;
 }
 
 }  // namespace DynamicFont

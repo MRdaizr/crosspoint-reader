@@ -446,7 +446,12 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
     const int first = std::clamp(nav.top, 0, static_cast<int>(rowLabels.size()));
     const int count = std::min(static_cast<int>(rowLabels.size()) - first, std::max(1, nav.visibleRows));
     for (int i = 0; i < count; ++i) {
-      DynamicFont::prewarmIfSdFont(renderer, listFontId, rowLabels[static_cast<size_t>(first + i)]);
+      const size_t row = static_cast<size_t>(first + i);
+      const int missed = DynamicFont::prewarmIfSdFont(renderer, listFontId, rowLabels[row]);
+      if (missed > 0) {
+        LOG_INF("FBR", "row=%d SD glyph miss: nameBytes=%u missed=%d name='%s'",
+                first + i, static_cast<unsigned>(rowLabels[row].size()), missed, rowLabels[row].c_str());
+      }
     }
     DynamicFont::prewarmIfSdFont(renderer, listFontId, "\xe2\x80\xa6");
   }

@@ -51,7 +51,9 @@ void FontCacheManager::releaseSdFontCaches() {
   }
 }
 
-void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask) {
+int FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask) {
+  if (utf8Text == nullptr || utf8Text[0] == '\0') return 0;
+
   // SD card font prewarm path: prewarm all requested styles in one call
   auto it = sdCardFonts_.find(fontId);
   if (it != sdCardFonts_.end()) {
@@ -59,11 +61,13 @@ void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t st
     if (missed > 0) {
       LOG_DBG("FCM", "prewarmCache(SD): %d glyph(s) not found (styleMask=0x%02X)", missed, styleMask);
     }
-    return;
+    return missed;
   }
 
   // Standard compressed font prewarm path: loop over all requested styles
-  if (!fontDecompressor_ || fontMap_.count(fontId) == 0) return;
+  if (!fontDecompressor_ || fontMap_.count(fontId) == 0) return 0;
+
+  int totalMissed = 0;
 
   for (uint8_t i = 0; i < 4; i++) {
     if (!(styleMask & (1 << i))) continue;
@@ -71,26 +75,29 @@ void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t st
     const EpdFontData* data = fontMap_.at(fontId).getData(style);
     if (!data || !data->groups) continue;
     int missed = fontDecompressor_->prewarmCache(data, utf8Text);
+    totalMissed += missed;
     if (missed > 0) {
       LOG_DBG("FCM", "prewarmCache: %d glyph(s) not cached for style %d", missed, i);
     }
   }
+  return totalMissed;
 }
 
-void FontCacheManager::prewarmCache(int fontId, TextGetter getter, const void* ctx, uint32_t textCount,
-                                    uint8_t styleMask) {
-  if (getter == nullptr || textCount == 0) return;
+int FontCacheManager::prewarmCache(int fontId, TextGetter getter, const void* ctx, uint32_t textCount,
+                                   uint8_t styleMask) {
+  if (getter == nullptr || textCount == 0) return 0;
 
   // Batch extraction is currently meaningful for SD fonts, which are the
   // fallback path used by CJK list screens. Built-in compressed fonts retain
   // the existing single-string prewarm API and never need a concatenated copy.
   auto it = sdCardFonts_.find(fontId);
-  if (it == sdCardFonts_.end()) return;
+  if (it == sdCardFonts_.end()) return 0;
 
   const int missed = it->second->prewarm(getter, ctx, textCount, styleMask);
   if (missed > 0) {
     LOG_DBG("FCM", "prewarmCache(SD batch): %d glyph(s) not found (styleMask=0x%02X)", missed, styleMask);
   }
+  return missed;
 }
 
 void FontCacheManager::logStats(const char* label) {
