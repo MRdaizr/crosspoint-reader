@@ -18,6 +18,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/QrUtils.h"
+#include "util/DynamicFont.h"
 
 namespace fui = freeink::ui;
 
@@ -92,6 +93,13 @@ void WeReadBrowseActivity::onEnter() {
   app.on(ACTION_FUI_ROW, &WeReadBrowseActivity::onFuiRow, this);
   app.setScreen(&WeReadBrowseActivity::fuiScreen, this);
   fuiNav_.reset();
+  // The browse page contains book/user supplied Chinese text just like the
+  // file browser. Load the selected SD face before the first FUI build so the
+  // menu and list rows never get measured with the bundled Latin-only face.
+  sdFontSystem.ensureLoaded(renderer);
+  const int listFontId = DynamicFont::fontForSdCardText(renderer, UI_12_FONT_ID);
+  LOG_INF("WRB", "Browse UI font source=%s id=%d",
+          renderer.isSdCardFont(listFontId) ? "SD" : "builtin", listFontId);
   operation_.reset();
   wifiReleasePending_ = false;
   if (reloadCache()) {
@@ -146,6 +154,13 @@ void WeReadBrowseActivity::buildFuiScreen(UiScreen& screen) {
   if (state_ != State::Menu && state_ != State::List) return;
 
   const auto& metrics = UITheme::getInstance().getMetrics();
+  // FUI text styles refer to font slots, not concrete GfxRenderer IDs. Bind
+  // both title and subtitle slots to the SD face for this page, matching the
+  // FileBrowser/RecentBooks list contract for mixed Latin/CJK strings.
+  const int bodyFontId = DynamicFont::fontForSdCardText(renderer, UI_12_FONT_ID);
+  const int smallFontId = DynamicFont::fontForSdCardText(renderer, UI_10_FONT_ID);
+  uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_BODY, bodyFontId);
+  uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_SMALL, smallFontId);
   screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
                                       static_cast<int16_t>(metrics.buttonHintsHeight), 0});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
@@ -196,6 +211,20 @@ void WeReadBrowseActivity::buildFuiScreen(UiScreen& screen) {
     fuiWindowItems_[i].label = fuiWindowLabels_[i].c_str();
     fuiWindowItems_[i].subtitle = fuiWindowSubtitles_[i].empty() ? nullptr : fuiWindowSubtitles_[i].c_str();
     fuiWindowItems_[i].actionValue = static_cast<int16_t>(index);
+  }
+  if (renderer.isSdCardFont(bodyFontId)) {
+    const uint8_t labelStyleMask = screen.theme().bodyText.bold ? 0x02 : 0x01;
+    for (int i = 0; i < windowCount; ++i) {
+      const int index = first + i;
+      const int titleMissed = DynamicFont::prewarmIfSdFont(renderer, bodyFontId, fuiWindowLabels_[i], labelStyleMask);
+      const int subtitleMissed = DynamicFont::prewarmIfSdFont(renderer, smallFontId, fuiWindowSubtitles_[i]);
+      if (titleMissed > 0 || subtitleMissed > 0) {
+        LOG_INF("WRB", "row=%d SD glyph miss: titleBytes=%u missed=%d subtitleBytes=%u missed=%d",
+                index, static_cast<unsigned>(fuiWindowLabels_[i].size()), titleMissed,
+                static_cast<unsigned>(fuiWindowSubtitles_[i].size()), subtitleMissed);
+      }
+    }
+    DynamicFont::prewarmIfSdFont(renderer, bodyFontId, "\xe2\x80\xa6", labelStyleMask);
   }
   fuiListProps_.items = fuiWindowItems_;
   fuiListProps_.itemsWindowFirst = static_cast<uint16_t>(first);
@@ -482,7 +511,13 @@ void WeReadBrowseActivity::openDetail() {
     RenderLock renderBarrier(*this);
     if (!readerFontReady_) {
       sdFontSystem.ensureLoaded(renderer);
-      readerFontId_ = SETTINGS.getReaderFontId();
+      // Browse detail text follows the same SD dynamic-font policy as the
+      // file browser. Keep the configured reader font as a fallback for
+      // devices without an SD font, but prefer the loaded SD face whenever it
+      // is available so CJK highlights/reviews remain complete.
+      readerFontId_ = DynamicFont::fontForSdCardText(renderer, SETTINGS.getReaderFontId());
+      LOG_INF("WRB", "Browse detail font source=%s id=%d",
+              renderer.isSdCardFont(readerFontId_) ? "SD" : "builtin", readerFontId_);
       readerFontReady_ = true;
     }
     buildTextPages();
@@ -499,7 +534,8 @@ void WeReadBrowseActivity::buildTextPages() {
   const Rect content = contentBounds();
   const int lineHeight = renderer.getLineHeight(readerFontId_);
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int footerHeight = renderer.getLineHeight(SMALL_FONT_ID) + metrics.verticalSpacing;
+  const int footerFontId = DynamicFont::fontForSdCardText(renderer, SMALL_FONT_ID);
+  const int footerHeight = renderer.getLineHeight(footerFontId) + metrics.verticalSpacing;
   const int maxLines = std::max(1, (content.height - footerHeight) / lineHeight);
   const int maxWidth = std::max(1, content.width - metrics.contentSidePadding * 2);
   uint32_t offset = 0;
@@ -548,7 +584,8 @@ void WeReadBrowseActivity::drawDetail(const Rect& content) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int side = metrics.contentSidePadding;
   const int lineHeight = renderer.getLineHeight(readerFontId_);
-  const int footerY = content.y + content.height - renderer.getLineHeight(SMALL_FONT_ID);
+  const int footerFontId = DynamicFont::fontForSdCardText(renderer, SMALL_FONT_ID);
+  const int footerY = content.y + content.height - renderer.getLineHeight(footerFontId);
   const uint32_t start = textPageOffsets_[textPage_];
   const uint32_t end = textPageOffsets_[textPage_ + 1];
   const int maxWidth = content.width - side * 2;
@@ -606,7 +643,7 @@ void WeReadBrowseActivity::drawDetail(const Rect& content) {
            static_cast<unsigned>(textPageCount_));
   const bool truncated = textPage_ + 1 == textPageCount_ &&
                          ((selectedRecord_.flags & WeReadBrowse::kRecordTextTruncated) != 0 || textPagesTruncated_);
-  renderer.drawCenteredText(SMALL_FONT_ID, footerY, truncated ? tr(STR_WEREAD_BROWSE_TRUNCATED) : page);
+  renderer.drawCenteredText(footerFontId, footerY, truncated ? tr(STR_WEREAD_BROWSE_TRUNCATED) : page);
 }
 
 void WeReadBrowseActivity::handleMenuInput() {
@@ -796,12 +833,13 @@ void WeReadBrowseActivity::render(RenderLock&&) {
       break;
     case State::Loading:
       if (qrReady_) {
-        const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
+        const int fontId = DynamicFont::fontForSdCardText(renderer, UI_10_FONT_ID);
+        const int lineHeight = renderer.getLineHeight(fontId);
         const int qrSide = std::max(1, std::min(content.width * 4 / 5, content.height - lineHeight * 2));
         const int qrY = content.y + std::max(0, (content.height - qrSide - lineHeight) / 2);
         QrUtils::drawQrCode(renderer, Rect{content.x + (content.width - qrSide) / 2, qrY, qrSide, qrSide},
                             operation_.qrUrl());
-        renderer.drawCenteredText(UI_10_FONT_ID, qrY + qrSide, tr(STR_WEREAD_SCAN_LOGIN));
+        renderer.drawCenteredText(fontId, qrY + qrSide, tr(STR_WEREAD_SCAN_LOGIN));
       } else {
         GUI.drawPopup(renderer, tr(STR_WEREAD_CACHING));
       }
@@ -816,8 +854,9 @@ void WeReadBrowseActivity::render(RenderLock&&) {
                                   currentPage_ + 1 == cache_.pageCounts[WeReadBrowse::kindIndex(kind_)] &&
                                   (cache_.flags & WeReadBrowse::kCacheReviewsLimited) != 0;
       if (reviewsLimited || (pageHeader_.flags & WeReadBrowse::kPageResponseTruncated) != 0) {
+        const int footerFontId = DynamicFont::fontForSdCardText(renderer, SMALL_FONT_ID);
         renderer.drawCenteredText(
-            SMALL_FONT_ID, content.y + content.height - renderer.getLineHeight(SMALL_FONT_ID),
+            footerFontId, content.y + content.height - renderer.getLineHeight(footerFontId),
             I18N.get(reviewsLimited ? StrId::STR_WEREAD_BROWSE_LIMITED : StrId::STR_WEREAD_BROWSE_TRUNCATED));
       }
       break;
