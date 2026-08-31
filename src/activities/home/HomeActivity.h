@@ -31,6 +31,7 @@ class HomeActivity final : public Activity, private UiAppHost {
   int coverRectH = 0;
   std::vector<RecentBook> recentBooks;
   const HomeMenuItem initialMenuItem;
+  const bool cleanInitialRefresh;
 
   static constexpr freeink::ui::ActionId ACTION_FUI_MENU = 1;
   static void fuiScreen(UiScreen& screen, void* user);
@@ -91,8 +92,11 @@ class HomeActivity final : public Activity, private UiAppHost {
 
  public:
   explicit HomeActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
-                        HomeMenuItem initialMenuItemValue = HomeMenuItem::NONE)
-      : Activity("Home", renderer, mappedInput), UiAppHost(renderer), initialMenuItem(initialMenuItemValue) {}
+                        HomeMenuItem initialMenuItemValue = HomeMenuItem::NONE, bool cleanInitialRefresh = false)
+      : Activity("Home", renderer, mappedInput),
+        UiAppHost(renderer),
+        initialMenuItem(initialMenuItemValue),
+        cleanInitialRefresh(cleanInitialRefresh) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;
