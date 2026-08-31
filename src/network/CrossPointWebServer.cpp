@@ -103,6 +103,8 @@ const char* firmwareFlashResultMessage(firmware_flash::Result result) {
       return "Firmware SHA256 verification failed.";
     case firmware_flash::Result::BAD_CHIP:
       return "Firmware is for a different device.";
+    case firmware_flash::Result::WRONG_BOARD:
+      return "Firmware is for a different board.";
     case firmware_flash::Result::BAD_SIZE:
       return "Firmware image size is invalid.";
     case firmware_flash::Result::NO_PARTITION:

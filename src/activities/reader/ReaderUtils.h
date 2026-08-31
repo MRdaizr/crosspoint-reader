@@ -5,6 +5,7 @@
 #include <HalTiltSensor.h>
 #include <Logging.h>
 
+#include "activities/ActivityManager.h"
 #include "MappedInputManager.h"
 
 namespace ReaderUtils {
@@ -67,6 +68,37 @@ inline void displayWithRefreshCycle(const GfxRenderer& renderer, int& pagesUntil
     renderer.displayBuffer();
     pagesUntilFullRefresh--;
   }
+}
+
+struct BackNavCallback {
+  void* ctx;
+  void (*fn)(void*);
+};
+
+// The standard X3/X4 input layer has no touch-back gesture, so the physical
+// button path is sufficient here. Keep the same upstream contract: by
+// default a long press opens the file browser and a short press goes home;
+// backShortToFileBrowser swaps those destinations.
+inline bool handleBackNavigation(const MappedInputManager& mappedInput, ActivityManager& activityManager,
+                                 const char* filePath, BackNavCallback goHome) {
+  if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_HOME_MS) {
+    if (SETTINGS.backShortToFileBrowser) {
+      goHome.fn(goHome.ctx);
+    } else {
+      activityManager.goToFileBrowser(filePath ? filePath : "");
+    }
+    return true;
+  }
+
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && mappedInput.getHeldTime() < GO_HOME_MS) {
+    if (SETTINGS.backShortToFileBrowser) {
+      activityManager.goToFileBrowser(filePath ? filePath : "");
+    } else {
+      goHome.fn(goHome.ctx);
+    }
+    return true;
+  }
+  return false;
 }
 
 // Grayscale anti-aliasing pass. Renders content twice (LSB + MSB) to build

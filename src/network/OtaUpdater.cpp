@@ -16,6 +16,7 @@
 #include <cstring>
 #include <string>
 
+#include "FirmwareBoardTag.h"
 #include "FirmwareFlasher.h"
 
 namespace {
@@ -28,6 +29,13 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   // Stream the ~32KB release JSON straight into the parser. Buffering the whole
   // body would add a growing allocation on top of the TLS session's heap.
   ReleaseJsonParser releaseParser;
+  const bool isX4 = board_tag::boardNameLen() == 2 && memcmp(board_tag::boardName(), "x4", 2) == 0;
+  char assetName[48] = "firmware.bin";
+  if (!isX4) {
+    snprintf(assetName, sizeof(assetName), "firmware-%.*s.bin", static_cast<int>(board_tag::boardNameLen()),
+             board_tag::boardName());
+  }
+  releaseParser.setFirmwareAssetName(assetName);
   const bool ok = HttpDownloader::fetchUrl(latestReleaseUrl, [&releaseParser](const uint8_t* data, size_t len) {
     releaseParser.feed(reinterpret_cast<const char*>(data), len);
     return true;
@@ -46,7 +54,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   }
 
   if (!releaseParser.foundFirmware()) {
-    LOG_ERR("OTA", "No firmware.bin asset found");
+    LOG_INF("OTA", "No %s asset in latest release", assetName);
     return NO_UPDATE;
   }
 
@@ -112,6 +120,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   int lastReportedPct = -1;
   bool flashOk = true;
   bool wrongChip = false;
+  board_tag::Scanner tagScanner;
 
   // Buffer the first 14 bytes so chip_id (esp_image_header_t offset 12) is
   // checked before any byte is written to the OTA partition.
@@ -140,6 +149,12 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   };
 
   const bool fetchOk = HttpDownloader::fetchUrl(otaUrl, [&](const uint8_t* data, size_t length) {
+    tagScanner.feed(data, length);
+    if (tagScanner.mismatch()) {
+      LOG_ERR("OTA", "wrong board: image=%s device=%.*s", tagScanner.foundName(),
+              static_cast<int>(board_tag::boardNameLen()), board_tag::boardName());
+      return false;
+    }
     if (!headerValidated) {
       const size_t take = std::min(length, sizeof(header) - headerLength);
       std::memcpy(header + headerLength, data, take);
@@ -167,7 +182,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::installUpdate(ProgressCallback onProgres
   // Restore the default Wi-Fi power mode on every post-begin path.
   esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
 
-  if (wrongChip) {
+  if (wrongChip || tagScanner.mismatch()) {
     LOG_ERR("OTA", "Firmware install aborted: wrong device");
     esp_ota_abort(otaHandle);
     return WRONG_DEVICE_ERROR;

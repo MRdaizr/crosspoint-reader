@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "activities/UiListActivity.h"
+#include "components/OptionPopup.h"
 
 /**
  * Activity showing the list of configured OPDS servers.
@@ -19,15 +20,18 @@ class OpdsServerListActivity final : public UiListActivity {
       : UiListActivity("OpdsServerList", renderer, mappedInput), pickerMode(pickerMode) {}
 
   void onEnter() override;
+  void render(RenderLock&&) override;
 
  private:
   bool pickerMode = false;
+  OptionPopup optionPopup;
   std::vector<std::string> rowLabels;
   std::vector<std::string> rowSubtitles;
   std::vector<freeink::ui::ListItem> rowItems;
 
   int getItemCount() const;
   void handleSelection();
+  bool handleCustomInput() override;
   int listCount() const override { return getItemCount(); }
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;

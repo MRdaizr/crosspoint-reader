@@ -21,6 +21,9 @@
 
 namespace {
 constexpr size_t WIFI_MAX_PASSWORD_LENGTH = 64;
+// Enum settings are persisted by ordinal. Bump this whenever an ordinal
+// layout changes and migrate older files before the generic loader runs.
+constexpr uint8_t SETTINGS_SCHEMA_VERSION = 3;
 constexpr size_t WIFI_MAX_SSID_LENGTH = 32;
 // Base64 expands at most 64 plaintext bytes to 88 characters. Reject larger
 // strings before handing them to the decoder, which otherwise allocates based
@@ -97,6 +100,10 @@ bool JsonSettingsIO::saveState(const CrossPointState& s, const char* path) {
   for (int i = 0; i < CrossPointState::SLEEP_RECENT_COUNT; i++) recentArr.add(s.recentSleepImages[i]);
   doc["recentSleepPos"] = s.recentSleepPos;
   doc["recentSleepFill"] = s.recentSleepFill;
+  JsonArray recentOverlayArr = doc["recentOverlaySleepImages"].to<JsonArray>();
+  for (int i = 0; i < CrossPointState::SLEEP_RECENT_COUNT; i++) recentOverlayArr.add(s.recentOverlaySleepImages[i]);
+  doc["recentOverlaySleepPos"] = s.recentOverlaySleepPos;
+  doc["recentOverlaySleepFill"] = s.recentOverlaySleepFill;
   doc["readerActivityLoadCount"] = s.readerActivityLoadCount;
   doc["lastSleepFromReader"] = s.lastSleepFromReader;
   doc["showBootScreen"] = s.showBootScreen;
@@ -126,6 +133,21 @@ bool JsonSettingsIO::loadState(CrossPointState& s, const char* json) {
     s.recentSleepPos = actualCount > 0 ? s.recentSleepPos % CrossPointState::SLEEP_RECENT_COUNT : 0;
   s.recentSleepFill = doc["recentSleepFill"] | static_cast<uint8_t>(0);
   s.recentSleepFill = static_cast<uint8_t>(std::min(static_cast<int>(s.recentSleepFill), actualCount));
+  memset(s.recentOverlaySleepImages, 0, sizeof(s.recentOverlaySleepImages));
+  JsonArrayConst recentOverlayArr = doc["recentOverlaySleepImages"];
+  const int actualOverlayCount = recentOverlayArr.isNull()
+                                     ? 0
+                                     : std::min(static_cast<int>(recentOverlayArr.size()),
+                                                static_cast<int>(CrossPointState::SLEEP_RECENT_COUNT));
+  for (int i = 0; i < actualOverlayCount; i++) {
+    s.recentOverlaySleepImages[i] = recentOverlayArr[i] | static_cast<uint16_t>(0);
+  }
+  s.recentOverlaySleepPos = doc["recentOverlaySleepPos"] | static_cast<uint8_t>(0);
+  if (s.recentOverlaySleepPos >= CrossPointState::SLEEP_RECENT_COUNT) {
+    s.recentOverlaySleepPos = actualOverlayCount > 0 ? s.recentOverlaySleepPos % CrossPointState::SLEEP_RECENT_COUNT : 0;
+  }
+  s.recentOverlaySleepFill = doc["recentOverlaySleepFill"] | static_cast<uint8_t>(0);
+  s.recentOverlaySleepFill = static_cast<uint8_t>(std::min(static_cast<int>(s.recentOverlaySleepFill), actualOverlayCount));
   // Migrate legacy single-image field from old state.json (pre-recency-buffer).
   // Only seeds the buffer if the new buffer is empty (fresh migration, not a resave).
   if (s.recentSleepFill == 0 && !doc["lastSleepImage"].isNull()) {
@@ -142,6 +164,7 @@ bool JsonSettingsIO::loadState(CrossPointState& s, const char* json) {
 
 bool JsonSettingsIO::saveSettings(const CrossPointSettings& s, const char* path) {
   JsonDocument doc;
+  doc["settingsSchema"] = SETTINGS_SCHEMA_VERSION;
 
   for (const auto& info : getSettingsList()) {
     if (!info.key) continue;
@@ -209,6 +232,35 @@ bool JsonSettingsIO::loadSettings(CrossPointSettings& s, const char* json, bool*
   }
 
   auto clamp = [](uint8_t val, uint8_t maxVal, uint8_t def) -> uint8_t { return val < maxVal ? val : def; };
+
+  // Version 2 was written by the interim standard X3/X4 profile, where
+  // BLANK=4 and COVER_CUSTOM=5. Version 3 restores the upstream ordinals,
+  // including TRANSPARENT_CUSTOM=7 and REFRESH_NEVER=5. Unversioned files
+  // are treated as upstream-layout files for compatibility with the base
+  // firmware's JSON settings.
+  const uint8_t settingsSchema = doc["settingsSchema"] | static_cast<uint8_t>(1);
+  if (settingsSchema == 2) {
+    if (needsResave) *needsResave = true;
+
+    // Version 2: BLANK=4, COVER_CUSTOM=5. Version 3: COVER_CUSTOM=4,
+    // BLANK=5. The former transparent value was not exposed in version 2.
+    if (!doc["sleepScreen"].isNull()) {
+      const uint8_t value = doc["sleepScreen"] | static_cast<uint8_t>(0);
+      if (value == 4) {
+        doc["sleepScreen"] = CrossPointSettings::BLANK;
+      } else if (value == 5) {
+        doc["sleepScreen"] = CrossPointSettings::COVER_CUSTOM;
+      }
+    }
+  }
+
+  // PWR_CONFIRM is X4 Pro-only in the upstream firmware. Ignore is safe on
+  // standard X3/X4 hardware and avoids interpreting it as another action.
+  if (settingsSchema < SETTINGS_SCHEMA_VERSION && !doc["shortPwrBtn"].isNull() &&
+      (doc["shortPwrBtn"] | static_cast<uint8_t>(0)) == 5) {
+    doc["shortPwrBtn"] = CrossPointSettings::IGNORE;
+    if (needsResave) *needsResave = true;
+  }
 
   // Legacy migration: if statusBarChapterPageCount is absent this is a pre-refactor settings file.
   // Populate s with migrated values now so the generic loop below picks them up as defaults and clamps them.

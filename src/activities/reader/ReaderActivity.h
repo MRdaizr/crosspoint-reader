@@ -38,6 +38,7 @@ class ReaderActivity : public Activity {
   void clearEndOfBookOptionsIfNeeded(bool atEndOfBook);
   bool handleEndOfBookMenu(bool atEndOfBook, bool suppressConfirmRelease = false);
   bool handleEndOfBookPageTurn(bool atEndOfBook, bool prevTriggered, bool nextTriggered);
+  bool handleBackNavigation(const char* filePath);
   void renderEndOfBook(const MappedInputManager& input);
   virtual bool isAtEndOfBook() const { return false; }
   virtual void onReturnFromEndOfBook() {}

@@ -389,7 +389,7 @@ void KOReaderSyncActivity::buildResultScreen(UiScreen& screen) {
         remoteTocIndex >= 0 ? epub->getTocItem(remoteTocIndex).title
                             : (std::string(tr(STR_SECTION_PREFIX)) + std::to_string(remotePosition.spineIndex + 1));
     const std::string localChapter =
-        !localChapterName.empty() ? localChapter
+        !localChapterName.empty() ? localChapterName
                                   : (std::string(tr(STR_SECTION_PREFIX)) + std::to_string(currentSpineIndex + 1));
 
     char remoteVal[64];

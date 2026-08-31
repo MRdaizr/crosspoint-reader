@@ -7,6 +7,7 @@
 
 #include <cstring>
 #include <iterator>
+#include <limits>
 #include <string>
 
 #include "I18nKeys.h"
@@ -361,6 +362,8 @@ int CrossPointSettings::getRefreshFrequency() const {
       return 15;
     case REFRESH_30:
       return 30;
+    case REFRESH_NEVER:
+      return std::numeric_limits<int>::max();
   }
 }
 

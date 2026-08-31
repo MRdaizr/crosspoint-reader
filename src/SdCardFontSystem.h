@@ -33,6 +33,7 @@ class SdCardFontSystem {
 
   /// Access the registry (e.g. for settings UI to enumerate available fonts).
   const SdCardFontRegistry& registry() const { return registry_; }
+  SdCardFontRegistry& registry() { return registry_; }
 
  private:
   // Keep reader SD fonts usable when a glyph is absent from the selected

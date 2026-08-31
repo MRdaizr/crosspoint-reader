@@ -25,10 +25,25 @@ bool CrossPointState::isRecentSleep(uint16_t idx, uint8_t checkCount) const {
   return false;
 }
 
+bool CrossPointState::isRecentOverlaySleep(uint16_t idx, uint8_t checkCount) const {
+  const uint8_t effectiveCount = std::min(checkCount, recentOverlaySleepFill);
+  for (uint8_t i = 0; i < effectiveCount; i++) {
+    const uint8_t slot = (recentOverlaySleepPos + SLEEP_RECENT_COUNT - 1 - i) % SLEEP_RECENT_COUNT;
+    if (recentOverlaySleepImages[slot] == idx) return true;
+  }
+  return false;
+}
+
 void CrossPointState::pushRecentSleep(uint16_t idx) {
   recentSleepImages[recentSleepPos] = idx;
   recentSleepPos = (recentSleepPos + 1) % SLEEP_RECENT_COUNT;
   if (recentSleepFill < SLEEP_RECENT_COUNT) recentSleepFill++;
+}
+
+void CrossPointState::pushRecentOverlaySleep(uint16_t idx) {
+  recentOverlaySleepImages[recentOverlaySleepPos] = idx;
+  recentOverlaySleepPos = (recentOverlaySleepPos + 1) % SLEEP_RECENT_COUNT;
+  if (recentOverlaySleepFill < SLEEP_RECENT_COUNT) recentOverlaySleepFill++;
 }
 
 bool CrossPointState::saveToFile() const {

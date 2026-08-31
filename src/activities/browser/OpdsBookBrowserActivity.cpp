@@ -16,6 +16,7 @@
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
 #include "util/BookCacheUtils.h"
+#include "util/OpdsFilename.h"
 #include "util/StringUtils.h"
 #include "util/UrlUtils.h"
 
@@ -328,8 +329,19 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   // Build full download URL relative to the current feed, not the root server URL
   const std::string feedUrl = UrlUtils::buildUrl(server.url, currentPath);
   std::string downloadUrl = UrlUtils::buildUrl(feedUrl, book.href);
-  std::string filename =
-      "/" + StringUtils::sanitizeFilename((book.author.empty() ? "" : book.author + " - ") + book.title) + ".epub";
+  const char* folder = SETTINGS.opdsDownloadFolder;
+  bool haveFolder = folder[0] != '\0';
+  if (haveFolder && !Storage.exists(folder) && !Storage.mkdir(folder)) {
+    LOG_ERR("OPDS", "mkdir failed for %s, using SD root", folder);
+    haveFolder = false;
+  }
+
+  std::string filename;
+  filename.reserve(96);
+  if (haveFolder) filename += folder;
+  filename += '/';
+  filename += opdsBookFilename(book.author, book.title,
+                                static_cast<OpdsFilenameFormat>(SETTINGS.opdsFilenameFormat));
   LOG_DBG("OPDS", "Downloading: %s -> %s", downloadUrl.c_str(), filename.c_str());
 
   const auto result = HttpDownloader::downloadToFile(

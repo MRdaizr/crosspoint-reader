@@ -14,6 +14,7 @@
 #include "XtcReaderActivity.h"
 #include "activities/util/BmpViewerActivity.h"
 #include "activities/util/FullScreenMessageActivity.h"
+#include "activities/reader/ReaderUtils.h"
 
 bool ReaderActivity::isXtcFile(const std::string& path) { return FsHelpers::hasXtcExtension(path); }
 
@@ -115,7 +116,8 @@ void ReaderActivity::goToLibrary(const std::string& fromBookPath) {
 void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub) {
   const auto epubPath = epub->getPath();
   currentBookPath = epubPath;
-  activityManager.replaceActivity(std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub)));
+  activityManager.replaceActivity(
+      std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub), allowFastInitialRefresh_));
 }
 
 void ReaderActivity::onGoToBmpViewer(const std::string& path) {
@@ -125,13 +127,21 @@ void ReaderActivity::onGoToBmpViewer(const std::string& path) {
 void ReaderActivity::onGoToXtcReader(std::unique_ptr<Xtc> xtc) {
   const auto xtcPath = xtc->getPath();
   currentBookPath = xtcPath;
-  activityManager.replaceActivity(std::make_unique<XtcReaderActivity>(renderer, mappedInput, std::move(xtc)));
+  activityManager.replaceActivity(
+      std::make_unique<XtcReaderActivity>(renderer, mappedInput, std::move(xtc), allowFastInitialRefresh_));
 }
 
 void ReaderActivity::onGoToTxtReader(std::unique_ptr<Txt> txt) {
   const auto txtPath = txt->getPath();
   currentBookPath = txtPath;
-  activityManager.replaceActivity(std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt)));
+  activityManager.replaceActivity(
+      std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt), allowFastInitialRefresh_));
+}
+
+bool ReaderActivity::handleBackNavigation(const char* filePath) {
+  return ReaderUtils::handleBackNavigation(
+      mappedInput, activityManager, filePath,
+      {this, [](void* ctx) { static_cast<ReaderActivity*>(ctx)->onGoHome(); }});
 }
 
 void ReaderActivity::onEnter() {

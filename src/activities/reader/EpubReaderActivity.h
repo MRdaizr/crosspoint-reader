@@ -177,8 +177,10 @@ class EpubReaderActivity final : public ReaderActivity {
   explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
                               bool allowFastInitialRefresh = false)
       : ReaderActivity("EpubReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
-  explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub)
-      : ReaderActivity("EpubReader", renderer, mappedInput, epub ? epub->getPath() : ""), epub(std::move(epub)) {}
+  explicit EpubReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Epub> epub,
+                              bool allowFastInitialRefresh = false)
+      : ReaderActivity("EpubReader", renderer, mappedInput, epub ? epub->getPath() : "", allowFastInitialRefresh),
+        epub(std::move(epub)) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

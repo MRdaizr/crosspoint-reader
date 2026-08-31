@@ -537,22 +537,17 @@ void EpubReaderActivity::loop() {
     }
   }
 
-  // Long press BACK (1s+) goes to file selection
-  if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
-    activityManager.goToFileBrowser(epub ? epub->getPath() : "");
-    return;
-  }
-
-  // Short press BACK goes directly to home (or restores position if viewing footnote)
+  // Short press BACK while viewing a footnote restores the original position;
+  // otherwise use the configurable reader back-navigation behavior.
   if (mappedInput.wasReleased(MappedInputManager::Button::Back) &&
       mappedInput.getHeldTime() < ReaderUtils::GO_HOME_MS) {
     if (footnoteDepth > 0) {
       restoreSavedPosition();
       return;
     }
-    onGoHome();
-    return;
   }
+
+  if (handleBackNavigation(bookPath.c_str())) return;
 
   // auto [prevTriggered, nextTriggered] = ReaderUtils::detectPageTurn(mappedInput);
 

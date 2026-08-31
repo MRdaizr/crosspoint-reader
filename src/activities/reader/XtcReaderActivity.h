@@ -40,8 +40,10 @@ class XtcReaderActivity final : public ReaderActivity {
   explicit XtcReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
                              bool allowFastInitialRefresh = false)
       : ReaderActivity("XtcReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
-  explicit XtcReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Xtc> xtc)
-      : ReaderActivity("XtcReader", renderer, mappedInput, xtc ? xtc->getPath() : ""), xtc(std::move(xtc)) {}
+  explicit XtcReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Xtc> xtc,
+                             bool allowFastInitialRefresh = false)
+      : ReaderActivity("XtcReader", renderer, mappedInput, xtc ? xtc->getPath() : "", allowFastInitialRefresh),
+        xtc(std::move(xtc)) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

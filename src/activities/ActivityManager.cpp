@@ -4,6 +4,7 @@
 #include <FsHelpers.h>
 #include <HalPowerManager.h>
 #include <HalDisplay.h>
+#include <Memory.h>
 
 #include <algorithm>
 
@@ -28,6 +29,14 @@
 // builds.  Keep the render-completion waiter hand-off on a project-owned
 // spinlock instead of the port's implicit/global critical section.
 static portMUX_TYPE activityManagerSpinlock = portMUX_INITIALIZER_UNLOCKED;
+
+ActivityManager::ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput)
+    : renderer(renderer), mappedInput(mappedInput), renderingMutex(xSemaphoreCreateMutex()) {
+  assert(renderingMutex != nullptr && "Failed to create rendering mutex");
+  stackActivities.reserve(10);
+}
+
+ActivityManager::~ActivityManager() { assert(false); /* should never be called */ }
 
 void ActivityManager::begin() {
   // Pin long e-paper renders to the secondary core when one exists.  X3/X4
@@ -229,7 +238,7 @@ void ActivityManager::goToExtensions() {
   replaceActivity(std::make_unique<ExtensionsMenuActivity>(renderer, mappedInput));
 }
 
-void ActivityManager::goToReader(std::string path) {
+void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
   if (path.empty()) {
     LOG_ERR("ACT", "Cannot open an empty reader path");
     goToFileBrowser("/");
@@ -238,12 +247,17 @@ void ActivityManager::goToReader(std::string path) {
 
   // Images are handled by the dedicated viewer.  Keep this dispatch here so
   // the shared ReaderActivity factory only ever returns a text/book reader.
-  if (FsHelpers::hasBmpExtension(path)) {
-    replaceActivity(std::make_unique<BmpViewerActivity>(renderer, mappedInput, std::move(path)));
+  if (FsHelpers::hasBmpExtension(path) || FsHelpers::hasPngExtension(path)) {
+    auto viewer = makeUniqueNoThrow<BmpViewerActivity>(renderer, mappedInput, std::move(path));
+    if (!viewer) {
+      LOG_ERR("ACT", "OOM: bitmap viewer activity");
+      return;
+    }
+    replaceActivity(std::move(viewer));
     return;
   }
 
-  auto reader = ReaderActivity::create(renderer, mappedInput, std::move(path));
+  auto reader = ReaderActivity::create(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
   if (!reader) {
     LOG_ERR("ACT", "Failed to create reader activity");
     return;

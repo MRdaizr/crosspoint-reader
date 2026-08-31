@@ -118,8 +118,10 @@ class TxtReaderActivity final : public ReaderActivity {
   explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
                              bool allowFastInitialRefresh = false)
       : ReaderActivity("TxtReader", renderer, mappedInput, std::move(bookPath), allowFastInitialRefresh) {}
-  explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Txt> txt)
-      : ReaderActivity("TxtReader", renderer, mappedInput, txt ? txt->getPath() : ""), txt(std::move(txt)) {}
+  explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::unique_ptr<Txt> txt,
+                             bool allowFastInitialRefresh = false)
+      : ReaderActivity("TxtReader", renderer, mappedInput, txt ? txt->getPath() : "", allowFastInitialRefresh),
+        txt(std::move(txt)) {}
   void onEnter() override;
   void onExit() override;
   void loop() override;

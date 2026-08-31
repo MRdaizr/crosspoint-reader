@@ -24,9 +24,10 @@ class CrossPointSettings {
     LIGHT = 1,
     CUSTOM = 2,
     COVER = 3,
-    BLANK = 4,
-    COVER_CUSTOM = 5,
+    COVER_CUSTOM = 4,
+    BLANK = 5,
     QUICK_RESUME = 6,
+    TRANSPARENT_CUSTOM = 7,
     SLEEP_SCREEN_MODE_COUNT
   };
   enum SLEEP_SCREEN_COVER_MODE { FIT = 0, CROP = 1, SLEEP_SCREEN_COVER_MODE_COUNT };
@@ -161,6 +162,7 @@ class CrossPointSettings {
     REFRESH_10 = 2,
     REFRESH_15 = 3,
     REFRESH_30 = 4,
+    REFRESH_NEVER = 5,
     REFRESH_FREQUENCY_COUNT
   };
 
@@ -286,6 +288,10 @@ class CrossPointSettings {
   char opdsServerUrl[128] = "";
   char opdsUsername[64] = "";
   char opdsPassword[64] = "";
+  // OPDS download folder; empty means the SD-card root.
+  char opdsDownloadFolder[64] = "";
+  // OPDS download filename format: 0=author-title, 1=title-author, 2=title.
+  uint8_t opdsFilenameFormat = 0;
   // Hide battery percentage
   uint8_t hideBatteryPercentage = HIDE_NEVER;
   // Long-press page turn button behavior
@@ -299,6 +305,9 @@ class CrossPointSettings {
   uint8_t fadingFix = 0;
   // Power button return from footnotes (1 = enabled, 0 = disabled)
   uint8_t pwrBtnFootnoteBack = 1;
+  // Reader short Back behavior: 0 = home / long press = file browser,
+  // 1 = short press = file browser / long press = home.
+  uint8_t backShortToFileBrowser = 0;
   // Use book's embedded CSS styles for EPUB rendering (1 = enabled, 0 = disabled)
   uint8_t embeddedStyle = 1;
   // Focus Reading - emphasizes the first part of words with bold
