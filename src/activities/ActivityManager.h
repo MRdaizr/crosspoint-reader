@@ -66,12 +66,18 @@ class ActivityManager {
   // can request an update too, so this flag must be atomic.
   std::atomic<bool> requestedUpdate{false};
 
+  // Set after the render task has completed the first activity render.  This
+  // lets startup work that is not needed to construct the UI wait until the
+  // first visible screen is actually on the panel.
+  std::atomic<bool> renderedOnce{false};
+
  public:
   explicit ActivityManager(GfxRenderer& renderer, MappedInputManager& mappedInput);
   ~ActivityManager();
 
   void begin();
   void loop();
+  bool hasRenderedOnce() const { return renderedOnce.load(std::memory_order_acquire); }
 
   // Will replace currentActivity and drop all activities on stack
   void replaceActivity(std::unique_ptr<Activity>&& newActivity);

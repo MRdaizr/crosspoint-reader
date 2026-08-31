@@ -48,6 +48,7 @@ class AchievementsStore {
   static const std::vector<AchievementDefinition>& definitions();
   static uint32_t referenceTimestamp();
   uint64_t progressFor(AchievementMetric metric) const;
+  void ensureLoaded() const;
 
  public:
   static AchievementsStore& getInstance() { return instance; }

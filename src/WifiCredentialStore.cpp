@@ -83,12 +83,14 @@ bool WifiCredentialStore::saveToFileLocked() const {
 }
 
 bool WifiCredentialStore::saveToFile() const {
+  ensureLoaded();
   std::lock_guard<std::mutex> persistenceLock(persistenceMutex);
   return saveToFileLocked();
 }
 
 bool WifiCredentialStore::loadFromFile() {
   std::lock_guard<std::mutex> persistenceLock(persistenceMutex);
+  if (loaded) return true;
 
   // Try JSON first
   if (Storage.exists(WIFI_FILE_JSON)) {
@@ -100,6 +102,7 @@ bool WifiCredentialStore::loadFromFile() {
         LOG_DBG("WCS", "Resaving JSON with validated credential metadata");
         saveToFileLocked();
       }
+      loaded = true;
       return result;
     }
   }
@@ -112,14 +115,21 @@ bool WifiCredentialStore::loadFromFile() {
       if (saveToFileLocked()) {
         Storage.rename(WIFI_FILE_BIN, WIFI_FILE_BAK);
         LOG_DBG("WCS", "Migrated wifi.bin to wifi.json");
+        this->loaded = true;
         return true;
       }
       LOG_ERR("WCS", "Failed to save wifi during migration");
+      this->loaded = true;
       return false;
     }
   }
 
+  loaded = true;
   return false;
+}
+
+bool WifiCredentialStore::ensureLoaded() const {
+  return const_cast<WifiCredentialStore*>(this)->loadFromFile();
 }
 
 bool WifiCredentialStore::loadFromBinaryFile(Snapshot& loaded) const {
@@ -198,6 +208,7 @@ void WifiCredentialStore::replaceState(Snapshot&& loaded) {
 }
 
 bool WifiCredentialStore::addCredential(const std::string& ssid, const std::string& password) {
+  ensureLoaded();
   if (password.size() > MAX_PASSWORD_LENGTH) {
     LOG_ERR("WCS", "Rejecting oversized Wi-Fi password (%u > %u)", static_cast<unsigned>(password.size()),
             static_cast<unsigned>(MAX_PASSWORD_LENGTH));
@@ -225,6 +236,7 @@ bool WifiCredentialStore::addCredential(const std::string& ssid, const std::stri
 }
 
 bool WifiCredentialStore::removeCredential(const std::string& ssid) {
+  ensureLoaded();
   std::lock_guard<std::mutex> persistenceLock(persistenceMutex);
   {
     std::lock_guard<std::mutex> stateLock(stateMutex);
@@ -240,6 +252,7 @@ bool WifiCredentialStore::removeCredential(const std::string& ssid) {
 }
 
 std::optional<WifiCredential> WifiCredentialStore::findCredential(const std::string& ssid) const {
+  ensureLoaded();
   std::lock_guard<std::mutex> stateLock(stateMutex);
   const auto cred = std::find_if(credentials.begin(), credentials.end(),
                                  [&ssid](const WifiCredential& item) { return item.ssid == ssid; });
@@ -248,12 +261,14 @@ std::optional<WifiCredential> WifiCredentialStore::findCredential(const std::str
 }
 
 std::optional<WifiCredential> WifiCredentialStore::getCredentialAt(size_t index) const {
+  ensureLoaded();
   std::lock_guard<std::mutex> stateLock(stateMutex);
   if (index >= credentials.size()) return std::nullopt;
   return credentials[index];
 }
 
 std::vector<WifiCredentialSummary> WifiCredentialStore::getCredentialSummaries() const {
+  ensureLoaded();
   std::lock_guard<std::mutex> stateLock(stateMutex);
   std::vector<WifiCredentialSummary> summaries;
   summaries.resize(credentials.size());
@@ -266,6 +281,7 @@ std::vector<WifiCredentialSummary> WifiCredentialStore::getCredentialSummaries()
 bool WifiCredentialStore::hasSavedCredential(const std::string& ssid) const { return findCredential(ssid).has_value(); }
 
 void WifiCredentialStore::setLastConnectedSsid(const std::string& ssid) {
+  ensureLoaded();
   std::lock_guard<std::mutex> persistenceLock(persistenceMutex);
   {
     std::lock_guard<std::mutex> stateLock(stateMutex);
@@ -276,11 +292,13 @@ void WifiCredentialStore::setLastConnectedSsid(const std::string& ssid) {
 }
 
 std::string WifiCredentialStore::getLastConnectedSsid() const {
+  ensureLoaded();
   std::lock_guard<std::mutex> stateLock(stateMutex);
   return lastConnectedSsid;
 }
 
 void WifiCredentialStore::clearLastConnectedSsid() {
+  ensureLoaded();
   std::lock_guard<std::mutex> persistenceLock(persistenceMutex);
   {
     std::lock_guard<std::mutex> stateLock(stateMutex);
@@ -291,6 +309,7 @@ void WifiCredentialStore::clearLastConnectedSsid() {
 }
 
 void WifiCredentialStore::clearAll() {
+  ensureLoaded();
   std::lock_guard<std::mutex> persistenceLock(persistenceMutex);
   {
     std::lock_guard<std::mutex> stateLock(stateMutex);

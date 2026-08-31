@@ -114,6 +114,10 @@ uint64_t metricValue(const ReadingStatsStore& stats, const AchievementMetric met
 
 AchievementsStore AchievementsStore::instance;
 
+void AchievementsStore::ensureLoaded() const {
+  if (!loaded) const_cast<AchievementsStore*>(this)->loadFromFile();
+}
+
 const std::vector<AchievementDefinition>& AchievementsStore::definitions() {
   static const std::vector<AchievementDefinition> value = makeDefinitions();
   return value;
@@ -162,6 +166,7 @@ bool AchievementsStore::loadFromFile() {
 }
 
 bool AchievementsStore::saveToFile() const {
+  if (!loaded && !dirty) return true;
   if (!dirty && Storage.exists(FILE_PATH)) return true;
   Storage.mkdir("/.crosspoint");
   JsonDocument doc;
@@ -183,6 +188,7 @@ bool AchievementsStore::saveToFile() const {
 }
 
 void AchievementsStore::reconcileFromCurrentStats(const bool persist, const bool enqueuePopups) {
+  ensureLoaded();
   if (states.size() != definitions().size()) states.assign(definitions().size(), AchievementState{});
   if (!SETTINGS.achievementsEnabled) return;
   const uint32_t previousLongestSessionMs = longestSessionMs;
@@ -202,6 +208,7 @@ void AchievementsStore::reconcileFromCurrentStats(const bool persist, const bool
 
 void AchievementsStore::recordSessionEnded(const ReadingSessionSnapshot& snapshot) {
   if (!snapshot.valid || !SETTINGS.achievementsEnabled) return;
+  ensureLoaded();
   if (snapshot.counted && snapshot.sessionMs > longestSessionMs) {
     longestSessionMs = snapshot.sessionMs;
     dirty = true;
@@ -229,6 +236,7 @@ void AchievementsStore::clear() {
 }
 
 std::vector<AchievementView> AchievementsStore::buildViews() const {
+  ensureLoaded();
   std::vector<AchievementView> result;
   result.reserve(definitions().size());
   for (size_t i = 0; i < definitions().size(); ++i)
@@ -240,6 +248,7 @@ std::vector<AchievementView> AchievementsStore::buildViews() const {
 }
 
 size_t AchievementsStore::unlockedCount() const {
+  ensureLoaded();
   return static_cast<size_t>(std::count_if(states.begin(), states.end(), [](const auto& state) { return state.unlocked; }));
 }
 

@@ -52,6 +52,7 @@ enum class BootClockSyncState : uint8_t { Idle, Connecting, Syncing, Finished };
 BootClockSyncState bootClockSyncState = BootClockSyncState::Idle;
 unsigned long bootClockSyncStartedAt = 0;
 bool bootClockSyncOwnsWifi = false;
+bool bootClockSyncAllowed = false;
 
 constexpr unsigned long BOOT_CLOCK_SYNC_TIMEOUT_MS = 12000UL;
 
@@ -388,19 +389,15 @@ void setup() {
   HalSystem::checkPanic();
 
   SETTINGS.loadFromFile();
-  WIFI_STORE.loadFromFile();
   APP_STATE.loadFromFile();
   const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
   const bool isPersistedSleepWake = isSleepWake && !APP_STATE.showBootScreen;
-  READING_STATS.loadFromFile();
-  ACHIEVEMENTS.loadFromFile();
   RECENT_BOOKS.loadFromFile();
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
-  startBootClockSync();
 
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
@@ -518,6 +515,10 @@ void setup() {
     gpio.update();
   }
 
+  // Defer optional network startup until the first activity has actually
+  // rendered. This keeps SD/JSON work and Wi-Fi association out of the
+  // critical path that puts the first UI on the panel.
+  bootClockSyncAllowed = !recoveryFirmwareMode && !rebootedFromPanic;
   allowSleepAt = millis() + 2000;
 }
 
@@ -649,6 +650,10 @@ void loop() {
   const unsigned long activityStartTime = millis();
   activityManager.loop();
   const unsigned long activityDuration = millis() - activityStartTime;
+
+  if (bootClockSyncAllowed && bootClockSyncState == BootClockSyncState::Idle && activityManager.hasRenderedOnce()) {
+    startBootClockSync();
+  }
 
   if (activityManager.isCurrentActivityReader()) {
     READING_STATS.tickActiveSession();

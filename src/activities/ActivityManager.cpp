@@ -74,6 +74,7 @@ void ActivityManager::renderTaskLoop() {
       // without requiring each activity to duplicate the setting check.
       display.setInverted(SETTINGS.screenInverted != 0);
       currentActivity->render(std::move(lock));
+      renderedOnce.store(true, std::memory_order_release);
     }
     // Notify any task blocked in requestUpdateAndWait() that the render is done.
     TaskHandle_t waiter = nullptr;

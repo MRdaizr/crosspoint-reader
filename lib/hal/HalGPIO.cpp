@@ -206,7 +206,11 @@ HalGPIO::DeviceType detectDeviceTypeWithFingerprint() {
     return HalGPIO::DeviceType::X4;
   }
 
-  // Conservative fallback for first boot with inconclusive probes.
+  // Conservative compatibility fallback for first boot with inconclusive
+  // probes. Cache the decision as well: the active fallback probe is only
+  // needed once, while an explicit NVS override remains available for support.
+  writeNvsDeviceValue(NVS_KEY_DEV_CACHED, NvsDeviceValue::X4);
+  LOG_INF("HW", "Inconclusive hardware probe; caching conservative X4 fallback");
   return HalGPIO::DeviceType::X4;
 }
 

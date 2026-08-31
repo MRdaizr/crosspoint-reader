@@ -91,6 +91,7 @@ class ReadingStatsStore {
   uint32_t latestKnownTimestamp() const;
   uint32_t referenceTimestamp(uint32_t preferred = 0, uint32_t bookTimestamp = 0) const;
   static bool isClockValid(uint32_t timestamp);
+  void ensureLoaded() const;
 
  public:
   static ReadingStatsStore& getInstance() { return instance; }
@@ -119,12 +120,24 @@ class ReadingStatsStore {
                                                   const std::string& author = {}) const;
   const ReadingSessionSnapshot& getLastSessionSnapshot() const { return lastSessionSnapshot; }
 
-  const std::vector<ReadingBookStats>& getBooks() const { return books; }
-  const std::vector<ReadingDayStats>& getReadingDays() const { return readingDays; }
-  const std::vector<ReadingSessionLogEntry>& getSessionLog() const { return sessionLog; }
+  const std::vector<ReadingBookStats>& getBooks() const {
+    ensureLoaded();
+    return books;
+  }
+  const std::vector<ReadingDayStats>& getReadingDays() const {
+    ensureLoaded();
+    return readingDays;
+  }
+  const std::vector<ReadingSessionLogEntry>& getSessionLog() const {
+    ensureLoaded();
+    return sessionLog;
+  }
   static bool shouldIgnorePath(const std::string& path);
 
-  uint32_t getBooksStartedCount() const { return static_cast<uint32_t>(books.size()); }
+  uint32_t getBooksStartedCount() const {
+    ensureLoaded();
+    return static_cast<uint32_t>(books.size());
+  }
   uint32_t getBooksFinishedCount() const;
   uint64_t getTotalReadingMs() const;
   uint64_t getTodayReadingMs() const;
@@ -133,7 +146,10 @@ class ReadingStatsStore {
   uint32_t getMaxStreakDays() const;
   uint32_t getReferenceDayOrdinal() const;
   uint32_t getDisplayTimestamp(bool* usedFallback = nullptr) const;
-  bool hasReadingDays() const { return !readingDays.empty(); }
+  bool hasReadingDays() const {
+    ensureLoaded();
+    return !readingDays.empty();
+  }
 
   void reset();
   void clear();

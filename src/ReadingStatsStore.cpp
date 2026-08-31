@@ -67,6 +67,10 @@ ReadingStatsStore ReadingStatsStore::instance;
 
 bool ReadingStatsStore::isClockValid(const uint32_t timestamp) { return TimeUtils::isClockValid(timestamp); }
 
+void ReadingStatsStore::ensureLoaded() const {
+  if (!loaded) const_cast<ReadingStatsStore*>(this)->loadFromFile();
+}
+
 bool ReadingStatsStore::shouldIgnorePath(const std::string& path) {
   std::string normalized = BookIdentity::normalizePath(path);
   if (normalized.empty()) return false;
@@ -310,6 +314,7 @@ void ReadingStatsStore::addSession(const std::string& path, const std::string& t
 }
 
 const ReadingBookStats* ReadingStatsStore::findBook(const std::string& key) const {
+  ensureLoaded();
   const size_t byPath = findBookIndexByPath(key);
   if (byPath < books.size()) return &books[byPath];
   const size_t byId = findBookIndexById(key);
@@ -425,27 +430,32 @@ bool ReadingStatsStore::adjustBookReadingTime(const std::string& path, const uin
 }
 
 uint32_t ReadingStatsStore::getBooksFinishedCount() const {
+  ensureLoaded();
   return static_cast<uint32_t>(std::count_if(books.begin(), books.end(), [](const auto& book) { return book.completed; }));
 }
 
 uint32_t ReadingStatsStore::getReferenceDayOrdinal() const {
+  ensureLoaded();
   const uint32_t timestamp = referenceTimestamp(TimeUtils::getAuthoritativeTimestamp());
   return isClockValid(timestamp) ? TimeUtils::getLocalDayOrdinal(timestamp) : (readingDays.empty() ? 0 : readingDays.back().dayOrdinal);
 }
 
 uint64_t ReadingStatsStore::getTotalReadingMs() const {
+  ensureLoaded();
   uint64_t total = 0;
   for (const auto& book : books) total += book.totalReadingMs;
   return total;
 }
 
 uint64_t ReadingStatsStore::getTodayReadingMs() const {
+  ensureLoaded();
   const uint32_t ordinal = getReferenceDayOrdinal();
   for (const auto& day : readingDays) if (day.dayOrdinal == ordinal) return day.readingMs;
   return 0;
 }
 
 uint64_t ReadingStatsStore::getRecentReadingMs(const uint32_t days) const {
+  ensureLoaded();
   const uint32_t ordinal = getReferenceDayOrdinal();
   if (!ordinal || !days) return 0;
   const uint32_t first = ordinal >= days - 1 ? ordinal - days + 1 : 0;
@@ -455,6 +465,7 @@ uint64_t ReadingStatsStore::getRecentReadingMs(const uint32_t days) const {
 }
 
 uint32_t ReadingStatsStore::getCurrentStreakDays() const {
+  ensureLoaded();
   const uint32_t ordinal = getReferenceDayOrdinal();
   if (!ordinal) return 0;
   uint32_t latestGoalDay = 0;
@@ -473,6 +484,7 @@ uint32_t ReadingStatsStore::getCurrentStreakDays() const {
 }
 
 uint32_t ReadingStatsStore::getMaxStreakDays() const {
+  ensureLoaded();
   uint32_t best = 0, run = 0, previous = std::numeric_limits<uint32_t>::max();
   for (const auto& day : readingDays) {
     if (day.readingMs >= getDailyReadingGoalMs() && previous != std::numeric_limits<uint32_t>::max() && day.dayOrdinal == previous + 1) ++run;
@@ -484,6 +496,7 @@ uint32_t ReadingStatsStore::getMaxStreakDays() const {
 }
 
 uint32_t ReadingStatsStore::getDisplayTimestamp(bool* usedFallback) const {
+  ensureLoaded();
   const uint32_t current = TimeUtils::getAuthoritativeTimestamp();
   if (isClockValid(current)) { if (usedFallback) *usedFallback = false; return current; }
   const uint32_t latest = latestKnownTimestamp();
@@ -498,6 +511,7 @@ bool ReadingStatsStore::shouldSaveCheckpoint() const {
 }
 
 bool ReadingStatsStore::saveToFile() const {
+  if (!loaded && !dirty) return true;
   if (!dirty && Storage.exists(STATS_FILE)) return true;
   Storage.mkdir("/.crosspoint");
   JsonDocument doc;
@@ -589,6 +603,7 @@ void ReadingStatsStore::clear() {
 }
 
 bool ReadingStatsStore::exportToFile(const std::string& path) const {
+  ensureLoaded();
   if (path.empty()) return false;
   JsonDocument doc;
   doc["formatVersion"] = 6;
@@ -613,6 +628,7 @@ bool ReadingStatsStore::importFromFile(const std::string& path) {
 }
 
 const std::vector<ReadingStatsStore::LegacyEntry>& ReadingStatsStore::getEntries() const {
+  ensureLoaded();
   legacyEntries.clear();
   for (const auto& book : books)
     legacyEntries.push_back({book.path, book.title, static_cast<uint32_t>(book.totalReadingMs / 1000ULL)});

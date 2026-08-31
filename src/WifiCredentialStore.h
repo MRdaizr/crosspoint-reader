@@ -41,6 +41,7 @@ class WifiCredentialStore {
   std::string lastConnectedSsid;
   mutable std::mutex stateMutex;
   mutable std::mutex persistenceMutex;
+  mutable bool loaded = false;
 
   static constexpr size_t MAX_NETWORKS = 8;
 
@@ -66,6 +67,7 @@ class WifiCredentialStore {
   // Save/load from SD card
   bool saveToFile() const;
   bool loadFromFile();
+  bool ensureLoaded() const;
 
   // Credential management
   bool addCredential(const std::string& ssid, const std::string& password);
