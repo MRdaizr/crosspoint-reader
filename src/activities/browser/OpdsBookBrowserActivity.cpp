@@ -8,6 +8,7 @@
 
 #include <cctype>
 
+#include "BootClockSyncTask.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -24,6 +25,7 @@ namespace fui = freeink::ui;
 
 void OpdsBookBrowserActivity::onEnter() {
   Activity::onEnter();
+  BootClockSyncTask::cancel();
 
   state = BrowserState::CHECK_WIFI;
   entries.clear();

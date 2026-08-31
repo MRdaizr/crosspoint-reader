@@ -184,6 +184,17 @@ class SdCardFont {
     uint32_t miniIntervalCount = 0;
     uint32_t miniGlyphCount = 0;
 
+    // Keep-if-fits capacities: the per-page prewarm scope can reuse these
+    // arenas instead of freeing and reallocating slightly different blocks on
+    // every page turn, which otherwise fragments the ESP32 heap.
+    uint32_t miniIntervalCapacity = 0;
+    uint32_t miniGlyphCapacity = 0;
+    uint32_t miniBitmapCapacity = 0;
+    uint32_t miniBitmapUsed = 0;
+    uint8_t miniUnderuseRuns = 0;
+    bool miniMetadataOnly = false;
+    bool miniHysteresisPending = false;
+
     // Per-page mini kern matrix (built by buildMiniKernMatrix on each full
     // prewarm). miniKernLeftClasses/miniKernRightClasses map ONLY the codepoints
     // used on the current page to renumbered class IDs (1..miniKern*ClassCount).
@@ -197,6 +208,9 @@ class SdCardFont {
     uint8_t miniKernLeftClassCount = 0;
     uint8_t miniKernRightClassCount = 0;
     int8_t* miniKernMatrix = nullptr;
+    uint16_t miniKernLeftCapacity = 0;
+    uint16_t miniKernRightCapacity = 0;
+    uint32_t miniKernMatrixCapacity = 0;
 
     // The EpdFont whose data pointer we manage
     EpdFont epdFont{&stubData};
@@ -255,6 +269,7 @@ class SdCardFont {
 
   // Per-style helpers
   void freeStyleMiniData(PerStyle& s);
+  void resetStyleMiniData(PerStyle& s);
   void freeStyleAll(PerStyle& s);
   void freeStyleKernLigatureData(PerStyle& s);
   void freeStyleMiniKern(PerStyle& s);

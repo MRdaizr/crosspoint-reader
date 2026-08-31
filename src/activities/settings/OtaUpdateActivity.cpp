@@ -4,6 +4,7 @@
 #include <I18n.h>
 #include <WiFi.h>
 
+#include "BootClockSyncTask.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -53,6 +54,7 @@ void OtaUpdateActivity::onWifiSelectionComplete(const bool success) {
 
 void OtaUpdateActivity::onEnter() {
   Activity::onEnter();
+  BootClockSyncTask::cancel();
 
   // Turn on WiFi immediately
   LOG_DBG("OTA", "Turning on WiFi...");

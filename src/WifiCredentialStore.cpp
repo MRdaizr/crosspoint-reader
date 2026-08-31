@@ -1,12 +1,13 @@
 #include "WifiCredentialStore.h"
 
 #include <HalStorage.h>
-#include <JsonSettingsIO.h>
 #include <Logging.h>
 #include <ObfuscationUtils.h>
 #include <Serialization.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
 
 // Initialize the static instance
 WifiCredentialStore WifiCredentialStore::instance;
@@ -17,11 +18,11 @@ constexpr uint8_t WIFI_FILE_VERSION = 2;
 
 // File paths
 constexpr char WIFI_FILE_BIN[] = "/.crosspoint/wifi.bin";
-constexpr char WIFI_FILE_JSON[] = "/.crosspoint/wifi.json";
 constexpr char WIFI_FILE_BAK[] = "/.crosspoint/wifi.bin.bak";
 
 constexpr size_t MAX_SSID_LENGTH = 32;
 constexpr size_t MAX_PASSWORD_LENGTH = 64;
+constexpr size_t MAX_PASSWORD_B64_LENGTH = ((MAX_PASSWORD_LENGTH + 2) / 3) * 4;
 
 // Legacy obfuscation key - "CrossPoint" in ASCII (only used for binary migration)
 constexpr uint8_t LEGACY_OBFUSCATION_KEY[] = {0x43, 0x72, 0x6F, 0x73, 0x73, 0x50, 0x6F, 0x69, 0x6E, 0x74};
@@ -34,6 +35,17 @@ void legacyDeobfuscate(std::string& data) {
 }
 
 enum class ReadStringResult { OK, TOO_LONG, INVALID };
+
+uint32_t passwordCrc32(const std::string& password) {
+  uint32_t crc = 0xFFFFFFFFu;
+  for (const unsigned char byte : password) {
+    crc ^= byte;
+    for (int bit = 0; bit < 8; ++bit) {
+      crc = (crc & 1u) ? ((crc >> 1) ^ 0xEDB88320u) : (crc >> 1);
+    }
+  }
+  return ~crc;
+}
 
 ReadStringResult readBoundedString(HalFile& file, std::string& out, size_t maxLength, const char* field) {
   uint32_t length = 0;
@@ -76,10 +88,10 @@ ReadStringResult readBoundedString(HalFile& file, std::string& out, size_t maxLe
 }  // namespace
 
 bool WifiCredentialStore::saveToFileLocked() const {
-  // The persistence mutex serializes snapshots and SD writes, while JsonSettingsIO
-  // takes only the short-lived state mutex. Never hold stateMutex across this call.
-  Storage.mkdir("/.crosspoint");
-  return JsonSettingsIO::saveWifi(*this, WIFI_FILE_JSON);
+  // The persistence mutex serializes snapshots and SD writes, while
+  // PersistableStore takes only its store mutex. Never hold stateMutex across
+  // the JSON serialization or SD write.
+  return PersistableStore<WifiCredentialStore>::saveToFile();
 }
 
 bool WifiCredentialStore::saveToFile() const {
@@ -92,19 +104,11 @@ bool WifiCredentialStore::loadFromFile() {
   std::lock_guard<std::mutex> persistenceLock(persistenceMutex);
   if (loaded) return true;
 
-  // Try JSON first
-  if (Storage.exists(WIFI_FILE_JSON)) {
-    String json = Storage.readFile(WIFI_FILE_JSON);
-    if (!json.isEmpty()) {
-      bool resave = false;
-      const bool result = JsonSettingsIO::loadWifi(*this, json.c_str(), &resave);
-      if (result && resave) {
-        LOG_DBG("WCS", "Resaving JSON with validated credential metadata");
-        saveToFileLocked();
-      }
-      loaded = true;
-      return result;
-    }
+  // Try the current PersistableStore JSON format first.
+  if (Storage.exists(getFilePath())) {
+    const bool result = PersistableStore<WifiCredentialStore>::loadFromFile();
+    loaded = true;
+    return result;
   }
 
   // Fall back to binary migration
@@ -130,6 +134,124 @@ bool WifiCredentialStore::loadFromFile() {
 
 bool WifiCredentialStore::ensureLoaded() const {
   return const_cast<WifiCredentialStore*>(this)->loadFromFile();
+}
+
+void WifiCredentialStore::toJson(JsonDocument& doc) const {
+  const auto state = snapshot();
+  doc["lastConnectedSsid"] = state.lastConnectedSsid;
+
+  JsonArray arr = doc["credentials"].to<JsonArray>();
+  for (const auto& cred : state.credentials) {
+    JsonObject obj = arr.add<JsonObject>();
+    obj["ssid"] = cred.ssid;
+    obj["password_obf"] = obfuscation::obfuscateToBase64(cred.password);
+    obj["password_len"] = static_cast<uint32_t>(cred.password.size());
+    obj["password_crc32"] = passwordCrc32(cred.password);
+  }
+}
+
+bool WifiCredentialStore::fromJson(JsonVariantConst doc) {
+  bool needsResave = false;
+  Snapshot loaded;
+  loaded.lastConnectedSsid = doc["lastConnectedSsid"] | "";
+  if (loaded.lastConnectedSsid.size() > MAX_SSID_LENGTH) {
+    LOG_ERR("WCS", "Discarding oversized lastConnectedSsid from JSON");
+    loaded.lastConnectedSsid.clear();
+    needsResave = true;
+  }
+
+  const JsonArrayConst arr = doc["credentials"].as<JsonArrayConst>();
+  for (JsonObjectConst obj : arr) {
+    if (loaded.credentials.size() >= MAX_NETWORKS) break;
+
+    WifiCredential cred;
+    cred.ssid = obj["ssid"] | "";
+    if (cred.ssid.size() > MAX_SSID_LENGTH) {
+      LOG_ERR("WCS", "Discarding Wi-Fi credential with oversized SSID");
+      needsResave = true;
+      continue;
+    }
+
+    const JsonVariantConst encodedVariant = obj["password_obf"];
+    const bool hasEncodedPassword = encodedVariant.is<const char*>();
+    const char* encoded = encodedVariant | "";
+    const JsonVariantConst lengthVariant = obj["password_len"];
+    const JsonVariantConst crcVariant = obj["password_crc32"];
+    const bool hasLength = !lengthVariant.isNull();
+    const bool hasCrc = !crcVariant.isNull();
+    const bool hasIntegrityMetadata = hasLength || hasCrc;
+    const bool lengthTypeOk = !hasLength || lengthVariant.is<uint32_t>() || lengthVariant.is<int>();
+    const bool crcTypeOk = !hasCrc || crcVariant.is<uint32_t>() || crcVariant.is<int>();
+    const bool lengthNonNegative = !lengthVariant.is<int>() || lengthVariant.as<int>() >= 0;
+    const uint32_t expectedLength = lengthVariant.as<uint32_t>();
+    const uint32_t expectedCrc = crcVariant.as<uint32_t>();
+
+    bool decodedOk = false;
+    if (hasIntegrityMetadata) {
+      if (!hasEncodedPassword || !lengthTypeOk || !crcTypeOk || !lengthNonNegative ||
+          expectedLength > MAX_PASSWORD_LENGTH || std::strlen(encoded) > MAX_PASSWORD_B64_LENGTH) {
+        LOG_ERR("WCS", "Discarding Wi-Fi password with invalid integrity metadata for '%s'", cred.ssid.c_str());
+      } else if (encoded[0] == '\0' && (!hasLength || expectedLength == 0) &&
+                 (!hasCrc || expectedCrc == passwordCrc32(""))) {
+        decodedOk = true;
+      } else {
+        bool decodeOk = false;
+        bool tooLong = false;
+        cred.password = obfuscation::deobfuscateFromBase64(encoded, MAX_PASSWORD_LENGTH, &decodeOk, &tooLong);
+        decodedOk = decodeOk && cred.password.size() <= MAX_PASSWORD_LENGTH;
+        if (hasLength) decodedOk = decodedOk && cred.password.size() == expectedLength;
+        if (hasCrc) decodedOk = decodedOk && passwordCrc32(cred.password) == expectedCrc;
+        if (!decodedOk) {
+          LOG_ERR("WCS", "Discarding Wi-Fi password with %s for '%s'",
+                  tooLong ? "oversized data" : "decode/CRC mismatch", cred.ssid.c_str());
+          cred.password.clear();
+        }
+      }
+      if (!hasLength || !hasCrc || !decodedOk) needsResave = true;
+    } else if (hasEncodedPassword) {
+      // Older JSON used password_obf without integrity metadata.
+      if (encoded[0] == '\0') {
+        decodedOk = true;
+      } else if (std::strlen(encoded) <= MAX_PASSWORD_B64_LENGTH) {
+        bool decodeOk = false;
+        bool tooLong = false;
+        cred.password = obfuscation::deobfuscateFromBase64(encoded, MAX_PASSWORD_LENGTH, &decodeOk, &tooLong);
+        decodedOk = decodeOk && cred.password.size() <= MAX_PASSWORD_LENGTH;
+        if (!decodedOk) {
+          LOG_ERR("WCS", "Discarding Wi-Fi password with %s for '%s'",
+                  tooLong ? "oversized data" : "decode failure", cred.ssid.c_str());
+          cred.password.clear();
+        }
+      } else {
+        LOG_ERR("WCS", "Discarding oversized Wi-Fi password for '%s'", cred.ssid.c_str());
+      }
+      needsResave = true;
+    } else if (obj["password"].is<const char*>() || obj["password"].is<std::string>()) {
+      // Very old JSON stored plaintext. Read once, then rewrite obfuscated.
+      cred.password = obj["password"] | "";
+      if (cred.password.size() > MAX_PASSWORD_LENGTH) {
+        LOG_ERR("WCS", "Discarding oversized legacy Wi-Fi password for '%s'", cred.ssid.c_str());
+        cred.password.clear();
+      }
+      decodedOk = true;
+      needsResave = true;
+    } else if (!encodedVariant.isNull()) {
+      LOG_ERR("WCS", "Discarding Wi-Fi password with invalid encoding for '%s'", cred.ssid.c_str());
+      needsResave = true;
+    } else {
+      // No password field represents an open network.
+      decodedOk = true;
+      needsResave = true;
+    }
+
+    (void)decodedOk;
+    loaded.credentials.push_back(std::move(cred));
+  }
+
+  replaceState(std::move(loaded));
+  if (needsResave) requestResave();
+  LOG_DBG("WCS", "Loaded %zu WiFi credentials from file", snapshot().credentials.size());
+  return true;
 }
 
 bool WifiCredentialStore::loadFromBinaryFile(Snapshot& loaded) const {

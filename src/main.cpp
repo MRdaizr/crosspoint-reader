@@ -21,6 +21,7 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "AchievementsStore.h"
+#include "BootClockSyncTask.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
@@ -36,7 +37,6 @@
 #include "images/LoadingIcon.h"
 #include "util/ButtonNavigator.h"
 #include "util/ScreenshotUtil.h"
-#include "util/TimeUtils.h"
 
 GfxRenderer renderer(display);
 MappedInputManager mappedInputManager(gpio, renderer);
@@ -47,70 +47,7 @@ FontCacheManager fontCacheManager(renderer.getFontMap(), renderer.getSdCardFonts
 static unsigned long allowSleepAt = 0;
 
 namespace {
-enum class BootClockSyncState : uint8_t { Idle, Connecting, Syncing, Finished };
-
-BootClockSyncState bootClockSyncState = BootClockSyncState::Idle;
-unsigned long bootClockSyncStartedAt = 0;
-bool bootClockSyncOwnsWifi = false;
 bool bootClockSyncAllowed = false;
-
-constexpr unsigned long BOOT_CLOCK_SYNC_TIMEOUT_MS = 12000UL;
-
-void startBootClockSync() {
-  // A valid RTC/system clock already gives reading statistics a usable date.
-  // Avoid waking Wi-Fi on X3 when the RTC survived the reboot.
-  if (TimeUtils::isClockValid()) {
-    bootClockSyncState = BootClockSyncState::Finished;
-    return;
-  }
-
-  const std::string lastSsid = WIFI_STORE.getLastConnectedSsid();
-  const auto credential = WIFI_STORE.findCredential(lastSsid);
-  if (lastSsid.empty() || !credential) {
-    LOG_DBG("CLK", "Boot clock sync skipped: no saved WiFi network");
-    bootClockSyncState = BootClockSyncState::Finished;
-    return;
-  }
-
-  bootClockSyncOwnsWifi = WiFi.status() != WL_CONNECTED;
-  if (bootClockSyncOwnsWifi) {
-    WiFi.persistent(false);
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(credential->ssid.c_str(), credential->password.c_str());
-  }
-
-  bootClockSyncStartedAt = millis();
-  bootClockSyncState = BootClockSyncState::Connecting;
-  LOG_DBG("CLK", "Starting silent boot clock sync via saved WiFi");
-}
-
-void serviceBootClockSync() {
-  if (bootClockSyncState != BootClockSyncState::Connecting) return;
-
-  if (WiFi.status() == WL_CONNECTED) {
-    bootClockSyncState = BootClockSyncState::Syncing;
-    LOG_INF("CLK", "Running silent boot NTP sync");
-    const bool synced = halClock.syncFromNTP();
-    LOG_INF("CLK", "Silent boot NTP sync %s", synced ? "succeeded" : "failed");
-    if (bootClockSyncOwnsWifi) {
-      WiFi.disconnect(false);
-      WiFi.mode(WIFI_OFF);
-      bootClockSyncOwnsWifi = false;
-    }
-    bootClockSyncState = BootClockSyncState::Finished;
-    return;
-  }
-
-  if (millis() - bootClockSyncStartedAt >= BOOT_CLOCK_SYNC_TIMEOUT_MS) {
-    LOG_DBG("CLK", "Silent boot clock sync skipped: WiFi connection timed out");
-    if (bootClockSyncOwnsWifi) {
-      WiFi.disconnect(false);
-      WiFi.mode(WIFI_OFF);
-      bootClockSyncOwnsWifi = false;
-    }
-    bootClockSyncState = BootClockSyncState::Finished;
-  }
-}
 }  // namespace
 
 // Fonts
@@ -286,6 +223,7 @@ void enterDeepSleep(bool fromTimeout = false) {
 
   // Tear down WiFi so the modem power domain isn't held alive across deep sleep.
   // Wake from deep sleep is effectively a chip reset, so no state needs to survive.
+  BootClockSyncTask::cancel();
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
@@ -528,7 +466,6 @@ void loop() {
   static unsigned long lastMemPrint = 0;
 
   mappedInputManager.update();
-  serviceBootClockSync();
   halTiltSensor.update(SETTINGS.tiltPageTurn, SETTINGS.orientation, activityManager.isReaderActivity());
 
   renderer.setFadingFix(SETTINGS.fadingFix);
@@ -651,9 +588,7 @@ void loop() {
   activityManager.loop();
   const unsigned long activityDuration = millis() - activityStartTime;
 
-  if (bootClockSyncAllowed && bootClockSyncState == BootClockSyncState::Idle && activityManager.hasRenderedOnce()) {
-    startBootClockSync();
-  }
+  if (bootClockSyncAllowed && activityManager.hasRenderedOnce()) BootClockSyncTask::start();
 
   if (activityManager.isCurrentActivityReader()) {
     READING_STATS.tickActiveSession();

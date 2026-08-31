@@ -8,18 +8,12 @@
 
 #include <cstring>
 
-#include "KOReaderJsonIO.h"
-
-// Initialize the static instance
-KOReaderCredentialStore KOReaderCredentialStore::instance;
-
 namespace {
 // File format version (for binary migration)
 constexpr uint8_t KOREADER_FILE_VERSION = 1;
 
 // File paths
 constexpr char KOREADER_FILE_BIN[] = "/.crosspoint/koreader.bin";
-constexpr char KOREADER_FILE_JSON[] = "/.crosspoint/koreader.json";
 constexpr char KOREADER_FILE_BAK[] = "/.crosspoint/koreader.bin.bak";
 
 // Default sync server URL
@@ -36,24 +30,50 @@ void legacyDeobfuscate(std::string& data) {
 }
 }  // namespace
 
-bool KOReaderCredentialStore::saveToFile() const {
-  Storage.mkdir("/.crosspoint");
-  return KOReaderJsonIO::save(*this, KOREADER_FILE_JSON);
+void KOReaderCredentialStore::toJson(JsonDocument& doc) const {
+  doc["username"] = getUsername();
+  doc["password_obf"] = obfuscation::obfuscateToBase64(getPassword());
+  doc["serverUrl"] = getServerUrl();
+  doc["matchMethod"] = static_cast<uint8_t>(getMatchMethod());
+  doc["sendMetadata"] = getSendMetadata();
+  doc["syncBehavior"] = static_cast<uint8_t>(getSyncBehavior());
+}
+
+bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
+  std::string user = doc["username"] | "";
+  bool needsResave = false;
+  std::string pass = extractPassword(doc, needsResave);
+
+  setCredentials(user, pass);
+  setServerUrl(doc["serverUrl"] | "");
+
+  const uint8_t method = doc["matchMethod"] | static_cast<uint8_t>(DocumentMatchMethod::FILENAME);
+  if (method <= static_cast<uint8_t>(DocumentMatchMethod::BINARY)) {
+    setMatchMethod(static_cast<DocumentMatchMethod>(method));
+  } else {
+    LOG_DBG("KRS", "Invalid matchMethod %u in JSON, resetting to FILENAME", method);
+    setMatchMethod(DocumentMatchMethod::FILENAME);
+    needsResave = true;
+  }
+
+  setSendMetadata(doc["sendMetadata"] | false);
+  const uint8_t behavior = doc["syncBehavior"] | static_cast<uint8_t>(KOReaderSyncBehavior::SMART);
+  if (behavior <= static_cast<uint8_t>(KOReaderSyncBehavior::SMART)) {
+    setSyncBehavior(static_cast<KOReaderSyncBehavior>(behavior));
+  } else {
+    LOG_DBG("KRS", "Invalid syncBehavior %u in JSON, resetting to SMART", behavior);
+    setSyncBehavior(KOReaderSyncBehavior::SMART);
+    needsResave = true;
+  }
+
+  if (needsResave) requestResave();
+  return true;
 }
 
 bool KOReaderCredentialStore::loadFromFile() {
   // Try JSON first
-  if (Storage.exists(KOREADER_FILE_JSON)) {
-    String json = Storage.readFile(KOREADER_FILE_JSON);
-    if (!json.isEmpty()) {
-      bool resave = false;
-      bool result = KOReaderJsonIO::load(*this, json.c_str(), &resave);
-      if (result && resave) {
-        saveToFile();
-        LOG_DBG("KRS", "Resaved KOReader credentials to update format");
-      }
-      return result;
-    }
+  if (Storage.exists(getFilePath())) {
+    return PersistableStore<KOReaderCredentialStore>::loadFromFile();
   }
 
   // Fall back to binary migration

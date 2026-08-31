@@ -1,10 +1,11 @@
 #include "CrossPointSettings.h"
 
 #include <HalStorage.h>
-#include <JsonSettingsIO.h>
 #include <Logging.h>
+#include <ObfuscationUtils.h>
 #include <Serialization.h>
 
+#include <algorithm>
 #include <cstring>
 #include <iterator>
 #include <limits>
@@ -12,10 +13,8 @@
 
 #include "I18nKeys.h"
 #include "ReaderFontSizes.h"
+#include "SettingsList.h"
 #include "fontIds.h"
-
-// Initialize the static instance
-CrossPointSettings CrossPointSettings::instance;
 
 void readAndValidate(HalFile& file, uint8_t& member, const uint8_t maxValue) {
   uint8_t tempValue;
@@ -27,8 +26,10 @@ void readAndValidate(HalFile& file, uint8_t& member, const uint8_t maxValue) {
 
 namespace {
 constexpr uint8_t SETTINGS_FILE_VERSION = 1;
+// Enum settings are persisted by ordinal. Keep the version stable while
+// accepting the interim layout during migration.
+constexpr uint8_t SETTINGS_SCHEMA_VERSION = 3;
 constexpr char SETTINGS_FILE_BIN[] = "/.crosspoint/settings.bin";
-constexpr char SETTINGS_FILE_JSON[] = "/.crosspoint/settings.json";
 constexpr char SETTINGS_FILE_BAK[] = "/.crosspoint/settings.bin.bak";
 constexpr char LANG_FILE_BIN[] = "/.crosspoint/language.bin";
 constexpr char LANG_FILE_BAK[] = "/.crosspoint/language.bin.bak";
@@ -60,6 +61,54 @@ void applyLegacyFrontButtonLayout(CrossPointSettings& settings) {
       settings.frontButtonConfirm = CrossPointSettings::FRONT_HW_CONFIRM;
       settings.frontButtonLeft = CrossPointSettings::FRONT_HW_LEFT;
       settings.frontButtonRight = CrossPointSettings::FRONT_HW_RIGHT;
+      break;
+  }
+}
+
+void applyLegacyStatusBarSettings(CrossPointSettings& settings) {
+  switch (static_cast<CrossPointSettings::STATUS_BAR_MODE>(settings.statusBar)) {
+    case CrossPointSettings::NONE:
+      settings.statusBarChapterPageCount = 0;
+      settings.statusBarBookProgressPercentage = 0;
+      settings.statusBarProgressBar = CrossPointSettings::HIDE_PROGRESS;
+      settings.statusBarTitle = CrossPointSettings::HIDE_TITLE;
+      settings.statusBarBattery = 0;
+      break;
+    case CrossPointSettings::NO_PROGRESS:
+      settings.statusBarChapterPageCount = 0;
+      settings.statusBarBookProgressPercentage = 0;
+      settings.statusBarProgressBar = CrossPointSettings::HIDE_PROGRESS;
+      settings.statusBarTitle = CrossPointSettings::CHAPTER_TITLE;
+      settings.statusBarBattery = 1;
+      break;
+    case CrossPointSettings::BOOK_PROGRESS_BAR:
+      settings.statusBarChapterPageCount = 1;
+      settings.statusBarBookProgressPercentage = 0;
+      settings.statusBarProgressBar = CrossPointSettings::BOOK_PROGRESS;
+      settings.statusBarTitle = CrossPointSettings::CHAPTER_TITLE;
+      settings.statusBarBattery = 1;
+      break;
+    case CrossPointSettings::ONLY_BOOK_PROGRESS_BAR:
+      settings.statusBarChapterPageCount = 1;
+      settings.statusBarBookProgressPercentage = 0;
+      settings.statusBarProgressBar = CrossPointSettings::BOOK_PROGRESS;
+      settings.statusBarTitle = CrossPointSettings::HIDE_TITLE;
+      settings.statusBarBattery = 0;
+      break;
+    case CrossPointSettings::CHAPTER_PROGRESS_BAR:
+      settings.statusBarChapterPageCount = 0;
+      settings.statusBarBookProgressPercentage = 1;
+      settings.statusBarProgressBar = CrossPointSettings::CHAPTER_PROGRESS;
+      settings.statusBarTitle = CrossPointSettings::CHAPTER_TITLE;
+      settings.statusBarBattery = 1;
+      break;
+    case CrossPointSettings::FULL:
+    default:
+      settings.statusBarChapterPageCount = 1;
+      settings.statusBarBookProgressPercentage = 1;
+      settings.statusBarProgressBar = CrossPointSettings::HIDE_PROGRESS;
+      settings.statusBarTitle = CrossPointSettings::CHAPTER_TITLE;
+      settings.statusBarBattery = 1;
       break;
   }
 }
@@ -98,46 +147,214 @@ uint8_t CrossPointSettings::sleepTimeoutEnumToMinutes(const uint8_t legacyValue)
   }
 }
 
-bool CrossPointSettings::saveToFile() const {
-  Storage.mkdir("/.crosspoint");
-  return JsonSettingsIO::saveSettings(*this, SETTINGS_FILE_JSON);
+void CrossPointSettings::toJson(JsonDocument& doc) const {
+  doc["settingsSchema"] = SETTINGS_SCHEMA_VERSION;
+
+  for (const auto& info : getSettingsList()) {
+    if (!info.key) continue;
+    // Dynamic entries are stored separately and are not part of settings.json.
+    if (!info.valuePtr && !info.stringOffset) continue;
+
+    if (info.stringOffset) {
+      const char* strPtr = reinterpret_cast<const char*>(this) + info.stringOffset;
+      if (info.obfuscated) {
+        doc[std::string(info.key) + "_obf"] = obfuscation::obfuscateToBase64(strPtr);
+      } else {
+        doc[info.key] = strPtr;
+      }
+    } else {
+      doc[info.key] = this->*(info.valuePtr);
+    }
+  }
+
+  // Front button remap is edited by its own activity and is not in SettingsList.
+  doc["frontButtonBack"] = frontButtonBack;
+  doc["frontButtonConfirm"] = frontButtonConfirm;
+  doc["frontButtonLeft"] = frontButtonLeft;
+  doc["frontButtonRight"] = frontButtonRight;
+  doc["fontFamily"] = normalizeBuiltinFontFamily(fontFamily);
+#ifdef OMIT_FONTS
+  const bool hasSdFont = sdFontFamilyName[0] != '\0';
+  doc["fontPointSize"] = hasSdFont ? fontPointSize : DEFAULT_FONT_POINT_SIZE;
+#else
+  doc["fontPointSize"] = fontPointSize;
+#endif
+  if (sdFontFamilyName[0] != '\0') doc["sdFontFamilyName"] = sdFontFamilyName;
+  if (dictionaryName[0] != '\0') doc["dictionaryName"] = dictionaryName;
+
+  // Language is stored as an ISO code so enum reorderings do not change it.
+  doc["language"] = (language < getLanguageCount()) ? LANGUAGE_CODES[language] : "EN";
+}
+
+bool CrossPointSettings::fromJson(JsonVariantConst doc) {
+  auto clamp = [](const uint8_t value, const uint8_t maxValue, const uint8_t def) -> uint8_t {
+    return value < maxValue ? value : def;
+  };
+  bool needsResave = false;
+
+  // Version 2 temporarily swapped BLANK/COVER_CUSTOM. Version 3 restores the
+  // stable upstream ordinals; unversioned files use the upstream layout.
+  const uint8_t settingsSchema = doc["settingsSchema"] | static_cast<uint8_t>(1);
+  if (settingsSchema == 2) {
+    needsResave = true;
+  }
+
+  // PWR_CONFIRM belongs to another hardware profile; do not interpret it as
+  // a valid action on this X3/X4 build.
+  if (settingsSchema < SETTINGS_SCHEMA_VERSION && !doc["shortPwrBtn"].isNull() &&
+      (doc["shortPwrBtn"] | static_cast<uint8_t>(0)) == 5) {
+    needsResave = true;
+  }
+
+  if (doc["statusBarChapterPageCount"].isNull()) applyLegacyStatusBarSettings(*this);
+
+  for (const auto& info : getSettingsList()) {
+    if (!info.key) continue;
+    if (!info.valuePtr && !info.stringOffset) continue;
+
+    if (info.stringOffset) {
+      char* destPtr = reinterpret_cast<char*>(this) + info.stringOffset;
+      const std::string fieldDefault = destPtr;
+      std::string val;
+      if (info.obfuscated) {
+        bool ok = false;
+        val = obfuscation::deobfuscateFromBase64(doc[std::string(info.key) + "_obf"] | "", &ok);
+        if (!ok || val.empty()) {
+          val = doc[info.key] | fieldDefault;
+          if (val != fieldDefault) needsResave = true;
+        }
+      } else {
+        val = doc[info.key] | fieldDefault;
+      }
+      if (info.stringMaxLen == 0) {
+        LOG_ERR("CPS", "Misconfigured SettingInfo: stringMaxLen is 0 for key '%s'", info.key);
+        destPtr[0] = '\0';
+        needsResave = true;
+        continue;
+      }
+      strncpy(destPtr, val.c_str(), info.stringMaxLen - 1);
+      destPtr[info.stringMaxLen - 1] = '\0';
+    } else {
+      const uint8_t fieldDefault = this->*(info.valuePtr);
+      uint8_t value = doc[info.key] | fieldDefault;
+      if (info.type == SettingType::ENUM) {
+        value = clamp(value, static_cast<uint8_t>(info.enumValues.size()), fieldDefault);
+      } else if (info.type == SettingType::TOGGLE) {
+        value = clamp(value, static_cast<uint8_t>(2), fieldDefault);
+      } else if (info.type == SettingType::VALUE) {
+        if (value < info.valueRange.min) value = info.valueRange.min;
+        if (value > info.valueRange.max) value = info.valueRange.max;
+      }
+      this->*(info.valuePtr) = value;
+    }
+  }
+
+  // Apply schema-2 ordinal fixes after the generic loop because fromJson takes
+  // a const view of the parsed document.
+  if (settingsSchema == 2 && !doc["sleepScreen"].isNull()) {
+    const uint8_t value = doc["sleepScreen"] | static_cast<uint8_t>(0);
+    if (value == 4) {
+      sleepScreen = BLANK;
+    } else if (value == 5) {
+      sleepScreen = COVER_CUSTOM;
+    }
+  }
+  if (settingsSchema < SETTINGS_SCHEMA_VERSION && !doc["shortPwrBtn"].isNull() &&
+      (doc["shortPwrBtn"] | static_cast<uint8_t>(0)) == 5) {
+    shortPwrBtn = IGNORE;
+  }
+
+  if (doc["sleepTimeoutMinutes"].isNull() && !doc["sleepTimeout"].isNull()) {
+    const uint8_t legacyValue =
+        clamp(doc["sleepTimeout"] | static_cast<uint8_t>(SLEEP_10_MIN), SLEEP_TIMEOUT_COUNT, SLEEP_10_MIN);
+    sleepTimeoutMinutes = sleepTimeoutEnumToMinutes(legacyValue);
+    needsResave = true;
+  }
+
+  frontButtonBack = clamp(doc["frontButtonBack"] | static_cast<uint8_t>(FRONT_HW_BACK),
+                           FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_BACK);
+  frontButtonConfirm = clamp(doc["frontButtonConfirm"] | static_cast<uint8_t>(FRONT_HW_CONFIRM),
+                             FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_CONFIRM);
+  frontButtonLeft = clamp(doc["frontButtonLeft"] | static_cast<uint8_t>(FRONT_HW_LEFT),
+                          FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_LEFT);
+  frontButtonRight = clamp(doc["frontButtonRight"] | static_cast<uint8_t>(FRONT_HW_RIGHT),
+                           FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_RIGHT);
+  validateFrontButtonMapping(*this);
+
+  if (!doc["fontPointSize"].isNull()) {
+    const uint8_t stored = doc["fontPointSize"] | DEFAULT_FONT_POINT_SIZE;
+    fontPointSize = stored >= 1 ? stored : DEFAULT_FONT_POINT_SIZE;
+  } else if (!doc["fontSize"].isNull()) {
+    const uint8_t legacy = doc["fontSize"] | static_cast<uint8_t>(1);
+    if (legacy <= LEGACY_FONT_SIZE_MAX) {
+      fontPointSize = static_cast<uint8_t>(12 + legacy * 2);
+    } else {
+      fontPointSize = DEFAULT_FONT_POINT_SIZE;
+    }
+    needsResave = true;
+  }
+
+  const uint8_t storedFontFamily = doc["fontFamily"] | static_cast<uint8_t>(0);
+  fontFamily = clamp(storedFontFamily, BUILTIN_FONT_COUNT, 0);
+  const char* sdFont = doc["sdFontFamilyName"] | "";
+  strncpy(sdFontFamilyName, sdFont, sizeof(sdFontFamilyName) - 1);
+  sdFontFamilyName[sizeof(sdFontFamilyName) - 1] = '\0';
+  const char* dictionary = doc["dictionaryName"] | "";
+  strncpy(dictionaryName, dictionary, sizeof(dictionaryName) - 1);
+  dictionaryName[sizeof(dictionaryName) - 1] = '\0';
+
+  if (storedFontFamily == LEGACY_OPENDYSLEXIC && sdFontFamilyName[0] == '\0') {
+    fontFamily = NOTOSERIF;
+    strncpy(sdFontFamilyName, "OpenDyslexic", sizeof(sdFontFamilyName) - 1);
+    sdFontFamilyName[sizeof(sdFontFamilyName) - 1] = '\0';
+    needsResave = true;
+  } else if (storedFontFamily >= BUILTIN_FONT_COUNT) {
+    needsResave = true;
+  }
+
+#ifdef OMIT_FONTS
+  if (fontFamily != NOTOSERIF) {
+    fontFamily = NOTOSERIF;
+    needsResave = true;
+  }
+  if (sdFontFamilyName[0] == '\0' && fontPointSize != DEFAULT_FONT_POINT_SIZE) {
+    fontPointSize = DEFAULT_FONT_POINT_SIZE;
+    needsResave = true;
+  }
+#endif
+
+  if (doc["language"].is<const char*>()) {
+    language = static_cast<uint8_t>(I18n::languageFromCode(doc["language"].as<const char*>()));
+  }
+
+  if (needsResave) requestResave();
+  LOG_DBG("CPS", "Settings loaded from file");
+  return true;
 }
 
 bool CrossPointSettings::loadFromFile() {
   // Try JSON first
-  if (Storage.exists(SETTINGS_FILE_JSON)) {
-    String json = Storage.readFile(SETTINGS_FILE_JSON);
-    if (!json.isEmpty()) {
-      bool resave = false;
-      bool result = JsonSettingsIO::loadSettings(*this, json.c_str(), &resave);
-      if (result && resave) {
-        if (saveToFile()) {
-          LOG_DBG("CPS", "Resaved settings to update format");
-        } else {
-          LOG_ERR("CPS", "Failed to resave settings after format update");
-        }
-      }
-      migrateLanguageBinaryFile();
-      return result;
-    }
+  if (Storage.exists(getFilePath())) {
+    const bool result = PersistableStore<CrossPointSettings>::loadFromFile();
+    migrateLanguageBinaryFile();
+    return result;
   }
 
   // Fall back to binary migration
   if (Storage.exists(SETTINGS_FILE_BIN)) {
     if (loadFromBinaryFile()) {
       migrateLanguageBinaryFile();
-      if (saveToFile()) {
+      if (PersistableStore<CrossPointSettings>::saveToFile()) {
         Storage.rename(SETTINGS_FILE_BIN, SETTINGS_FILE_BAK);
         LOG_DBG("CPS", "Migrated settings.bin to settings.json");
         return true;
-      } else {
-        LOG_ERR("CPS", "Failed to save migrated settings to JSON");
-        return false;
       }
+      LOG_ERR("CPS", "Failed to save migrated settings to JSON");
+      return false;
     }
   }
 
-  // No settings files at all -- check for standalone language.bin
+  // No settings files at all -- check for standalone language.bin.
   return migrateLanguageBinaryFile();
 }
 

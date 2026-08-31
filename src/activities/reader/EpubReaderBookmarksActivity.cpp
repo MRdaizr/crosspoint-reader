@@ -3,7 +3,6 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <I18n.h>
-#include <JsonSettingsIO.h>
 #include <util/BookmarkUtil.h>
 
 #include <algorithm>

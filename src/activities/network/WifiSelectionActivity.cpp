@@ -11,6 +11,7 @@
 #include <cstdio>
 
 #include "CrossPointSettings.h"
+#include "BootClockSyncTask.h"
 #include "MappedInputManager.h"
 #include "WifiCredentialStore.h"
 #include "activities/util/KeyboardEntryActivity.h"
@@ -19,6 +20,7 @@
 
 void WifiSelectionActivity::onEnter() {
   Activity::onEnter();
+  BootClockSyncTask::cancel();
   resetUi();
   app.on(ACTION_NETWORK_ROW, &WifiSelectionActivity::onRowEvent, this);
   app.setScreen(&WifiSelectionActivity::listScreen, this);

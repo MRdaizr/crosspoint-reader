@@ -8,6 +8,7 @@
 
 #include <cstdio>
 
+#include "BootClockSyncTask.h"
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
@@ -17,6 +18,7 @@
 
 void ClockSyncActivity::onEnter() {
   Activity::onEnter();
+  BootClockSyncTask::cancel();
   state = SYNCING;
   syncedTime[0] = '\0';
 

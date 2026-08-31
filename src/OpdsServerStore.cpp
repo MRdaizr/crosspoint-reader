@@ -1,37 +1,52 @@
 #include "OpdsServerStore.h"
 
 #include <HalStorage.h>
-#include <JsonSettingsIO.h>
 #include <Logging.h>
+#include <ObfuscationUtils.h>
 
+#include <algorithm>
 #include <cstring>
 
 #include "CrossPointSettings.h"
 
-OpdsServerStore OpdsServerStore::instance;
+void OpdsServerStore::toJson(JsonDocument& doc) const {
+  JsonArray arr = doc["servers"].to<JsonArray>();
+  for (const auto& server : servers) {
+    JsonObject obj = arr.add<JsonObject>();
+    obj["name"] = server.name;
+    obj["url"] = server.url;
+    obj["username"] = server.username;
+    obj["password_obf"] = obfuscation::obfuscateToBase64(server.password);
+  }
+}
 
-namespace {
-constexpr char OPDS_FILE_JSON[] = "/.crosspoint/opds.json";
-}  // namespace
+bool OpdsServerStore::fromJson(JsonVariantConst doc) {
+  servers.clear();
+  JsonArrayConst arr = doc["servers"].as<JsonArrayConst>();
+  servers.reserve(std::min(arr.size(), MAX_SERVERS));
+  bool needsResave = false;
 
-bool OpdsServerStore::saveToFile() const {
-  Storage.mkdir("/.crosspoint");
-  return JsonSettingsIO::saveOpds(*this, OPDS_FILE_JSON);
+  for (JsonObjectConst obj : arr) {
+    if (servers.size() >= MAX_SERVERS) break;
+    OpdsServer server;
+    server.name = obj["name"] | "";
+    server.url = obj["url"] | "";
+    server.username = obj["username"] | "";
+    server.password = extractPassword(obj, needsResave);
+    servers.push_back(std::move(server));
+  }
+
+  LOG_DBG("OPS", "Loaded %zu OPDS servers from file", servers.size());
+  if (needsResave) {
+    LOG_DBG("OPS", "Resaving JSON with obfuscated passwords");
+    requestResave();
+  }
+  return true;
 }
 
 bool OpdsServerStore::loadFromFile() {
-  if (Storage.exists(OPDS_FILE_JSON)) {
-    String json = Storage.readFile(OPDS_FILE_JSON);
-    if (!json.isEmpty()) {
-      // resave flag is set when passwords were stored in plaintext and need re-obfuscation
-      bool resave = false;
-      bool result = JsonSettingsIO::loadOpds(*this, json.c_str(), &resave);
-      if (result && resave) {
-        LOG_DBG("OPS", "Resaving JSON with obfuscated passwords");
-        saveToFile();
-      }
-      return result;
-    }
+  if (Storage.exists(getFilePath())) {
+    return PersistableStore<OpdsServerStore>::loadFromFile();
   }
 
   // No opds.json found — attempt one-time migration from the legacy single-server

@@ -1,10 +1,14 @@
 #pragma once
+#include <ArduinoJson.h>
+#include <PersistableStore.h>
+
 #include <cstdint>
 #include <string>
 
-class CrossPointState {
-  // Static instance
-  static CrossPointState instance;
+class CrossPointState : public PersistableStore<CrossPointState> {
+  CrossPointState() = default;
+
+  friend class PersistableStore<CrossPointState>;
 
  public:
   static constexpr uint8_t SLEEP_RECENT_COUNT = 16;
@@ -29,10 +33,9 @@ class CrossPointState {
   void pushRecentOverlaySleep(uint16_t idx);
   ~CrossPointState() = default;
 
-  // Get singleton instance
-  static CrossPointState& getInstance() { return instance; }
-
-  bool saveToFile() const;
+  static const char* getFilePath() { return "/.crosspoint/state.json"; }
+  void toJson(JsonDocument& doc) const;
+  bool fromJson(JsonVariantConst doc);
 
   bool loadFromFile();
 

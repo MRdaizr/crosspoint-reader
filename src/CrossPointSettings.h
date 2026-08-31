@@ -1,18 +1,19 @@
 #pragma once
+#include <ArduinoJson.h>
 #include <HalStorage.h>
+#include <PersistableStore.h>
 
 #include <cstdint>
 #include <iosfwd>
 
 #include <Epub/ReaderRenderSpec.h>
 
-class CrossPointSettings {
+class CrossPointSettings : public PersistableStore<CrossPointSettings> {
  private:
   // Private constructor for singleton
   CrossPointSettings() = default;
 
-  // Static instance
-  static CrossPointSettings instance;
+  friend class PersistableStore<CrossPointSettings>;
 
  public:
   // Delete copy constructor and assignment
@@ -341,9 +342,6 @@ class CrossPointSettings {
 
   ~CrossPointSettings() = default;
 
-  // Get singleton instance
-  static CrossPointSettings& getInstance() { return instance; }
-
   static constexpr uint8_t MIN_SLEEP_TIMEOUT_MINUTES = 1;
   static constexpr uint8_t SLEEP_TIMEOUT_NEVER_MINUTES = 31;
   static constexpr uint8_t MAX_SLEEP_TIMEOUT_MINUTES = SLEEP_TIMEOUT_NEVER_MINUTES;
@@ -363,8 +361,11 @@ class CrossPointSettings {
   // If count_only is true, returns the number of settings items that would be written.
   uint8_t writeSettings(HalFile& file, bool count_only = false) const;
 
-  bool saveToFile() const;
   bool loadFromFile();
+
+  static const char* getFilePath() { return "/.crosspoint/settings.json"; }
+  void toJson(JsonDocument& doc) const;
+  bool fromJson(JsonVariantConst doc);
 
   static void validateFrontButtonMapping(CrossPointSettings& settings);
   static uint8_t sleepTimeoutEnumToMinutes(uint8_t legacyValue);

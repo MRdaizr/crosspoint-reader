@@ -1,4 +1,7 @@
 #pragma once
+#include <ArduinoJson.h>
+#include <PersistableStore.h>
+
 #include <cstddef>
 #include <mutex>
 #include <optional>
@@ -17,19 +20,13 @@ struct WifiCredentialSummary {
   bool isLastConnected = false;
 };
 
-class WifiCredentialStore;
-namespace JsonSettingsIO {
-bool saveWifi(const WifiCredentialStore& store, const char* path);
-bool loadWifi(WifiCredentialStore& store, const char* json, bool* needsResave);
-}  // namespace JsonSettingsIO
-
 /**
  * Singleton class for storing WiFi credentials on the SD card.
  * Passwords are XOR-obfuscated with the device's unique hardware MAC address
  * and base64-encoded before writing to JSON (not cryptographically secure,
  * but prevents casual reading and ties credentials to the specific device).
  */
-class WifiCredentialStore {
+class WifiCredentialStore : public PersistableStore<WifiCredentialStore> {
  private:
   struct Snapshot {
     std::vector<WifiCredential> credentials;
@@ -53,8 +50,11 @@ class WifiCredentialStore {
   void replaceState(Snapshot&& loaded);
   bool saveToFileLocked() const;
 
-  friend bool JsonSettingsIO::saveWifi(const WifiCredentialStore&, const char*);
-  friend bool JsonSettingsIO::loadWifi(WifiCredentialStore&, const char*, bool*);
+  static const char* getFilePath() { return "/.crosspoint/wifi.json"; }
+  void toJson(JsonDocument& doc) const;
+  bool fromJson(JsonVariantConst doc);
+
+  friend class PersistableStore<WifiCredentialStore>;
 
  public:
   // Delete copy constructor and assignment
