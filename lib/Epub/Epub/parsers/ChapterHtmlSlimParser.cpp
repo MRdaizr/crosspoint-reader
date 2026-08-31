@@ -1929,6 +1929,9 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
         self->currentTextBlock->setBlockStyle(style.addBottom(self->blockStyleStack.back()));
       }
       self->blockStyleStack.pop_back();
+      // Start subsequent bare text with its parent style, but do not reapply
+      // the closed block's vertical spacing when paragraph spacing is disabled.
+      self->startNewTextBlock(self->blockStyleStack.back().withoutTop().withoutBottom());
     }
 
     if (strcmp(name, "li") == 0) {
