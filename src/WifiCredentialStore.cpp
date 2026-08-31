@@ -157,6 +157,7 @@ bool WifiCredentialStore::loadFromBinaryFile(Snapshot& loaded) const {
     return false;
   }
 
+  loaded.credentials.reserve(std::min<size_t>(count, MAX_NETWORKS));
   for (uint8_t i = 0; i < count && i < MAX_NETWORKS; i++) {
     WifiCredential cred;
     const auto ssidResult = readBoundedString(file, cred.ssid, MAX_SSID_LENGTH, "SSID");
