@@ -112,7 +112,11 @@ class TxtReaderActivity final : public ReaderActivity {
   void loadProgress();
   bool isAtEndOfBook() const override;
   void onReturnFromEndOfBook() override;
-  bool loadBook();
+  bool loadBook() override;
+  std::string getBookTitle() const override { return txt ? txt->getTitle() : std::string{}; }
+  void onBookEntered() override;
+  void onBookExited() override;
+  bool pageTurn(bool isForward) override;
 
  public:
   explicit TxtReaderActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
@@ -122,8 +126,6 @@ class TxtReaderActivity final : public ReaderActivity {
                              bool allowFastInitialRefresh = false)
       : ReaderActivity("TxtReader", renderer, mappedInput, txt ? txt->getPath() : "", allowFastInitialRefresh),
         txt(std::move(txt)) {}
-  void onEnter() override;
-  void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
   bool handleForcedRefresh() override {

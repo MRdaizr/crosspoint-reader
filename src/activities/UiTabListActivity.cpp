@@ -94,6 +94,12 @@ void UiTabListActivity::syncTabListViewport(UiScreen& screen, fui::ListProps& pr
                            : 0;
   }
   n.scrollBy(0, count);  // clamp to range
+  // A dynamic tab can shrink its item list while it is focused (for example
+  // when a setting is removed or an SD-backed list disappears).  scrollBy()
+  // clamps the viewport but intentionally leaves the selection untouched;
+  // clamp it as well before publishing the FUI props so the next render and
+  // confirm event never address an item past the new list end.
+  if (n.selected > count) n.selected = count;
   props.topIndex = static_cast<uint16_t>(n.top);
   props.selectedIndex = static_cast<int16_t>(n.selected - 1);  // -1 = tab band focused
 }

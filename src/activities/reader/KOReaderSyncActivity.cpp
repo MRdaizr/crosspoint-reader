@@ -327,6 +327,11 @@ void KOReaderSyncActivity::performUpload() {
     progress.metadata = std::move(metadata);
   }
 
+  // Metadata extraction is the only reason this activity may have an EPUB
+  // object resident. Release it before the TLS request so the network stack
+  // has the same heap headroom as the reader-side sync path.
+  epub.reset();
+
   const auto result = KOReaderSyncClient::updateProgress(progress);
 
   // Drop the radio while user reads the result; full teardown happens at silent reboot.

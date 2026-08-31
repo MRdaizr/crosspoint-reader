@@ -67,6 +67,14 @@ class EpubReaderActivity final : public ReaderActivity {
   // the input task wait for a parser slice to finish.
   std::atomic<int8_t> queuedPageTurns{0};
   unsigned long lastIncrementalBuildTick = 0UL;
+  unsigned long lastRenderedPageMs = 0UL;
+  int prewarmedSpineIndex = -1;
+  int prewarmedPage = -1;
+  bool buildHeapPaused = false;
+  static constexpr uint32_t BUILD_MIN_FREE_HEAP = 32U * 1024U;
+  static constexpr uint32_t BUILD_MIN_MAX_ALLOC = 16U * 1024U;
+  static constexpr uint32_t RENDER_MIN_FREE_HEAP = 24U * 1024U;
+  static constexpr unsigned long IDLE_PREWARM_DELAY_MS = 400UL;
   bool skipNextButtonCheck = false;  // Skip button processing for one frame after subactivity exit
   bool automaticPageTurnActive = false;
   bool showBookmarkMessage = false;
@@ -119,6 +127,8 @@ class EpubReaderActivity final : public ReaderActivity {
   void updatePreloadProgress(uint8_t progress, bool refreshStatusBar = false);
   void silentIndexNextChapterIfNeeded(uint16_t viewportWidth, uint16_t viewportHeight);
   void advanceNextChapterPreload();
+  bool buildTickHeapGate();
+  void idlePrewarmNextPage();
   void clearNextChapterPreload();
   bool saveProgress(int spineIndex, int currentPage, int pageCount,
                     std::optional<uint32_t> visibleTextOffset = std::nullopt);
@@ -139,10 +149,15 @@ class EpubReaderActivity final : public ReaderActivity {
   void clearDeferredReposition();
   void applyOrientation(uint8_t orientation);
   void toggleAutoPageTurn(uint8_t selectedPageTurnOption);
-  void pageTurn(bool isForwardTurn);
+  bool pageTurn(bool isForwardTurn) override;
   void applyPageTurnLocked(bool isForwardTurn);
   void loadCachedBookmarks();
-  bool loadBook();
+  bool loadBook() override;
+  std::string getBookTitle() const override { return epub ? epub->getTitle() : std::string{}; }
+  std::string getBookAuthor() const override { return epub ? epub->getAuthor() : std::string{}; }
+  std::string getBookThumbBmpPath() const override { return epub ? epub->getThumbBmpPath() : std::string{}; }
+  void onBookEntered() override;
+  void onBookExited() override;
   void addBookmark();
   void updateBookmarkFlag();
 
@@ -180,8 +195,6 @@ class EpubReaderActivity final : public ReaderActivity {
                               bool allowFastInitialRefresh = false)
       : ReaderActivity("EpubReader", renderer, mappedInput, epub ? epub->getPath() : "", allowFastInitialRefresh),
         epub(std::move(epub)) {}
-  void onEnter() override;
-  void onExit() override;
   void loop() override;
   void render(RenderLock&& lock) override;
   bool handleForcedRefresh() override {

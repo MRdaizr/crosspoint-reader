@@ -40,14 +40,7 @@ bool XtcReaderActivity::loadBook() {
   return true;
 }
 
-void XtcReaderActivity::onEnter() {
-  Activity::onEnter();
-
-  if (!loadBook()) {
-    finish();
-    return;
-  }
-
+void XtcReaderActivity::onBookEntered() {
   if (allowFastInitialRefresh_) {
     pagesUntilFullRefresh = std::max(SETTINGS.getRefreshFrequency(), 2);
   }
@@ -57,31 +50,30 @@ void XtcReaderActivity::onEnter() {
   // Load saved progress
   loadProgress();
 
-  // Save current XTC as last opened book and add to recent books
-  APP_STATE.openEpubPath = xtc->getPath();
-  APP_STATE.saveToFile();
-  RECENT_BOOKS.addBook(xtc->getPath(), xtc->getTitle(), xtc->getAuthor(), xtc->getThumbBmpPath());
-  READING_STATS.beginSession(xtc->getPath(), xtc->getTitle(), xtc->getAuthor(), xtc->getThumbBmpPath(),
-                             xtc->getPageCount() ? xtc->calculateProgress(currentPage) : 0);
-
-  // Trigger first update
-  requestUpdate();
 }
 
-void XtcReaderActivity::onExit() {
-  Activity::onExit();
-
-  endOfBookOptions.reset();
-  endOfBookOptionsReady.store(false, std::memory_order_release);
-
+void XtcReaderActivity::onBookExited() {
   if (xtc) {
     READING_STATS.endSession();
     ACHIEVEMENTS.recordSessionEnded(READING_STATS.getLastSessionSnapshot());
     showPendingAchievementPopups(renderer);
   }
-  APP_STATE.readerActivityLoadCount = 0;
-  APP_STATE.saveToFile();
   xtc.reset();
+}
+
+bool XtcReaderActivity::pageTurn(const bool isForward) {
+  return skipPages(isForward ? 1 : -1);
+}
+
+bool XtcReaderActivity::skipPages(const int amount) {
+  if (!xtc || xtc->getPageCount() == 0 || amount == 0) return false;
+  const int64_t maxPage = static_cast<int64_t>(xtc->getPageCount());
+  int64_t target = static_cast<int64_t>(currentPage) + amount;
+  target = std::max<int64_t>(0, std::min<int64_t>(maxPage, target));
+  if (target == static_cast<int64_t>(currentPage)) return false;
+  currentPage = static_cast<uint32_t>(target);
+  requestUpdate();
+  return true;
 }
 
 void XtcReaderActivity::loop() {
@@ -119,23 +111,13 @@ void XtcReaderActivity::loop() {
 
   if (handleEndOfBookPageTurn(atEndOfBook, prevTriggered, nextTriggered)) return;
 
-  const bool skipPages = !fromTilt && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP &&
-                         mappedInput.getHeldTime() > ReaderUtils::SKIP_HOLD_MS;
-  const int skipAmount = skipPages ? 10 : 1;
-
+  const bool skipByChapter = !fromTilt && SETTINGS.longPressButtonBehavior == SETTINGS.CHAPTER_SKIP &&
+                             mappedInput.getHeldTime() > ReaderUtils::SKIP_HOLD_MS;
+  const int skipAmount = skipByChapter ? 10 : 1;
   if (prevTriggered) {
-    if (currentPage >= static_cast<uint32_t>(skipAmount)) {
-      currentPage -= skipAmount;
-    } else {
-      currentPage = 0;
-    }
-    requestUpdate();
+    skipPages(-skipAmount);
   } else if (nextTriggered) {
-    currentPage += skipAmount;
-    if (currentPage >= xtc->getPageCount()) {
-      currentPage = xtc->getPageCount();  // Allow showing "End of book"
-    }
-    requestUpdate();
+    skipPages(skipAmount);
   }
 }
 

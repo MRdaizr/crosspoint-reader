@@ -183,13 +183,55 @@ bool EpubReaderActivity::loadBook() {
   return true;
 }
 
-void EpubReaderActivity::onEnter() {
-  Activity::onEnter();
+bool EpubReaderActivity::buildTickHeapGate() {
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  const uint32_t maxAlloc = ESP.getMaxAllocHeap();
+  const bool allowed = freeHeap >= BUILD_MIN_FREE_HEAP && maxAlloc >= BUILD_MIN_MAX_ALLOC;
+  const bool wasPaused = buildHeapPaused;
+  buildHeapPaused = !allowed;
+  if (wasPaused != buildHeapPaused) {
+    if (buildHeapPaused) {
+      LOG_DBG("ERS", "Pausing background build for heap: free=%u max=%u", static_cast<unsigned>(freeHeap),
+              static_cast<unsigned>(maxAlloc));
+    } else {
+      LOG_DBG("ERS", "Resuming background build: free=%u max=%u", static_cast<unsigned>(freeHeap),
+              static_cast<unsigned>(maxAlloc));
+    }
+  }
+  return allowed;
+}
 
-  if (!loadBook()) {
-    finish();
+void EpubReaderActivity::idlePrewarmNextPage() {
+  if (!section || section->isBuilding() || pageRenderRequested || !renderer.hasFrameBuffer() ||
+      mappedInput.wasAnyPressed() || mappedInput.wasAnyReleased() ||
+      millis() - lastRenderedPageMs < IDLE_PREWARM_DELAY_MS || ESP.getFreeHeap() < RENDER_MIN_FREE_HEAP ||
+      ESP.getMaxAllocHeap() < BUILD_MIN_MAX_ALLOC) {
     return;
   }
+
+  const int targetPage = section->currentPage + 1;
+  if (targetPage < 0 || targetPage >= section->pageCount ||
+      (prewarmedSpineIndex == currentSpineIndex && prewarmedPage == targetPage)) {
+    return;
+  }
+
+  RenderLock lock(false);
+  if (!lock.ownsLock()) return;
+
+  auto page = section->loadPage(targetPage);
+  if (!page) return;
+  prewarmedSpineIndex = currentSpineIndex;
+  prewarmedPage = targetPage;
+
+  auto* fcm = renderer.getFontCacheManager();
+  if (!fcm) return;
+  auto scope = fcm->createPrewarmScope();
+  page->render(renderer, SETTINGS.getReaderFontId(), 0, 0);
+  scope.endScanAndPrewarm();
+  LOG_DBG("ERS", "Idle prewarmed next page: spine=%d page=%d", currentSpineIndex, targetPage);
+}
+
+void EpubReaderActivity::onBookEntered() {
 
   if (allowFastInitialRefresh_) {
     pagesUntilFullRefresh = std::max(SETTINGS.getRefreshFrequency(), 2);
@@ -205,10 +247,6 @@ void EpubReaderActivity::onEnter() {
   ImageBlock::setExtractor(epub.get(), [](void* ctx, const char* srcPath, const char* destPath) {
     return static_cast<Epub*>(ctx)->extractItemToFile(srcPath, destPath);
   });
-
-  // Configure screen orientation based on settings
-  // NOTE: This affects layout math and must be applied before any render calls.
-  ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
 
   epub->setupCacheDir();
   WeReadStore::findBookIdForPath(epub->getPath(), wereadBookId_, sizeof(wereadBookId_));
@@ -271,39 +309,19 @@ void EpubReaderActivity::onEnter() {
     }
   }
 
-  // Save current epub as last opened epub and add to recent books
-  APP_STATE.openEpubPath = epub->getPath();
-  APP_STATE.saveToFile();
-  RECENT_BOOKS.addBook(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
-  READING_STATS.beginSession(epub->getPath(), epub->getTitle(), epub->getAuthor(), epub->getThumbBmpPath());
-
   loadCachedBookmarks();
-
-  // Trigger first update
-  requestUpdate();
 }
 
-void EpubReaderActivity::onExit() {
-  Activity::onExit();
-
+void EpubReaderActivity::onBookExited() {
   overlayPopup.dismiss();
   toolbarUi.reset();
   discardOverlayPage();
-
-  endOfBookOptions.reset();
-  endOfBookOptionsReady.store(false, std::memory_order_release);
 
   // ImageBlock keeps a process-wide extractor hook for lazy EPUB assets. Clear
   // it before releasing this activity's Epub so no later render can call a
   // dangling context pointer.
   ImageBlock::setExtractor(nullptr, nullptr);
   ImageBlock::releaseRenderCache();
-
-  // Reset orientation back to portrait for the rest of the UI
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
-
-  APP_STATE.readerActivityLoadCount = 0;
-  APP_STATE.saveToFile();
 
   if (epub) {
     // Leaving mid-footnote loses the in-RAM return stack on deep sleep; persist
@@ -480,6 +498,12 @@ void EpubReaderActivity::loop() {
     lastIncrementalBuildTick = millis();
     requestUpdate();
   }
+
+  // Once the user has been idle on a rendered page, touch only the next page's
+  // scan path.  This warms SD-backed glyphs without changing the framebuffer or
+  // triggering an extra e-ink refresh, so the subsequent page turn remains on
+  // the normal render path.
+  idlePrewarmNextPage();
 
   unsigned long confirmHoldMs = 0;
   switch (SETTINGS.longPressMenuFunction) {
@@ -966,6 +990,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
   }
+
 }
 
 bool EpubReaderActivity::launchWeReadSync() {
@@ -1108,7 +1133,7 @@ void EpubReaderActivity::toggleAutoPageTurn(const uint8_t selectedPageTurnOption
   }
 }
 
-void EpubReaderActivity::pageTurn(bool isForwardTurn) {
+bool EpubReaderActivity::pageTurn(bool isForwardTurn) {
   RenderLock lock(false);
   if (!lock.ownsLock()) {
     constexpr int8_t MAX_QUEUED_PAGE_TURNS = 3;
@@ -1119,13 +1144,14 @@ void EpubReaderActivity::pageTurn(bool isForwardTurn) {
                               : std::max<int8_t>(-MAX_QUEUED_PAGE_TURNS, static_cast<int8_t>(queued - 1));
     } while (!queuedPageTurns.compare_exchange_weak(queued, updated));
     requestUpdate();
-    return;
+    return true;
   }
 
   applyPageTurnLocked(isForwardTurn);
 
   lastPageTurnTime = millis();
   requestUpdate();
+  return true;
 }
 
 void EpubReaderActivity::applyPageTurnLocked(const bool isForwardTurn) {
@@ -1252,6 +1278,10 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   }
 
   if (section && section->isBuilding()) {
+    // The Section-level guard protects parser allocations, while this reader
+    // gate prevents even entering a build slice when the current page/image
+    // render has left too little contiguous heap for the next allocation.
+    if (!buildTickHeapGate()) return;
     const auto buildResult = section->buildNextChunk(1);
     if (buildResult == Section::BuildResult::Failed) {
       LOG_ERR("ERS", "Incremental section build failed");
@@ -1328,6 +1358,7 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // Keep next-chapter work off the critical rendering path. A scheduled idle
   // tick builds one parser chunk and returns without redrawing the current page.
   if (!pageRenderRequested && nextChapterPreload && nextChapterPreload->isBuilding()) {
+    if (!buildTickHeapGate()) return;
     advanceNextChapterPreload();
     return;
   }
@@ -1765,6 +1796,8 @@ void EpubReaderActivity::clearDeferredReposition() {
   cachedVisibleTextOffset.reset();
   pendingOffsetJump.reset();
   currentPageVisibleOffset.reset();
+  prewarmedSpineIndex = -1;
+  prewarmedPage = -1;
 }
 
 void EpubReaderActivity::beginPreloadProgress() {
@@ -2017,6 +2050,11 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
               tBwRender - tPrewarm, tDisplay - tBwRender, tEnd - t0);
     }
   }
+
+  // Mark the last completed page render for the idle prewarm debounce. This
+  // is intentionally after all grayscale passes so prewarming never overlaps
+  // the active framebuffer/decoder work.
+  lastRenderedPageMs = millis();
 }
 
 void EpubReaderActivity::renderStatusBar() const {

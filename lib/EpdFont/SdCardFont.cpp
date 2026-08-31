@@ -694,12 +694,13 @@ int32_t SdCardFont::findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) 
 
 // --- Prewarm ---
 
-int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOnly) {
+int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOnly, bool loadKernLig) {
   if (utf8Text == nullptr) return -1;
-  return prewarm(&singleTextGetter, utf8Text, 1, styleMask, metadataOnly);
+  return prewarm(&singleTextGetter, utf8Text, 1, styleMask, metadataOnly, loadKernLig);
 }
 
-int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, uint8_t styleMask, bool metadataOnly) {
+int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, uint8_t styleMask, bool metadataOnly,
+                        bool loadKernLig) {
   if (!loaded_ || getter == nullptr) return -1;
   styleMask = resolveStyleMask(styleMask);
   if (styleMask == 0 || textCount == 0) return 0;
@@ -773,7 +774,7 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
   // Skip during metadata-only prewarm (layout measurement) to avoid loading
   // kern/lig data for all styles upfront (~22KB per style). Kern/lig is
   // loaded per-style in prewarmStyle() during the full render prewarm instead.
-  if (!metadataOnly) {
+  if (!metadataOnly && loadKernLig) {
     for (uint8_t si = 0; si < MAX_STYLES; si++) {
       if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
       auto& s = styles_[si];
@@ -815,14 +816,15 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
   int totalMissed = 0;
   for (uint8_t si = 0; si < MAX_STYLES; si++) {
     if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
-    totalMissed += prewarmStyle(si, codepoints.get(), cpCount, metadataOnly);
+    totalMissed += prewarmStyle(si, codepoints.get(), cpCount, metadataOnly, loadKernLig);
   }
 
   stats_.prewarmTotalMs = millis() - startMs;
   return totalMissed;
 }
 
-int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly) {
+int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly,
+                             bool loadKernLig) {
   auto& s = styles_[styleIdx];
 
   // Map codepoints to global glyph indices for this style
@@ -1037,7 +1039,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   // page's codepoints. Skip during metadata-only prewarm — layout only needs
   // advanceX and the mini kern would be thrown away before rendering.
   bool kernLigOk = false;
-  if (!metadataOnly) {
+  if (!metadataOnly && loadKernLig) {
     if (loadStyleKernLigatureData(s)) {
       kernLigOk = buildMiniKernMatrix(s, codepoints, cpCount);
     }

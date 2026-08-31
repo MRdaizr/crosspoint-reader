@@ -101,40 +101,16 @@ bool TxtReaderActivity::loadBook() {
   return true;
 }
 
-void TxtReaderActivity::onEnter() {
-  Activity::onEnter();
-
-  if (!loadBook()) {
-    finish();
-    return;
-  }
+void TxtReaderActivity::onBookEntered() {
 
   if (allowFastInitialRefresh_) {
     pagesUntilFullRefresh = std::max(SETTINGS.getRefreshFrequency(), 2);
   }
 
-  ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
-
   txt->setupCacheDir();
-
-  // Save current txt as last opened file and add to recent books
-  auto filePath = txt->getPath();
-  auto fileName = filePath.substr(filePath.rfind('/') + 1);
-  APP_STATE.openEpubPath = filePath;
-  APP_STATE.saveToFile();
-  RECENT_BOOKS.addBook(filePath, fileName, "", "");
-  READING_STATS.beginSession(txt->getPath(), txt->getTitle());
-
-  // Trigger first update
-  requestUpdate();
 }
 
-void TxtReaderActivity::onExit() {
-  Activity::onExit();
-
-  endOfBookOptions.reset();
-  endOfBookOptionsReady.store(false, std::memory_order_release);
-
+void TxtReaderActivity::onBookExited() {
   pendingPageTurn.store(0, std::memory_order_release);
   pendingPercentJump.store(-1, std::memory_order_release);
 
@@ -142,9 +118,6 @@ void TxtReaderActivity::onExit() {
     if (!pageIndexComplete) savePartialPageIndexCache();
     saveProgress();
   }
-
-  // Reset orientation back to portrait for the rest of the UI
-  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
   pageOffsets.clear();
   currentPageLines.clear();
@@ -154,9 +127,13 @@ void TxtReaderActivity::onExit() {
     ACHIEVEMENTS.recordSessionEnded(READING_STATS.getLastSessionSnapshot());
     showPendingAchievementPopups(renderer);
   }
-  APP_STATE.readerActivityLoadCount = 0;
-  APP_STATE.saveToFile();
   txt.reset();
+}
+
+bool TxtReaderActivity::pageTurn(const bool isForward) {
+  pendingPageTurn.store(isForward ? 1 : -1, std::memory_order_release);
+  requestUpdate();
+  return true;
 }
 
 void TxtReaderActivity::loop() {
@@ -202,10 +179,10 @@ void TxtReaderActivity::loop() {
 
   if (handleEndOfBookPageTurn(atEndOfBook, prevTriggered, nextTriggered)) return;
 
-  // The render task exclusively owns page/index/preload state. Keep only one
-  // intent while it is busy so a delayed display can never skip a page.
-  pendingPageTurn.store(prevTriggered ? -1 : 1, std::memory_order_release);
-  requestUpdate();
+  // The render task exclusively owns page/index/preload state. The common
+  // page-turn hook coalesces this intent while it is busy so a delayed display
+  // can never skip a page.
+  pageTurn(nextTriggered);
 }
 
 void TxtReaderActivity::applyOrientation(const uint8_t orientation) {

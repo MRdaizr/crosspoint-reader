@@ -32,7 +32,17 @@ class XtcReaderActivity final : public ReaderActivity {
   StatusBarInfo getStatusBarInfo() const;
   void saveProgress() const;
   void loadProgress();
-  bool loadBook();
+  bool loadBook() override;
+  std::string getBookTitle() const override { return xtc ? xtc->getTitle() : std::string{}; }
+  std::string getBookAuthor() const override { return xtc ? xtc->getAuthor() : std::string{}; }
+  std::string getBookThumbBmpPath() const override { return xtc ? xtc->getThumbBmpPath() : std::string{}; }
+  uint8_t getInitialProgressPercent() const override {
+    return xtc && xtc->getPageCount() ? xtc->calculateProgress(currentPage) : 0;
+  }
+  void onBookEntered() override;
+  void onBookExited() override;
+  bool pageTurn(bool isForward) override;
+  bool skipPages(int amount) override;
   bool isAtEndOfBook() const override;
   void onReturnFromEndOfBook() override;
 
@@ -44,8 +54,6 @@ class XtcReaderActivity final : public ReaderActivity {
                              bool allowFastInitialRefresh = false)
       : ReaderActivity("XtcReader", renderer, mappedInput, xtc ? xtc->getPath() : "", allowFastInitialRefresh),
         xtc(std::move(xtc)) {}
-  void onEnter() override;
-  void onExit() override;
   void loop() override;
   void render(RenderLock&&) override;
   bool handleForcedRefresh() override {

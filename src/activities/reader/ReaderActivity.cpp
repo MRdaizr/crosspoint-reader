@@ -4,16 +4,19 @@
 #include <HalStorage.h>
 #include <Memory.h>
 
+#include <algorithm>
+
 #include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "Epub.h"
 #include "EpubReaderActivity.h"
+#include "RecentBooksStore.h"
+#include "ReadingStatsStore.h"
 #include "SdCardFontSystem.h"
 #include "Txt.h"
 #include "TxtReaderActivity.h"
 #include "Xtc.h"
 #include "XtcReaderActivity.h"
-#include "activities/util/BmpViewerActivity.h"
-#include "activities/util/FullScreenMessageActivity.h"
 #include "activities/reader/ReaderUtils.h"
 
 bool ReaderActivity::isXtcFile(const std::string& path) { return FsHelpers::hasXtcExtension(path); }
@@ -22,8 +25,6 @@ bool ReaderActivity::isTxtFile(const std::string& path) {
   return FsHelpers::hasTxtExtension(path) ||
          FsHelpers::hasMarkdownExtension(path);  // Treat .md as txt files (until we have a markdown reader)
 }
-
-bool ReaderActivity::isBmpFile(const std::string& path) { return FsHelpers::hasBmpExtension(path); }
 
 std::unique_ptr<ReaderActivity> ReaderActivity::create(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                        std::string path, const bool allowFastInitialRefresh) {
@@ -41,11 +42,6 @@ std::unique_ptr<ReaderActivity> ReaderActivity::create(GfxRenderer& renderer, Ma
   }
   if (isTxtFile(path)) {
     return makeUniqueNoThrow<TxtReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
-  }
-  if (isBmpFile(path)) {
-    // Bitmap pages are not text readers; preserve the existing viewer path by
-    // returning nullptr so ActivityManager can dispatch it separately.
-    return nullptr;
   }
   return makeUniqueNoThrow<EpubReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
 }
@@ -107,81 +103,59 @@ std::unique_ptr<Txt> ReaderActivity::loadTxt(const std::string& path) {
   return nullptr;
 }
 
-void ReaderActivity::goToLibrary(const std::string& fromBookPath) {
-  // If coming from a book, start in that book's folder; otherwise start from root
-  auto initialPath = fromBookPath.empty() ? "/" : FsHelpers::extractFolderPath(fromBookPath);
-  activityManager.goToFileBrowser(std::move(initialPath));
-}
-
-void ReaderActivity::onGoToEpubReader(std::unique_ptr<Epub> epub) {
-  const auto epubPath = epub->getPath();
-  currentBookPath = epubPath;
-  activityManager.replaceActivity(
-      std::make_unique<EpubReaderActivity>(renderer, mappedInput, std::move(epub), allowFastInitialRefresh_));
-}
-
-void ReaderActivity::onGoToBmpViewer(const std::string& path) {
-  activityManager.replaceActivity(std::make_unique<BmpViewerActivity>(renderer, mappedInput, path));
-}
-
-void ReaderActivity::onGoToXtcReader(std::unique_ptr<Xtc> xtc) {
-  const auto xtcPath = xtc->getPath();
-  currentBookPath = xtcPath;
-  activityManager.replaceActivity(
-      std::make_unique<XtcReaderActivity>(renderer, mappedInput, std::move(xtc), allowFastInitialRefresh_));
-}
-
-void ReaderActivity::onGoToTxtReader(std::unique_ptr<Txt> txt) {
-  const auto txtPath = txt->getPath();
-  currentBookPath = txtPath;
-  activityManager.replaceActivity(
-      std::make_unique<TxtReaderActivity>(renderer, mappedInput, std::move(txt), allowFastInitialRefresh_));
-}
-
 bool ReaderActivity::handleBackNavigation(const char* filePath) {
   return ReaderUtils::handleBackNavigation(
       mappedInput, activityManager, filePath,
       {this, [](void* ctx) { static_cast<ReaderActivity*>(ctx)->onGoHome(); }});
 }
 
+void ReaderActivity::applyInitialOrientation() {
+  ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
+}
+
 void ReaderActivity::onEnter() {
   Activity::onEnter();
 
-  if (initialBookPath.empty()) {
-    goToLibrary();  // Start from root when entering via Browse
+  if (bookPath.empty() || !Storage.exists(bookPath.c_str())) {
+    LOG_ERR("READER", "Cannot enter reader for missing path: %s", bookPath.c_str());
+    finish();
     return;
   }
 
   sdFontSystem.ensureLoaded(renderer);
+  applyInitialOrientation();
 
-  currentBookPath = initialBookPath;
-  if (isBmpFile(initialBookPath)) {
-    onGoToBmpViewer(initialBookPath);
-  } else if (isXtcFile(initialBookPath)) {
-    auto xtc = loadXtc(initialBookPath);
-    if (!xtc) {
-      onGoBack();
-      return;
-    }
-    onGoToXtcReader(std::move(xtc));
-  } else if (isTxtFile(initialBookPath)) {
-    auto txt = loadTxt(initialBookPath);
-    if (!txt) {
-      onGoBack();
-      return;
-    }
-    onGoToTxtReader(std::move(txt));
-  } else {
-    auto epub = loadEpub(initialBookPath);
-    if (!epub) {
-      onGoBack();
-      return;
-    }
-    onGoToEpubReader(std::move(epub));
+  if (!loadBook()) {
+    LOG_ERR("READER", "Failed to load book: %s", bookPath.c_str());
+    finish();
+    return;
   }
+
+  // Let the format hook restore its position/cache first. In particular, XTC
+  // needs its persisted page before the shared session metadata captures the
+  // initial progress percentage.
+  onBookEntered();
+
+  // Metadata and persisted state are shared by all three readers.
+  APP_STATE.openEpubPath = bookPath;
+  APP_STATE.saveToFile();
+  const std::string title = getBookTitle();
+  RECENT_BOOKS.addBook(bookPath, title, getBookAuthor(), getBookThumbBmpPath());
+  READING_STATS.beginSession(bookPath, title, getBookAuthor(), getBookThumbBmpPath(), getInitialProgressPercent());
+  requestUpdate();
 }
 
-void ReaderActivity::onGoBack() { finish(); }
+void ReaderActivity::onExit() {
+  Activity::onExit();
+  // Derived hooks must release parser/cache resources while the Activity
+  // context is still valid (for example EPUB image extraction and stats).
+  onBookExited();
+  endOfBookOptions.reset();
+  endOfBookOptionsReady.store(false, std::memory_order_release);
+  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+  APP_STATE.readerActivityLoadCount = 0;
+  APP_STATE.saveToFile();
+}
 
 ReaderRenderSpec ReaderActivity::currentReaderRenderSpec() const {
   return SETTINGS.readerRenderSpec(static_cast<uint16_t>(renderer.getScreenWidth()),
