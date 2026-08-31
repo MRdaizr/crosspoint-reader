@@ -8,7 +8,7 @@
 
 /**
  * Submenu for KOReader Sync settings.
- * Shows username, password, and authenticate options.
+   * Shows credentials, matching/sync behavior, and authentication options.
  */
 class KOReaderSettingsActivity final : public UiListActivity {
  public:
@@ -16,9 +16,9 @@ class KOReaderSettingsActivity final : public UiListActivity {
       : UiListActivity("KOReaderSettings", renderer, mappedInput) {}
 
   void onEnter() override;
+  static constexpr int MENU_ITEMS = 8;
 
  private:
-  static constexpr int MENU_ITEMS = 5;
   std::string rowValues[MENU_ITEMS];
   freeink::ui::ListItem rowItems[MENU_ITEMS]{};
 

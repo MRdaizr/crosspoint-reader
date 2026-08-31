@@ -384,36 +384,22 @@ void HalGPIO::startDeepSleep() {
   esp_deep_sleep_start();
 }
 
-void HalGPIO::verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed) {
-  if (shortPressAllowed) {
-    // Fast path - no duration check needed
-    return;
+bool HalGPIO::verifyPowerButtonWakeup() {
+  if (BoardConfig::isPaperMono() || BoardConfig::ACTIVE.input.power < 0) {
+    return true;
   }
-  // TODO: Intermittent edge case remains: a single tap followed by another single tap
-  // can still power on the device. Tighten wake debounce/state handling here.
 
-  // Calibrate: subtract boot time already elapsed, assuming button held since boot
-  const uint16_t calibration = millis();
-  const uint16_t calibratedDuration = (calibration < requiredDurationMs) ? (requiredDurationMs - calibration) : 1;
-
-  const auto start = millis();
+  constexpr unsigned long POWER_WAKE_STABILITY_MS = 10;
+  // Sample the raw electrical level before the debounced logical state is
+  // updated. This rejects a wake caused by a short edge or contact bounce.
+  const bool heldAtFirstSample = inputMgr.isPowerButtonPhysicallyPressed();
+  const unsigned long sampleStart = millis();
   inputMgr.update();
-  // inputMgr.isPressed() may take up to ~500ms to return correct state
-  while (!inputMgr.isPressed(BTN_POWER) && millis() - start < 1000) {
-    delay(10);
+  while (millis() - sampleStart < POWER_WAKE_STABILITY_MS || inputMgr.isDebouncePending()) {
+    delay(1);
     inputMgr.update();
   }
-  if (inputMgr.isPressed(BTN_POWER)) {
-    do {
-      delay(10);
-      inputMgr.update();
-    } while (inputMgr.isPressed(BTN_POWER) && inputMgr.getPowerButtonHeldTime() < calibratedDuration);
-    if (inputMgr.getPowerButtonHeldTime() < calibratedDuration) {
-      startDeepSleep();
-    }
-  } else {
-    startDeepSleep();
-  }
+  return heldAtFirstSample && inputMgr.isPowerButtonPhysicallyPressed();
 }
 
 bool HalGPIO::isUsbConnected() const {

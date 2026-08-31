@@ -14,9 +14,9 @@
 namespace fui = freeink::ui;
 
 namespace {
-constexpr int MENU_ITEMS = 5;
-const StrId menuNames[MENU_ITEMS] = {StrId::STR_USERNAME, StrId::STR_PASSWORD, StrId::STR_SYNC_SERVER_URL,
-                                     StrId::STR_DOCUMENT_MATCHING, StrId::STR_AUTHENTICATE};
+const StrId menuNames[KOReaderSettingsActivity::MENU_ITEMS] = {
+    StrId::STR_USERNAME,      StrId::STR_PASSWORD,      StrId::STR_SYNC_SERVER_URL, StrId::STR_DOCUMENT_MATCHING,
+    StrId::STR_SEND_METADATA, StrId::STR_SYNC_BEHAVIOR, StrId::STR_SIGN_UP,         StrId::STR_AUTHENTICATE};
 }  // namespace
 
 void KOReaderSettingsActivity::onEnter() {
@@ -76,6 +76,25 @@ void KOReaderSettingsActivity::handleSelection() {
     KOREADER_STORE.saveToFile();
     requestUpdate();
   } else if (nav.selected == 4) {
+    // Send metadata - toggle on/off
+    KOREADER_STORE.setSendMetadata(!KOREADER_STORE.getSendMetadata());
+    KOREADER_STORE.saveToFile();
+    requestUpdate();
+  } else if (nav.selected == 5) {
+    // Sync behavior - toggle between Ask and Smart
+    const auto current = KOREADER_STORE.getSyncBehavior();
+    const auto newBehavior = (current == KOReaderSyncBehavior::ASK_EVERY_TIME) ? KOReaderSyncBehavior::SMART
+                                                                                 : KOReaderSyncBehavior::ASK_EVERY_TIME;
+    KOREADER_STORE.setSyncBehavior(newBehavior);
+    KOREADER_STORE.saveToFile();
+    requestUpdate();
+  } else if (nav.selected == 6) {
+    // Sign up - create an account with the configured credentials
+    if (!KOREADER_STORE.hasCredentials()) return;
+    startActivityForResult(
+        std::make_unique<KOReaderAuthActivity>(renderer, mappedInput, KOReaderAuthActivity::Mode::SIGN_UP),
+        [](const ActivityResult&) {});
+  } else if (nav.selected == 7) {
     // Authenticate
     if (!KOREADER_STORE.hasCredentials()) {
       // Can't authenticate without credentials - just show message briefly
@@ -94,7 +113,11 @@ void KOReaderSettingsActivity::buildScreen(UiScreen& screen) {
   rowValues[1] = KOREADER_STORE.getPassword().empty() ? tr(STR_NOT_SET) : "******";
   rowValues[2] = KOREADER_STORE.getServerUrl().empty() ? tr(STR_DEFAULT_VALUE) : KOREADER_STORE.getServerUrl();
   rowValues[3] = KOREADER_STORE.getMatchMethod() == DocumentMatchMethod::FILENAME ? tr(STR_FILENAME) : tr(STR_BINARY);
-  rowValues[4] = KOREADER_STORE.hasCredentials() ? std::string() : std::string("[") + tr(STR_SET_CREDENTIALS_FIRST) + "]";
+  rowValues[4] = KOREADER_STORE.getSendMetadata() ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+  rowValues[5] = KOREADER_STORE.getSyncBehavior() == KOReaderSyncBehavior::SMART ? tr(STR_SMART_SYNC)
+                                                                                   : tr(STR_ASK_EVERY_TIME);
+  rowValues[6] = KOREADER_STORE.hasCredentials() ? std::string() : std::string("[") + tr(STR_SET_CREDENTIALS_FIRST) + "]";
+  rowValues[7] = KOREADER_STORE.hasCredentials() ? std::string() : std::string("[") + tr(STR_SET_CREDENTIALS_FIRST) + "]";
   for (int i = 0; i < MENU_ITEMS; ++i) rowItems[i].value = rowValues[i].empty() ? nullptr : rowValues[i].c_str();
   fui::ListProps props;
   props.items = rowItems;

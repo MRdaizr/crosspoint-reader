@@ -407,7 +407,7 @@ void EpubReaderActivity::loop() {
   // re-add it. So removal only sticks if the reader leaves while still on the End-of-Book
   // screen. Acts only on the transition (guarded by recentsEntryRemoved) — no per-frame writes.
   clearEndOfBookOptionsIfNeeded(atEndOfBook);
-  if (handleEndOfBookMenu(atEndOfBook, ignoreNextConfirmRelease)) return;
+  if (handleEndOfBookMenu(atEndOfBook)) return;
 
   if (SETTINGS.removeReadBooksFromRecents) {
     if (atEndOfBook && !recentsEntryRemoved) {
@@ -481,59 +481,62 @@ void EpubReaderActivity::loop() {
     requestUpdate();
   }
 
-  // Enter reader menu activity on short-press Confirm. A long-press that fired a bound
-  // function (bookmark or KOReader sync) sets ignoreNextConfirmRelease so the release
-  // following the hold does not also open the menu.
-  if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (ignoreNextConfirmRelease) {
-      ignoreNextConfirmRelease = false;
-    } else {
-      if (usesToolbarMenu() && section) {
-        openOverlay(Overlay::Toolbar);
-      } else {
-        openReaderMenu();
-      }
-    }
+  unsigned long confirmHoldMs = 0;
+  switch (SETTINGS.longPressMenuFunction) {
+    case CrossPointSettings::LP_MENU_BOOKMARK:
+    case CrossPointSettings::LP_MENU_DICTIONARY:
+    case CrossPointSettings::LP_MENU_READER_MENU:
+      confirmHoldMs = ReaderUtils::BOOKMARK_HOLD_MS;
+      break;
+    case CrossPointSettings::LP_MENU_KOSYNC:
+      confirmHoldMs = ReaderUtils::GO_HOME_MS;
+      break;
+    case CrossPointSettings::LP_MENU_DISABLED:
+    default:
+      break;
   }
 
-  // Long-press Confirm runs the user-selected function (SETTINGS.longPressMenuFunction).
-  if (mappedInput.isPressed(MappedInputManager::Button::Confirm)) {
+  const bool confirmLongPressed =
+      confirmHoldMs != 0 && mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, confirmHoldMs);
+  const bool confirmReleased = mappedInput.wasReleased(MappedInputManager::Button::Confirm);
+  if (confirmLongPressed) {
     switch (SETTINGS.longPressMenuFunction) {
       case CrossPointSettings::LP_MENU_BOOKMARK:
         // Hold ~0.4s drops a bookmark at the current page.
-        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS && !showBookmarkMessage) {
+        if (!showBookmarkMessage) {
           addBookmark();
           showBookmarkMessage = true;
-          ignoreNextConfirmRelease = true;  // Prevent accidental menu open after adding bookmark
           bookmarkMessageTime = millis();
           requestUpdate();
         }
         break;
       case CrossPointSettings::LP_MENU_KOSYNC:
         // Hold ~1s launches WeRead for WeRead-generated EPUBs, otherwise KOReader.
-        if (mappedInput.getHeldTime() >= ReaderUtils::GO_HOME_MS) {
-          if ((wereadBookId_[0] && launchWeReadSync()) || launchKOReaderSync()) {
-            ignoreNextConfirmRelease = true;  // sync launched or error shown; suppress menu open
-            return;
-          }
+        if ((wereadBookId_[0] && launchWeReadSync()) || launchKOReaderSync()) {
+          return;
         }
         break;
       case CrossPointSettings::LP_MENU_DICTIONARY:
-        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-          openDictionaryWordSelect();
-          ignoreNextConfirmRelease = true;
-        }
-        break;
+        openDictionaryWordSelect();
+        return;
       case CrossPointSettings::LP_MENU_READER_MENU:
-        if (mappedInput.getHeldTime() >= ReaderUtils::BOOKMARK_HOLD_MS) {
-          if (usesToolbarMenu() && section) openOverlay(Overlay::Toolbar);
-          else openReaderMenu();
-          ignoreNextConfirmRelease = true;
-        }
-        break;
+        if (usesToolbarMenu() && section) openOverlay(Overlay::Toolbar);
+        else openReaderMenu();
+        return;
       case CrossPointSettings::LP_MENU_DISABLED:
       default:
         break;
+    }
+  }
+
+  // Enter reader menu activity on short-press Confirm. A long-press event
+  // suppresses its eventual release in MappedInputManager, so this path only
+  // handles a genuine short click.
+  if (confirmReleased) {
+    if (usesToolbarMenu() && section) {
+      openOverlay(Overlay::Toolbar);
+    } else {
+      openReaderMenu();
     }
   }
 

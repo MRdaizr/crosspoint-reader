@@ -41,6 +41,7 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
     SHOWING_RESULT,
     UPLOADING,
     UPLOAD_COMPLETE,
+    SYNC_COMPLETE,
     NO_REMOTE_PROGRESS,
     SYNC_FAILED,
     NO_CREDENTIALS
@@ -69,6 +70,10 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   // Selection in result screen (0=Apply, 1=Upload)
   int selectedOption = 0;
 
+  // Timed return for successful sync terminal states.
+  unsigned long autoReturnAt = 0;
+  static constexpr unsigned long AUTO_RETURN_DELAY_MS = 1200;
+
   // Tracks whether this session activated WiFi. Set in onEnter past the credentials
   // check; checked in onExit to decide whether to silent-reboot. Can't rely on
   // WiFi.getMode() because performUpload() calls esp_wifi_stop() on the way out,
@@ -78,6 +83,9 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   void onWifiSelectionComplete(bool success);
   void performSync();
   void performUpload();
+  bool smartSyncEnabled() const;
+  void markAutoReturn();
+  void completeAlreadySynced();
   void ensureEpubLoaded();
   void saveProgressAndReturn(int spineIndex, int page, std::optional<uint32_t> visibleTextOffset = std::nullopt);
   void returnToReader();

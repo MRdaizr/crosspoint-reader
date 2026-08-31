@@ -37,9 +37,13 @@ class MappedInputManager {
 
   MappedInputManager(HalGPIO& gpio, const GfxRenderer& renderer) : gpio(gpio), renderer(renderer) {}
 
-  void update() const { gpio.update(); }
+  void update() const;
   bool wasPressed(Button button) const;
   bool wasReleased(Button button) const;
+  // One-shot threshold event while the button is down; its release is
+  // consumed by ActivityManager so a long press cannot also act as a tap.
+  bool wasLongPressed(Button button, unsigned long thresholdMs) const;
+  bool consumeSuppressedRelease() const;
   bool isPressed(Button button) const;
   bool hasTouch() const;
   bool wasScreenTapped(int& x, int& y) const;
@@ -96,8 +100,11 @@ class MappedInputManager {
   bool listItemFromPoint(int x, int y, int& index, int itemCount, int selectedIndex, int listTop, int listHeight,
                          bool hasSubtitle) const;
   void rememberTouchHeldTime() const;
+  void suppressNextRelease(Button button) const;
 
   mutable bool touchHeldOverrideValid = false;
   mutable unsigned long touchHeldOverrideMs = 0;
   mutable unsigned long touchHeldOverrideAt = 0;
+  mutable uint16_t longPressFiredButtons = 0;
+  mutable uint16_t suppressedReleaseButtons = 0;
 };

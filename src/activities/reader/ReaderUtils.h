@@ -11,6 +11,7 @@
 namespace ReaderUtils {
 
 constexpr unsigned long GO_HOME_MS = 1000;
+constexpr unsigned long GO_BACK_OR_HOME_MS = GO_HOME_MS;
 constexpr unsigned long SKIP_HOLD_MS = 700;
 constexpr unsigned long BOOKMARK_HOLD_MS = 400;
 constexpr unsigned long BOOKMARK_MESSAGE_DURATION_MS = 2500;
@@ -47,16 +48,17 @@ inline PageTurnResult detectPageTurn(const MappedInputManager& input) {
   const bool swapFront = input.isNavDirectionSwapped();
   const auto prevButton = swapFront ? MappedInputManager::Button::Right : MappedInputManager::Button::Left;
   const auto nextButton = swapFront ? MappedInputManager::Button::Left : MappedInputManager::Button::Right;
+  const auto pageButtonTriggered = [&](const MappedInputManager::Button button) {
+    if (usePress) return input.wasPressed(button);
+    return input.wasLongPressed(button, SKIP_HOLD_MS) || input.wasReleased(button);
+  };
   const bool prev =
       tiltPrev ||
-      (usePress ? (input.wasPressed(MappedInputManager::Button::PageBack) || input.wasPressed(prevButton))
-                : (input.wasReleased(MappedInputManager::Button::PageBack) || input.wasReleased(prevButton)));
+      (pageButtonTriggered(MappedInputManager::Button::PageBack) || pageButtonTriggered(prevButton));
   const bool powerTurn = SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::PAGE_TURN &&
                          input.wasReleased(MappedInputManager::Button::Power);
-  const bool next = tiltNext || (usePress ? (input.wasPressed(MappedInputManager::Button::PageForward) || powerTurn ||
-                                             input.wasPressed(nextButton))
-                                          : (input.wasReleased(MappedInputManager::Button::PageForward) || powerTurn ||
-                                             input.wasReleased(nextButton)));
+  const bool next = tiltNext || pageButtonTriggered(MappedInputManager::Button::PageForward) || powerTurn ||
+                    pageButtonTriggered(nextButton);
   return {prev, next, tiltPrev || tiltNext};
 }
 
@@ -76,29 +78,21 @@ struct BackNavCallback {
 };
 
 // The standard X3/X4 input layer has no touch-back gesture, so the physical
-// button path is sufficient here. Keep the same upstream contract: by
-// default a long press opens the file browser and a short press goes home;
-// backShortToFileBrowser swaps those destinations.
+// button path is sufficient here. A long press is delivered once while the
+// button is still down; its release is consumed by ActivityManager.
 inline bool handleBackNavigation(const MappedInputManager& mappedInput, ActivityManager& activityManager,
                                  const char* filePath, BackNavCallback goHome) {
-  if (mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_HOME_MS) {
-    if (SETTINGS.backShortToFileBrowser) {
-      goHome.fn(goHome.ctx);
-    } else {
-      activityManager.goToFileBrowser(filePath ? filePath : "");
-    }
-    return true;
-  }
+  const bool backTriggered = mappedInput.wasLongPressed(MappedInputManager::Button::Back, GO_BACK_OR_HOME_MS) ||
+                             mappedInput.wasReleased(MappedInputManager::Button::Back);
+  if (!backTriggered) return false;
 
-  if (mappedInput.wasReleased(MappedInputManager::Button::Back) && mappedInput.getHeldTime() < GO_HOME_MS) {
-    if (SETTINGS.backShortToFileBrowser) {
-      activityManager.goToFileBrowser(filePath ? filePath : "");
-    } else {
-      goHome.fn(goHome.ctx);
-    }
-    return true;
+  const bool longPress = mappedInput.getHeldTime() >= GO_BACK_OR_HOME_MS;
+  if (longPress != SETTINGS.backShortToFileBrowser) {
+    activityManager.goToFileBrowser(filePath ? filePath : "");
+  } else {
+    goHome.fn(goHome.ctx);
   }
-  return false;
+  return true;
 }
 
 // Grayscale anti-aliasing pass. Renders content twice (LSB + MSB) to build

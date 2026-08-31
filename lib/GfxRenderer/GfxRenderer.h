@@ -59,8 +59,9 @@ class GfxRenderer {
   mutable std::map<int, SdCardFont*> sdCardFonts_;
 
   // Size-matched fallback font ids for UI strings.  The primary id remains
-  // the one passed by callers; resolveTextFontId() redirects only when a
-  // string contains a CJK codepoint that the primary font does not cover.
+  // the one passed by callers; resolveTextFontId() redirects when a string
+  // contains a supported fallback-script codepoint that the primary font does
+  // not cover (currently CJK and common dictionary phonetic symbols).
   std::map<int, int> fallbackFontMap_;
 
   int resolveTextFontId(int fontId, const char* text, EpdFontFamily::Style style) const;
@@ -131,9 +132,10 @@ class GfxRenderer {
   const std::map<int, SdCardFont*>& getSdCardFonts() const { return sdCardFonts_; }
   bool isSdCardFont(int fontId) const { return sdCardFonts_.count(fontId) > 0; }
 
-  // Register a size-matched SD font for a built-in UI font.  Only CJK-bearing
-  // strings are redirected; Latin-only strings continue using the built-in
-  // face, preserving the existing UI metrics.
+  // Register a size-matched SD font for a built-in UI font.  Only strings with
+  // missing supported fallback-script glyphs are redirected; ordinary Latin
+  // strings continue using the built-in face, preserving the existing UI
+  // metrics.
   void setFallbackFont(int primaryFontId, int fallbackFontId) { fallbackFontMap_[primaryFontId] = fallbackFontId; }
   void clearFallbackFonts() { fallbackFontMap_.clear(); }
 

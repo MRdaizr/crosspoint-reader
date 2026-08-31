@@ -101,10 +101,11 @@ class HalGPIO {
   // Setup wake up GPIO and enter deep sleep
   void startDeepSleep();
 
-  // Verify power button was held long enough after wakeup.
-  // If verification fails, enters deep sleep and does not return.
+  // Verify that the physical power button remains held through input debounce.
+  // Returns true when the wake is valid; the caller returns to deep sleep when
+  // the button was only a transient electrical edge.
   // Should only be called when wakeup reason is PowerButton.
-  void verifyPowerButtonWakeup(uint16_t requiredDurationMs, bool shortPressAllowed);
+  bool verifyPowerButtonWakeup();
 
   // Check if USB is connected
   bool isUsbConnected() const;

@@ -88,6 +88,8 @@ void ActivityManager::renderTaskLoop() {
 }
 
 void ActivityManager::loop() {
+  if (mappedInput.consumeSuppressedRelease()) return;
+
   if (currentActivity) {
     // A bottom-edge swipe is the touch equivalent of the hardware Home/Back
     // escape. FUI-hosted menus can consume it to return their result (for

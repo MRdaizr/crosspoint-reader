@@ -112,6 +112,15 @@ bool isCjkFallbackCodepoint(const uint32_t cp) {
          (cp >= 0x2E80 && cp <= 0x2FFF) || (cp >= 0x2F800 && cp <= 0x2FA1F);
 }
 
+bool isPhoneticFallbackCodepoint(const uint32_t cp) {
+  // Dictionary pronunciations commonly use IPA Extensions and Spacing
+  // Modifier Letters.  A selected SD font may not contain those glyphs even
+  // when it has the CJK coverage that made it eligible as a reader font.
+  // Keep the Greek IPA letters used by common dictionaries in this set too;
+  // they live outside the IPA/spacing-modifier blocks.
+  return (cp >= 0x0250 && cp <= 0x02FF) || cp == 0x03B2 || cp == 0x03B8 || cp == 0x03C7;
+}
+
 }  // namespace
 
 int GfxRenderer::resolveTextFontId(const int fontId, const char* text,
@@ -136,7 +145,8 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text,
     // render the codepoint.  This keeps Latin-only labels on the built-in
     // font and avoids replacing a missing CJK glyph with a fallback that does
     // not actually contain it.
-    if (isCjkFallbackCodepoint(cp) && !primary.hasCodepoint(cp, style) && fallback.hasCodepoint(cp, style)) {
+    if ((isCjkFallbackCodepoint(cp) || isPhoneticFallbackCodepoint(cp)) && !primary.hasCodepoint(cp, style) &&
+        fallback.hasCodepoint(cp, style)) {
       return fallbackIt->second;
     }
   }
