@@ -415,8 +415,11 @@ bool HalGPIO::isUsbConnected() const {
     }
     return false;
   }
-  // U0RXD/GPIO20 reads HIGH when USB is connected
-  return digitalRead(UART0_RXD) == HIGH;
+  // X4: the configured USB-detect pin reads HIGH when USB is connected.
+  if (BoardConfig::ACTIVE.usbDetect < 0) {
+    return false;
+  }
+  return digitalRead(BoardConfig::ACTIVE.usbDetect) == HIGH;
 }
 
 HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
@@ -425,8 +428,11 @@ HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
 
   const bool usbConnected = isUsbConnected();
 
-  if ((wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_POWERON && !usbConnected) ||
-      (wakeupCause == ESP_SLEEP_WAKEUP_GPIO && resetReason == ESP_RST_DEEPSLEEP && usbConnected)) {
+  // A GPIO/EXT1 wake from deep sleep is the power-button wake path regardless
+  // of whether the device is currently connected to USB. The previous USB
+  // condition misclassified battery-only wakes as Other.
+  if (resetReason == ESP_RST_DEEPSLEEP &&
+      (wakeupCause == ESP_SLEEP_WAKEUP_GPIO || wakeupCause == ESP_SLEEP_WAKEUP_EXT1)) {
     return WakeupReason::PowerButton;
   }
   if (wakeupCause == ESP_SLEEP_WAKEUP_UNDEFINED && resetReason == ESP_RST_UNKNOWN && usbConnected) {

@@ -86,10 +86,15 @@ void HalPowerManager::startDeepSleep(HalGPIO& gpio) const {
   // latch on the standard Xteink C3 boards and must be driven low before the
   // deep-sleep transition.
 #if !SOC_PM_SUPPORT_EXT1_WAKEUP
-  constexpr gpio_num_t GPIO_SPIWP = XTEINK_C3_GPIO13;
-  gpio_set_direction(GPIO_SPIWP, GPIO_MODE_OUTPUT);
-  gpio_set_level(GPIO_SPIWP, 0);
-  gpio_hold_en(GPIO_SPIWP);
+  if (gpio.isXteinkDevice()) {
+    constexpr gpio_num_t GPIO_SPIWP = XTEINK_C3_GPIO13;
+    // A GPIO hold survives deep sleep and can make the next write a no-op.
+    // Release it before setting the low sleep level for a new sleep cycle.
+    gpio_hold_dis(GPIO_SPIWP);
+    gpio_set_direction(GPIO_SPIWP, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_SPIWP, 0);
+    gpio_hold_en(GPIO_SPIWP);
+  }
 #endif
 
   freeink::PowerManager::powerDownRailsForSleep();
