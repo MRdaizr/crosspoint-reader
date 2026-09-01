@@ -113,6 +113,7 @@ class CrossPointWebServer {
   // Request handlers
   void handleRoot() const;
   void handleJszip() const;
+  void handleTodoPage() const;
   void handleNotFound() const;
   void handleStatus() const;
   void handleFileList() const;
@@ -139,6 +140,7 @@ class CrossPointWebServer {
   // To-do handlers
   void handleGetTodos() const;
   void handlePostTodo();
+  void handleUpdateTodo();
   void handleToggleTodo();
   void handleDeleteTodo();
 

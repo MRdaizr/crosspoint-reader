@@ -23,6 +23,7 @@
 #include "html/FirmwarePageHtml.generated.h"
 #include "html/HomePageHtml.generated.h"
 #include "html/SettingsPageHtml.generated.h"
+#include "html/TodoPageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
 #include "util/TaskWatchdog.h"
@@ -178,6 +179,7 @@ void CrossPointWebServer::begin() {
   LOG_DBG("WEB", "Setting up routes...");
   server->on("/", HTTP_GET, [this] { handleRoot(); });
   server->on("/files", HTTP_GET, [this] { handleFileList(); });
+  server->on("/todos", HTTP_GET, [this] { handleTodoPage(); });
   server->on("/js/jszip.min.js", HTTP_GET, [this] { handleJszip(); });
 
   server->on("/api/status", HTTP_GET, [this] { handleStatus(); });
@@ -211,6 +213,7 @@ void CrossPointWebServer::begin() {
   // To-do endpoints
   server->on("/api/todos", HTTP_GET, [this] { handleGetTodos(); });
   server->on("/api/todos", HTTP_POST, [this] { handlePostTodo(); });
+  server->on("/api/todos/update", HTTP_POST, [this] { handleUpdateTodo(); });
   server->on("/api/todos/toggle", HTTP_POST, [this] { handleToggleTodo(); });
   server->on("/api/todos/delete", HTTP_POST, [this] { handleDeleteTodo(); });
 
@@ -429,6 +432,11 @@ void CrossPointWebServer::handleJszip() const {
   server->sendHeader("Content-Encoding", "gzip");
   server->send_P(200, "application/javascript", jszip_minJs, jszip_minJsCompressedSize);
   LOG_DBG("WEB", "Served jszip.min.js");
+}
+
+void CrossPointWebServer::handleTodoPage() const {
+  sendHtmlContent(server.get(), TodoPageHtml, sizeof(TodoPageHtml));
+  LOG_DBG("WEB", "Served to-do page");
 }
 
 void CrossPointWebServer::handleNotFound() const {
@@ -1503,6 +1511,49 @@ void CrossPointWebServer::handlePostTodo() {
   JsonDocument response;
   response["ok"] = true;
   response["id"] = item.id;
+  String json;
+  serializeJson(response, json);
+  server->send(200, "application/json", json);
+}
+
+void CrossPointWebServer::handleUpdateTodo() {
+  JsonDocument doc;
+  if (deserializeJson(doc, server->arg("plain")) || !doc["scheduledAt"].is<const char*>()) {
+    server->send(400, "application/json", "{\"error\":\"Invalid to-do update\"}");
+    return;
+  }
+
+  const uint32_t id = doc["id"] | 0U;
+  const std::string scheduledAt = doc["scheduledAt"].as<std::string>();
+  if (id == 0) {
+    server->send(400, "application/json", "{\"error\":\"Invalid to-do id\"}");
+    return;
+  }
+  if (!TodoStore::isValidScheduledAt(scheduledAt)) {
+    server->send(400, "application/json", "{\"error\":\"Enter a valid date and time\"}");
+    return;
+  }
+
+  std::vector<TodoItem> items;
+  if (!TODO_STORE.getItems(items)) {
+    server->send(500, "application/json", "{\"error\":\"Could not load to-do list\"}");
+    return;
+  }
+  if (std::none_of(items.begin(), items.end(), [id](const TodoItem& item) { return item.id == id; })) {
+    server->send(404, "application/json", "{\"error\":\"To-do item not found\"}");
+    return;
+  }
+
+  TodoItem item;
+  if (!TODO_STORE.updateScheduledAt(id, scheduledAt, item)) {
+    server->send(500, "application/json", "{\"error\":\"Could not save to-do item\"}");
+    return;
+  }
+
+  JsonDocument response;
+  response["ok"] = true;
+  response["id"] = item.id;
+  response["scheduledAt"] = item.scheduledAt;
   String json;
   serializeJson(response, json);
   server->send(200, "application/json", json);

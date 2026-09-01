@@ -8,10 +8,12 @@
 #include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <string>
 #include <vector>
 
 #include "CrossPointSettings.h"
 #include "KOReaderCredentialStore.h"
+#include "ReaderFontSizes.h"
 #include "activities/settings/SettingsActivity.h"
 #include "util/DictionaryRegistry.h"
 
@@ -96,6 +98,43 @@ inline SettingInfo buildFontFamilySetting(const SdCardFontRegistry* registry) {
         SETTINGS.sdFontFamilyName[sizeof(SETTINGS.sdFontFamilyName) - 1] = '\0';
       }
     }
+  };
+
+  return s;
+}
+
+// Build the font-size setting dynamically. The available choices are the
+// physical point sizes shipped by the active font family, so an SD font can
+// expose its own set of sizes instead of being forced into fixed slots.
+inline SettingInfo buildFontSizeSetting(const SdCardFontRegistry* registry) {
+  // Capture by value: getSettingsList() returns by value and the accessors may
+  // outlive this function.
+  const std::vector<uint8_t> sizes = readerFontPointSizes(registry, SETTINGS.sdFontFamilyName);
+
+  std::vector<std::string> labels;
+  labels.reserve(sizes.size());
+  for (const uint8_t pointSize : sizes) {
+    labels.push_back(std::to_string(pointSize) + " pt");
+  }
+
+  SettingInfo s;
+  s.nameId = StrId::STR_FONT_SIZE;
+  s.type = SettingType::ENUM;
+  s.enumStringValues = std::move(labels);
+  s.key = "fontSize";
+  s.category = StrId::STR_CAT_READER;
+  s.inTextSettings = true;
+
+  s.valueGetter = [sizes]() -> uint8_t {
+    const uint8_t selectedPointSize = snapToNearestPointSize(sizes, SETTINGS.fontPointSize);
+    for (size_t i = 0; i < sizes.size(); ++i) {
+      if (sizes[i] == selectedPointSize) return static_cast<uint8_t>(i);
+    }
+    return 0;
+  };
+
+  s.valueSetter = [sizes](const uint8_t index) {
+    if (index < sizes.size()) SETTINGS.fontPointSize = sizes[index];
   };
 
   return s;
@@ -189,19 +228,10 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         // version when SD fonts are installed.
         SettingInfo::Enum(StrId::STR_FONT_FAMILY, &CrossPointSettings::fontFamily,
                           builtinFontFamilyLabels(), "fontFamily", StrId::STR_CAT_READER).withTextSettings(),
-        // Physical point size is edited in TextSettingsActivity.  Keep a
-        // category-less value entry so the web settings API and persistence
-        // layer expose the stable `fontPointSize` key without duplicating a
-        // one-step-at-a-time control in the device settings list.
-#ifdef OMIT_FONTS
-        SettingInfo::Value(StrId::STR_FONT_SIZE, &CrossPointSettings::fontPointSize,
-                           {CrossPointSettings::DEFAULT_FONT_POINT_SIZE,
-                            CrossPointSettings::DEFAULT_FONT_POINT_SIZE, 1},
-                           "fontPointSize", StrId::STR_NONE_OPT),
-#else
-        SettingInfo::Value(StrId::STR_FONT_SIZE, &CrossPointSettings::fontPointSize, {1, 255, 1}, "fontPointSize",
-                           StrId::STR_NONE_OPT),
-#endif
+        // The available point sizes depend on the active font family, so this
+        // placeholder is replaced by buildFontSizeSetting() below. It keeps
+        // the setting in the Reader category and in the text-settings group.
+        SettingInfo::Enum(StrId::STR_FONT_SIZE, nullptr, {}, "fontSize", StrId::STR_CAT_READER).withTextSettings(),
         SettingInfo::Enum(StrId::STR_LINE_SPACING, &CrossPointSettings::lineSpacing,
                           {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE, StrId::STR_EXTRA_WIDE}, "lineSpacing",
                           StrId::STR_CAT_READER).withTextSettings(),
@@ -384,6 +414,14 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
     auto it = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.nameId == StrId::STR_FONT_FAMILY; });
     if (it != v.end()) {
       *it = buildFontFamilySetting(registry);
+    }
+  }
+  {
+    // Always rebuild this entry: even without SD fonts, its labels must match
+    // the physical point sizes available in the current build.
+    auto it = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) { return s.nameId == StrId::STR_FONT_SIZE; });
+    if (it != v.end()) {
+      *it = buildFontSizeSetting(registry);
     }
   }
   auto dictIt = std::find_if(v.begin(), v.end(), [](const SettingInfo& s) {

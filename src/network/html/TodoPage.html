@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>To-do List - CrossPoint Reader</title>
+  <style>
+    :root {
+      --font-color: #333;
+      --bg: #f5f5f5;
+      --title-color: #2c3e50;
+      --card-bg: #FFF;
+      --label-color: #7f8c8d;
+      --border-color: #eee;
+      --accent-color: rgb(110, 154, 130);
+      --accent-hover-color: #5a8c73;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --font-color: #f5f5f5;
+        --bg: #333;
+        --title-color: #ecf0f1;
+        --card-bg: #444;
+        --label-color: #bdc3c7;
+        --border-color: #555;
+        color-scheme: dark;
+      }
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        Oxygen, Ubuntu, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: var(--bg);
+      color: var(--font-color);
+    }
+    h1 {
+      color: var(--title-color);
+      border-bottom: 2px solid var(--accent-color);
+      padding-bottom: 10px;
+    }
+    h2 { color: var(--title-color); margin-top: 0; }
+    .nav-links {
+      margin: 20px 0;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .nav-links a {
+      padding: 10px 20px;
+      color: var(--font-color);
+      text-decoration: none;
+      border-radius: 4px;
+    }
+    .nav-links a.active {
+      background-color: var(--accent-color);
+      color: white;
+    }
+    .nav-links a:not(.active):hover {
+      background-color: var(--accent-hover-color);
+      color: white;
+    }
+    .card {
+      background: var(--card-bg);
+      border-radius: 8px;
+      padding: 20px;
+      margin: 15px 0;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    .todo-description {
+      color: var(--label-color);
+      margin: -8px 0 18px;
+    }
+    .todo-add-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .todo-add-input,
+    .todo-time-input {
+      flex: 1;
+      min-width: 0;
+      padding: 9px 10px;
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--font-color);
+      background: var(--card-bg);
+      font: inherit;
+    }
+    .todo-time-input { flex: 0 1 190px; }
+    .todo-add-btn {
+      background: var(--accent-color);
+      color: white;
+      border: 0;
+      border-radius: 4px;
+      padding: 9px 14px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .todo-add-btn:hover { background: var(--accent-hover-color); }
+    .todo-list {
+      list-style: none;
+      margin: 14px 0 0;
+      padding: 0;
+    }
+    .todo-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .todo-item:last-child { border-bottom: 0; }
+    .todo-item input { width: 18px; height: 18px; margin: 0; flex: 0 0 auto; }
+    .todo-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .todo-title { overflow-wrap: anywhere; }
+    .todo-time { color: var(--label-color); font-size: 0.82em; }
+    .todo-time-edit {
+      align-self: flex-start;
+      max-width: 210px;
+      padding: 3px 5px;
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--label-color);
+      background: var(--card-bg);
+      font: inherit;
+      font-size: 0.82em;
+    }
+    .todo-item.completed .todo-title { color: var(--label-color); text-decoration: line-through; }
+    .todo-delete-btn {
+      border: 0;
+      background: transparent;
+      color: #e74c3c;
+      cursor: pointer;
+      font-size: 1.05em;
+      padding: 4px;
+    }
+    .todo-empty { color: var(--label-color); margin: 14px 0 0; }
+    .todo-count { color: var(--label-color); font-size: 0.9em; margin: 14px 0 0; }
+    @media (max-width: 600px) {
+      body { padding: 12px; }
+      .todo-add-row { flex-wrap: wrap; }
+      .todo-add-input, .todo-time-input { flex: 1 1 100%; }
+      .todo-add-btn { flex: 0 0 auto; }
+    }
+  </style>
+</head>
+<body>
+  <h1>📚 CrossPoint Reader</h1>
+
+  <div class="nav-links">
+    <a href="/">Home</a>
+    <a href="/files">File Manager</a>
+    <a href="/todos" class="active">To-do List</a>
+    <a href="/settings">Settings</a>
+    <a href="/firmware">Firmware</a>
+  </div>
+
+  <div class="card">
+    <h2>To-do List</h2>
+    <p class="todo-description">Keep track of tasks and scheduled reminders.</p>
+    <div class="todo-add-row">
+      <input class="todo-add-input" id="todoTitle" type="text" maxlength="120" placeholder="Add a task" aria-label="To-do title" onkeydown="if (event.key === 'Enter') addTodo()">
+      <input class="todo-time-input" id="todoScheduledAt" type="datetime-local" required aria-label="To-do time" onkeydown="if (event.key === 'Enter') addTodo()">
+      <button class="todo-add-btn" onclick="addTodo()">Add</button>
+    </div>
+    <p class="todo-count" id="todoCount"></p>
+    <div id="todoList"><p class="todo-empty">Loading to-do items...</p></div>
+  </div>
+
+  <div class="card">
+    <p style="text-align: center; color: #95a5a6; margin: 0;">
+      CrossPoint E-Reader • Open Source
+    </p>
+  </div>
+
+  <script>
+    function escapeHtml(value) {
+      const div = document.createElement('div');
+      div.textContent = value == null ? '' : String(value);
+      return div.innerHTML;
+    }
+
+    async function todoRequest(url, body) {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'To-do request failed');
+      return result;
+    }
+
+    async function loadTodos() {
+      const container = document.getElementById('todoList');
+      const count = document.getElementById('todoCount');
+      try {
+        const response = await fetch('/api/todos?_=' + Date.now());
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Could not load to-do list');
+        const items = Array.isArray(result.items) ? result.items : [];
+        count.textContent = result.maxItems ? `${items.length} / ${result.maxItems} items` : `${items.length} items`;
+        if (!items.length) {
+          container.innerHTML = '<p class="todo-empty">No to-do items</p>';
+          return;
+        }
+        const rendered = items.map(item => {
+          const checked = item.completed ? ' checked' : '';
+          const completed = item.completed ? ' completed' : '';
+          const scheduledAt = item.scheduledAt ? item.scheduledAt.replace('T', ' ') : 'Not set';
+          const editValue = item.scheduledAt || '';
+          return `<li class="todo-item${completed}"><input type="checkbox"${checked} onchange="toggleTodo(${item.id})" aria-label="Toggle task"><span class="todo-text"><span class="todo-title">${escapeHtml(item.title)}</span><span class="todo-time">${escapeHtml(scheduledAt)}</span><input class="todo-time-edit" type="datetime-local" value="${editValue}" onchange="updateTodo(${item.id}, this.value)" aria-label="Edit scheduled date and time"></span><button class="todo-delete-btn" onclick="deleteTodo(${item.id})" title="Delete task" aria-label="Delete task">🗑️</button></li>`;
+        }).join('');
+        container.innerHTML = `<ul class="todo-list">${rendered}</ul>`;
+      } catch (error) {
+        count.textContent = '';
+        container.innerHTML = `<p class="todo-empty">${escapeHtml(error.message)}</p>`;
+      }
+    }
+
+    async function addTodo() {
+      const input = document.getElementById('todoTitle');
+      const timeInput = document.getElementById('todoScheduledAt');
+      const title = input.value.trim();
+      if (!title) { input.focus(); return; }
+      if (!timeInput.value) { timeInput.focus(); return; }
+      try {
+        await todoRequest('/api/todos', {title, scheduledAt: timeInput.value});
+        input.value = '';
+        timeInput.value = '';
+        await loadTodos();
+      } catch (error) {
+        alert(error.message);
+      }
+    }
+
+    async function toggleTodo(id) {
+      try {
+        await todoRequest('/api/todos/toggle', {id});
+        await loadTodos();
+      } catch (error) {
+        alert(error.message);
+        await loadTodos();
+      }
+    }
+
+    async function updateTodo(id, scheduledAt) {
+      if (!scheduledAt) {
+        alert('Enter a valid date and time');
+        await loadTodos();
+        return;
+      }
+      try {
+        await todoRequest('/api/todos/update', {id, scheduledAt});
+        await loadTodos();
+      } catch (error) {
+        alert(error.message);
+        await loadTodos();
+      }
+    }
+
+    async function deleteTodo(id) {
+      if (!confirm('Delete this to-do item?')) return;
+      try {
+        await todoRequest('/api/todos/delete', {id});
+        await loadTodos();
+      } catch (error) {
+        alert(error.message);
+      }
+    }
+
+    window.onload = loadTodos;
+  </script>
+</body>
+</html>

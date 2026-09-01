@@ -221,10 +221,18 @@ void ReadingStatsActivity::buildFuiScreen(UiScreen& screen) {
 
 bool ReadingStatsActivity::routeFuiTouch() {
   if (view != View::Books && view != View::DayDetail && view != View::Achievements) return false;
+
+  // renderUi() rebuilds the FUI interaction table while also rebuilding the
+  // backing strings in fuiLabels_/fuiValues_.  Serialize routing with render
+  // so a tap cannot read a ListItem whose c_str() storage is being replaced.
+  RenderLock lock(*this);
   const auto route = UiAppHost::routeTouch(mappedInput);
   if (route.routed) {
-    if (app.invalidated()) requestUpdate();
-    return static_cast<bool>(route.event);
+    const bool invalidated = app.invalidated();
+    const bool handled = static_cast<bool>(route.event);
+    lock.unlock();
+    if (invalidated) requestUpdate();
+    return handled;
   }
 
   // Keep the selection stable while a finger swipe only moves the list
@@ -237,13 +245,17 @@ bool ReadingStatsActivity::routeFuiTouch() {
     else if (view == View::DayDetail) count = static_cast<int>(ReadingStatsAnalytics::getBooksReadOnDay(selectedDayOrdinal).size());
     else count = static_cast<int>(ACHIEVEMENTS.buildViews().size());
     const int delta = swipe == MappedInputManager::SwipeDir::Up ? fuiNav_.pageRows() : -fuiNav_.pageRows();
-    if (fuiNav_.scrollBy(delta, count)) requestUpdate();
+    const bool moved = fuiNav_.scrollBy(delta, count);
+    lock.unlock();
+    if (moved) requestUpdate();
     return true;
   }
+  lock.unlock();
   return false;
 }
 
 void ReadingStatsActivity::moveVertical(const int delta) {
+  RenderLock lock(*this);
   int count = 0;
   if (view == View::Books) count = static_cast<int>(READING_STATS.getBooks().size());
   else if (view == View::DayDetail) count = static_cast<int>(ReadingStatsAnalytics::getBooksReadOnDay(selectedDayOrdinal).size());
@@ -251,6 +263,7 @@ void ReadingStatsActivity::moveVertical(const int delta) {
   if (count <= 0) return;
   selectedIndex = delta > 0 ? ButtonNavigator::nextIndex(selectedIndex, count)
                             : ButtonNavigator::previousIndex(selectedIndex, count);
+  lock.unlock();
   requestUpdate();
 }
 
@@ -258,28 +271,41 @@ void ReadingStatsActivity::loop() {
   if (routeFuiTouch()) return;
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    if (view == View::BookDetail) { view = View::Books; requestUpdate(); return; }
-    if (view == View::DayDetail) { view = View::Calendar; requestUpdate(); return; }
-    if (view != View::Overview) { view = View::Overview; requestUpdate(); return; }
-    finish();
+    bool changed = false;
+    bool shouldFinish = false;
+    {
+      RenderLock lock(*this);
+      if (view == View::BookDetail) { view = View::Books; changed = true; }
+      else if (view == View::DayDetail) { view = View::Calendar; changed = true; }
+      else if (view != View::Overview) { view = View::Overview; changed = true; }
+      else shouldFinish = true;
+    }
+    if (shouldFinish) {
+      finish();
+      return;
+    }
+    if (changed) requestUpdate();
     return;
   }
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (view == View::Overview) view = View::Books;
-    else if (view == View::Books && !READING_STATS.getBooks().empty()) {
-      const auto& books = READING_STATS.getBooks();
-      selectedIndex = std::clamp(selectedIndex, 0, static_cast<int>(books.size()) - 1);
-      selectedBookPath = books[static_cast<size_t>(selectedIndex)].path;
-      view = View::BookDetail;
-    } else if (view == View::Calendar && selectedDayOrdinal) {
-      view = View::DayDetail;
-      selectedIndex = 0;
-    } else if (view == View::DayDetail) {
-      const auto entries = ReadingStatsAnalytics::getBooksReadOnDay(selectedDayOrdinal);
-      if (selectedIndex >= 0 && selectedIndex < static_cast<int>(entries.size()) && entries[selectedIndex].book) {
-        selectedBookPath = entries[selectedIndex].book->path;
+    {
+      RenderLock lock(*this);
+      if (view == View::Overview) view = View::Books;
+      else if (view == View::Books && !READING_STATS.getBooks().empty()) {
+        const auto& books = READING_STATS.getBooks();
+        selectedIndex = std::clamp(selectedIndex, 0, static_cast<int>(books.size()) - 1);
+        selectedBookPath = books[static_cast<size_t>(selectedIndex)].path;
         view = View::BookDetail;
+      } else if (view == View::Calendar && selectedDayOrdinal) {
+        view = View::DayDetail;
+        selectedIndex = 0;
+      } else if (view == View::DayDetail) {
+        const auto entries = ReadingStatsAnalytics::getBooksReadOnDay(selectedDayOrdinal);
+        if (selectedIndex >= 0 && selectedIndex < static_cast<int>(entries.size()) && entries[selectedIndex].book) {
+          selectedBookPath = entries[selectedIndex].book->path;
+          view = View::BookDetail;
+        }
       }
     }
     requestUpdate();
@@ -287,14 +313,34 @@ void ReadingStatsActivity::loop() {
   }
 
   if (view == View::Calendar) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) { moveSelectedCalendarDay(selectedDayOrdinal, -1); requestUpdate(); return; }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) { moveSelectedCalendarDay(selectedDayOrdinal, 1); requestUpdate(); return; }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Up)) { moveSelectedCalendarMonth(selectedDayOrdinal, -1); requestUpdate(); return; }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Down)) { moveSelectedCalendarMonth(selectedDayOrdinal, 1); requestUpdate(); return; }
+    int calendarDelta = 0;
+    bool monthDelta = false;
+    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) calendarDelta = -1;
+    else if (mappedInput.wasReleased(MappedInputManager::Button::Right)) calendarDelta = 1;
+    else if (mappedInput.wasReleased(MappedInputManager::Button::Up)) { calendarDelta = -1; monthDelta = true; }
+    else if (mappedInput.wasReleased(MappedInputManager::Button::Down)) { calendarDelta = 1; monthDelta = true; }
+    if (calendarDelta != 0) {
+      {
+        RenderLock lock(*this);
+        if (monthDelta) moveSelectedCalendarMonth(selectedDayOrdinal, calendarDelta);
+        else moveSelectedCalendarDay(selectedDayOrdinal, calendarDelta);
+      }
+      requestUpdate();
+      return;
+    }
   } else if (view == View::Overview) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) { view = View::Achievements; requestUpdate(); }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Right)) { view = View::Calendar; requestUpdate(); }
-    if (mappedInput.wasReleased(MappedInputManager::Button::Up)) { view = View::Profile; requestUpdate(); }
+    View nextView = view;
+    if (mappedInput.wasReleased(MappedInputManager::Button::Left)) nextView = View::Achievements;
+    else if (mappedInput.wasReleased(MappedInputManager::Button::Right)) nextView = View::Calendar;
+    else if (mappedInput.wasReleased(MappedInputManager::Button::Up)) nextView = View::Profile;
+    if (nextView != view) {
+      {
+        RenderLock lock(*this);
+        view = nextView;
+      }
+      requestUpdate();
+      return;
+    }
   }
 
   buttonNavigator.onNextRelease([this] { moveVertical(1); });

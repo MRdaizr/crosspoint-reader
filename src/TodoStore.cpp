@@ -157,6 +157,24 @@ bool TodoStore::add(const std::string& rawTitle, const std::string& scheduledAt,
   return save(items, nextId);
 }
 
+bool TodoStore::updateScheduledAt(const uint32_t id, const std::string& scheduledAt, TodoItem& item) {
+  if (id == 0 || !TodoStore::isValidScheduledAt(scheduledAt)) return false;
+
+  std::vector<TodoItem> items;
+  uint32_t nextId = 1;
+  if (!load(items, nextId)) return false;
+
+  const auto found = std::find_if(items.begin(), items.end(), [id](const TodoItem& candidate) {
+    return candidate.id == id;
+  });
+  if (found == items.end()) return false;
+
+  found->scheduledAt = scheduledAt;
+  item = *found;
+  sortItems(items);
+  return save(items, nextId);
+}
+
 bool TodoStore::toggle(uint32_t id, TodoItem& item) {
   std::vector<TodoItem> items;
   uint32_t nextId = 1;

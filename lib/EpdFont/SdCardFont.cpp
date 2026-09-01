@@ -903,8 +903,13 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   // A subset hit can be served directly from the resident mini. This is the
   // common path after a list batch prewarm: row-by-row draw calls still ask to
   // prewarm their own strings, but no SD reads or cache rebuild are needed.
-  if (validCount > 0 && s.miniGlyphCount > 0 && s.miniIntervals != nullptr &&
-      (metadataOnly || s.miniBitmap != nullptr)) {
+  // A metadata-only prewarm rewrites the mini glyph metadata, but deliberately
+  // does not rewrite bitmap offsets. The old bitmap arena may still be kept
+  // for reuse, so its non-null pointer must not make a later full render look
+  // resident: the glyph offsets would still be file offsets, not mini-arena
+  // offsets. This was the source of invalid bitmap reads on FUI list redraws.
+  const bool miniCanServeRequest = metadataOnly || (!s.miniMetadataOnly && s.miniBitmap != nullptr);
+  if (validCount > 0 && s.miniGlyphCount > 0 && s.miniIntervals != nullptr && miniCanServeRequest) {
     bool allResident = true;
     for (uint32_t i = 0; i < validCount && allResident; i++) {
       const uint32_t cp = mappings[i].codepoint;
@@ -1535,6 +1540,39 @@ const uint8_t* SdCardFont::getOverflowBitmap(const EpdGlyph* glyph) const {
     if (&overflow_[i].glyph == glyph) {
       return overflow_[i].bitmap;
     }
+  }
+  return nullptr;
+}
+
+const uint8_t* SdCardFont::getResidentBitmap(const EpdFontData* data, const EpdGlyph* glyph) const {
+  if (data == nullptr || glyph == nullptr) return nullptr;
+
+  for (uint8_t styleIdx = 0; styleIdx < MAX_STYLES; styleIdx++) {
+    const auto& s = styles_[styleIdx];
+    if (data != &s.miniData) continue;
+
+    // The mini data and its backing arrays are swapped together at the end of
+    // prewarm. Do not dereference a partially rebuilt or metadata-only cache.
+    if (s.miniBitmap == nullptr || s.miniBitmapUsed == 0 || data->bitmap != s.miniBitmap ||
+        s.miniGlyphs == nullptr || s.miniGlyphCount == 0) {
+      return nullptr;
+    }
+
+    const uintptr_t glyphAddress = reinterpret_cast<uintptr_t>(glyph);
+    const uintptr_t glyphStart = reinterpret_cast<uintptr_t>(s.miniGlyphs);
+    const uintptr_t glyphBytes = static_cast<uintptr_t>(s.miniGlyphCount) * sizeof(EpdGlyph);
+    if (glyphAddress < glyphStart || glyphAddress - glyphStart >= glyphBytes ||
+        (glyphAddress - glyphStart) % sizeof(EpdGlyph) != 0) {
+      return nullptr;
+    }
+
+    if (glyph->dataLength == 0 || glyph->dataOffset >= s.miniBitmapUsed ||
+        glyph->dataLength > s.miniBitmapUsed - glyph->dataOffset) {
+      LOG_DBG("SDCF", "Rejected invalid resident bitmap: style=%u offset=%u length=%u used=%u", styleIdx,
+              glyph->dataOffset, glyph->dataLength, s.miniBitmapUsed);
+      return nullptr;
+    }
+    return s.miniBitmap + glyph->dataOffset;
   }
   return nullptr;
 }

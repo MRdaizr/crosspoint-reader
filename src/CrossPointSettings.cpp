@@ -175,9 +175,9 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["fontFamily"] = normalizeBuiltinFontFamily(fontFamily);
 #ifdef OMIT_FONTS
   const bool hasSdFont = sdFontFamilyName[0] != '\0';
-  doc["fontPointSize"] = hasSdFont ? fontPointSize : DEFAULT_FONT_POINT_SIZE;
+  doc["fontSize"] = hasSdFont ? fontPointSize : DEFAULT_FONT_POINT_SIZE;
 #else
-  doc["fontPointSize"] = fontPointSize;
+  doc["fontSize"] = fontPointSize;
 #endif
   if (sdFontFamilyName[0] != '\0') doc["sdFontFamilyName"] = sdFontFamilyName;
   if (dictionaryName[0] != '\0') doc["dictionaryName"] = dictionaryName;
@@ -282,16 +282,21 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   validateFrontButtonMapping(*this);
 
   if (!doc["fontPointSize"].isNull()) {
+    // Compatibility with the interim local format used before the upstream
+    // dynamic font-size setting was adopted.
     const uint8_t stored = doc["fontPointSize"] | DEFAULT_FONT_POINT_SIZE;
     fontPointSize = stored >= 1 ? stored : DEFAULT_FONT_POINT_SIZE;
   } else if (!doc["fontSize"].isNull()) {
-    const uint8_t legacy = doc["fontSize"] | static_cast<uint8_t>(1);
-    if (legacy <= LEGACY_FONT_SIZE_MAX) {
-      fontPointSize = static_cast<uint8_t>(12 + legacy * 2);
+    // Upstream stores the physical point size under fontSize. Older files
+    // stored a 0..3 Small/Medium/Large/Extra-large slot under the same key;
+    // those values are unambiguous because no renderable font is 0..3 pt.
+    const uint8_t stored = doc["fontSize"] | DEFAULT_FONT_POINT_SIZE;
+    if (stored <= LEGACY_FONT_SIZE_MAX) {
+      fontPointSize = static_cast<uint8_t>(12 + stored * 2);
+      needsResave = true;
     } else {
-      fontPointSize = DEFAULT_FONT_POINT_SIZE;
+      fontPointSize = stored;
     }
-    needsResave = true;
   }
 
   const uint8_t storedFontFamily = doc["fontFamily"] | static_cast<uint8_t>(0);

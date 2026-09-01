@@ -28,6 +28,8 @@ const char* resolveVisualText(const char* text, std::string& visualBuffer, BidiU
 }  // namespace
 
 const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const EpdGlyph* glyph) const {
+  if (fontData == nullptr || glyph == nullptr) return nullptr;
+
   if (fontData->groups != nullptr) {
     auto* fd = fontCacheManager_ ? fontCacheManager_->getDecompressor() : nullptr;
     if (!fd) {
@@ -51,7 +53,13 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
     if (sdFont->isOverflowGlyph(glyph)) {
       return sdFont->getOverflowBitmap(glyph);  // may be nullptr for zero-width glyphs
     }
+    // SD mini caches can retain their allocation after a metadata-only
+    // prewarm. Validate the active glyph/bitmap relationship before doing
+    // pointer arithmetic; an invalid entry should render as missing rather
+    // than panic the device.
+    return sdFont->getResidentBitmap(fontData, glyph);
   }
+  if (fontData->bitmap == nullptr || glyph->dataLength == 0) return nullptr;
   return &fontData->bitmap[glyph->dataOffset];
 }
 
@@ -161,7 +169,13 @@ void GfxRenderer::ensureSdGlyphsResident(const int fontId, const char* text,
   if (sdIt == sdCardFonts_.end() || sdIt->second == nullptr) return;
 
   const uint8_t styleMask = static_cast<uint8_t>(1u << (static_cast<uint8_t>(style) & 0x03));
-  const int missed = sdIt->second->prewarm(text, styleMask, metadataOnly);
+  // UI fallback text is rendered outside the reader's full-page prewarm
+  // scope.  Keep it on the glyph/bitmap path only: loading the persistent
+  // kern/ligature tables from inside a UI draw can invalidate the font's
+  // transient data boundary while the renderer is still consuming it.
+  // Reader text enables kern/ligature explicitly through ensureSdCardFontReady
+  // and the reader prewarm scope.
+  const int missed = sdIt->second->prewarm(text, styleMask, metadataOnly, false);
   if (missed > 0) {
     LOG_DBG("GFX", "Fallback prewarm missed %d glyph(s) for font %d", missed, fontId);
   }
@@ -186,7 +200,9 @@ void GfxRenderer::prewarmFallbackText(const int fontId, const TextGetter getter,
   if (sdIt == sdCardFonts_.end() || sdIt->second == nullptr) return;
 
   const uint8_t styleMask = static_cast<uint8_t>(1u << (static_cast<uint8_t>(style) & 0x03));
-  const int missed = sdIt->second->prewarm(getter, ctx, textCount, styleMask, false);
+  // This is used for UI/list fallback text.  Match the single-string path and
+  // do not turn a fallback repaint into a kern/ligature-table load.
+  const int missed = sdIt->second->prewarm(getter, ctx, textCount, styleMask, false, false);
   if (missed > 0) {
     LOG_DBG("GFX", "Fallback batch prewarm missed %d glyph(s) for font %d", missed, fallbackFontId);
   }

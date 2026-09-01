@@ -17,6 +17,7 @@ class TodoStore {
 
   bool getItems(std::vector<TodoItem>& items) const;
   bool add(const std::string& title, const std::string& scheduledAt, TodoItem& item);
+  bool updateScheduledAt(uint32_t id, const std::string& scheduledAt, TodoItem& item);
   bool toggle(uint32_t id, TodoItem& item);
   bool remove(uint32_t id);
 
