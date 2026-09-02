@@ -7,6 +7,7 @@
 
 #include "MappedInputManager.h"
 #include "AchievementsStore.h"
+#include "FlashcardStatsStore.h"
 #include "PomodoroStatsStore.h"
 #include "ReadingStatsStore.h"
 #include "components/UITheme.h"
@@ -173,6 +174,7 @@ void ClearCacheActivity::clearCache() {
   }
 
   if (cacheType == ClearCacheType::Flashcards) {
+    FLASHCARD_STATS.clear();
     if (Storage.exists("/.crosspoint/flashcards")) {
       if (Storage.removeDir("/.crosspoint/flashcards")) ++clearedCount;
       else ++failedCount;

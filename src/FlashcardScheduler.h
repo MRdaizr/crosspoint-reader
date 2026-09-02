@@ -62,5 +62,6 @@ class FlashcardScheduler {
   uint32_t learnedCount() const;
   uint32_t dueReviewCount() const;
   uint32_t dueCountWithinDays(uint8_t days) const;
+  const std::vector<FlashcardSrsRecord>& getRecords() const { return records; }
   static uint64_t cardId(const std::string& word, const std::string& phonetic, const std::string& definition);
 };

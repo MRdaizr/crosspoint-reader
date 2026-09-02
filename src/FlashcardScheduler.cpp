@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <ctime>
 
+#include "FlashcardStatsStore.h"
+
 namespace {
 constexpr uint32_t MAGIC = 0x31525346;  // FSR1
 constexpr uint16_t VERSION = 4;
@@ -69,7 +71,8 @@ bool FlashcardScheduler::load(const std::string& deckPath) {
   char filename[48];
   snprintf(filename, sizeof(filename), "/.crosspoint/flashcards/%08lx.srs", static_cast<unsigned long>(deckHash));
   statePath = filename;
-  records.clear(); dailyDate = today(); newCardsToday = 0; newCardLimitToday = DAILY_NEW_LIMIT; reviewsToday = 0; completedToday = 0; loaded = true;
+  records.clear(); dailyDate = today(); newCardsToday = 0; newCardLimitToday = DAILY_NEW_LIMIT; reviewsToday = 0;
+  completedToday = 0; lastStudyDate.clear(); currentStreak = 0; maxStreak = 0; totalReviews = 0; loaded = true;
   Storage.mkdir("/.crosspoint/flashcards");
   HalFile file;
   if (!Storage.openFileForRead("SRS", statePath, file)) return true;
@@ -144,7 +147,9 @@ bool FlashcardScheduler::introduce(uint64_t id) {
                      static_cast<uint8_t>(FlashcardSrsState::LEARNING), 0});
   std::sort(records.begin(), records.end(), [](const auto& a, const auto& b) { return a.cardId < b.cardId; });
   ++newCardsToday;
-  return save();
+  const bool saved = save();
+  if (saved) FLASHCARD_STATS.recordNewCard();
+  return saved;
 }
 bool FlashcardScheduler::grade(uint64_t id, FlashcardGrade grade) {
   auto* r = find(id);
@@ -175,7 +180,9 @@ bool FlashcardScheduler::grade(uint64_t id, FlashcardGrade grade) {
     lastStudyDate = currentDate;
     maxStreak = std::max(maxStreak, currentStreak);
   }
-  return save();
+  const bool saved = save();
+  if (saved) FLASHCARD_STATS.recordReview(grade, state == FlashcardSrsState::REVIEW);
+  return saved;
 }
 uint32_t FlashcardScheduler::learnedCount() const { return static_cast<uint32_t>(records.size()); }
 uint32_t FlashcardScheduler::dueReviewCount() const { const time_t now=time(nullptr); uint32_t count=0; for (const auto& r:records) if(r.state==static_cast<uint8_t>(FlashcardSrsState::REVIEW)&&r.dueAt<=now) ++count; return count; }

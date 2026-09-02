@@ -159,6 +159,7 @@ enum class FuiMenuIconSlot : uint8_t {
   HomeExtensions,
   HomeSettings,
   ExtensionsFlashcards,
+  ExtensionsFlashcardStats,
   ExtensionsReadingStats,
   ExtensionsPomodoro,
   ExtensionsTimer,

@@ -3,7 +3,7 @@
 #include "activities/UiListActivity.h"
 
 class ExtensionsMenuActivity final : public UiListActivity {
-  static constexpr int MENU_ITEMS = 7;
+  static constexpr int MENU_ITEMS = 8;
 
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
