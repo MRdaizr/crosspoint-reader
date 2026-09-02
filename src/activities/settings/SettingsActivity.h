@@ -18,10 +18,7 @@ enum class SettingAction {
   KOReaderSync,
   OPDSBrowser,
   Network,
-  ClearCache,
-  ClearFlashcardCache,
-  ClearReadingStatsCache,
-  ClearPomodoroCache,
+  CacheDataManagement,
   SdFirmwareUpdate,
   Language,
 };

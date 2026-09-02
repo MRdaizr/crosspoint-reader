@@ -4,7 +4,7 @@
 
 #include "activities/Activity.h"
 
-enum class ClearCacheType { Reading, Flashcards, ReadingStats, PomodoroStats };
+enum class ClearCacheType { Reading, Flashcards, ReadingStats, PomodoroStats, All };
 
 class ClearCacheActivity final : public Activity {
  public:

@@ -8,7 +8,7 @@
 #include <cstring>
 
 #include "ButtonRemapActivity.h"
-#include "ClearCacheActivity.h"
+#include "CacheManagementActivity.h"
 #include "CrossPointSettings.h"
 #include "FontSelectionActivity.h"
 #include "TextSettingsActivity.h"
@@ -63,10 +63,8 @@ void SettingsActivity::rebuildSettingsLists() {
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_FLASHCARD_CACHE, SettingAction::ClearFlashcardCache));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_STATS_CACHE, SettingAction::ClearReadingStatsCache));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_POMODORO_CACHE, SettingAction::ClearPomodoroCache));
+  systemSettings.push_back(
+      SettingInfo::Action(StrId::STR_CACHE_DATA_MANAGEMENT, SettingAction::CacheDataManagement));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
   readerSettings.insert(readerSettings.begin(),
@@ -270,17 +268,8 @@ void SettingsActivity::toggleCurrentSetting() {
       case SettingAction::Network:
         startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput, false), resultHandler);
         break;
-      case SettingAction::ClearCache:
-        startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput), resultHandler);
-        break;
-      case SettingAction::ClearFlashcardCache:
-        startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput, ClearCacheType::Flashcards), resultHandler);
-        break;
-      case SettingAction::ClearReadingStatsCache:
-        startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput, ClearCacheType::ReadingStats), resultHandler);
-        break;
-      case SettingAction::ClearPomodoroCache:
-        startActivityForResult(std::make_unique<ClearCacheActivity>(renderer, mappedInput, ClearCacheType::PomodoroStats), resultHandler);
+      case SettingAction::CacheDataManagement:
+        startActivityForResult(std::make_unique<CacheManagementActivity>(renderer, mappedInput), resultHandler);
         break;
       case SettingAction::SdFirmwareUpdate:
         startActivityForResult(std::make_unique<SdFirmwareUpdateActivity>(renderer, mappedInput), resultHandler);

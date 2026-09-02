@@ -16,6 +16,8 @@
 namespace {
 StrId titleFor(ClearCacheType type) {
   switch (type) {
+    case ClearCacheType::All:
+      return StrId::STR_CLEAR_ALL_CACHE;
     case ClearCacheType::Flashcards:
       return StrId::STR_CLEAR_FLASHCARD_CACHE;
     case ClearCacheType::ReadingStats:
@@ -29,6 +31,10 @@ StrId titleFor(ClearCacheType type) {
 }
 
 StrId warningFor(ClearCacheType type, int line) {
+  if (type == ClearCacheType::All) {
+    return line == 1 ? StrId::STR_CLEAR_ALL_WARNING_1
+                     : line == 2 ? StrId::STR_CLEAR_ALL_WARNING_2 : StrId::STR_CLEAR_ALL_WARNING_3;
+  }
   if (type == ClearCacheType::Flashcards) {
     return line == 1 ? StrId::STR_CLEAR_FLASHCARD_WARNING_1
                      : line == 2 ? StrId::STR_CLEAR_FLASHCARD_WARNING_2 : StrId::STR_CLEAR_FLASHCARD_WARNING_3;
@@ -72,8 +78,10 @@ void ClearCacheActivity::render(RenderLock&&) {
     if (thirdWarning != StrId::STR_NONE_OPT) {
       renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 25, I18N.get(thirdWarning), true);
     }
-    if (cacheType == ClearCacheType::Reading) {
-      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 45, tr(STR_CLEAR_CACHE_WARNING_4), true);
+    if (cacheType == ClearCacheType::Reading || cacheType == ClearCacheType::All) {
+      const StrId fourthWarning =
+          cacheType == ClearCacheType::All ? StrId::STR_CLEAR_ALL_WARNING_4 : StrId::STR_CLEAR_CACHE_WARNING_4;
+      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2 + 45, I18N.get(fourthWarning), true);
     }
 
     const auto labels = mappedInput.mapLabels(tr(STR_CANCEL), tr(STR_CLEAR_BUTTON), "", "");
@@ -117,6 +125,30 @@ void ClearCacheActivity::render(RenderLock&&) {
 void ClearCacheActivity::clearCache() {
   LOG_DBG("CLEAR_CACHE", "Clearing cache...");
 
+  if (cacheType == ClearCacheType::All) {
+    const ClearCacheType originalType = cacheType;
+    constexpr ClearCacheType TYPES[] = {ClearCacheType::Reading, ClearCacheType::ReadingStats,
+                                         ClearCacheType::Flashcards, ClearCacheType::PomodoroStats};
+    int totalCleared = 0;
+    int totalFailed = 0;
+    for (const auto type : TYPES) {
+      cacheType = type;
+      clearCache();
+      totalCleared += clearedCount;
+      totalFailed += failedCount;
+      if (state == FAILED && failedCount == 0) ++totalFailed;
+    }
+    cacheType = originalType;
+    clearedCount = totalCleared;
+    failedCount = totalFailed;
+    state = totalFailed == 0 || totalCleared > 0 ? SUCCESS : FAILED;
+    requestUpdate();
+    return;
+  }
+
+  clearedCount = 0;
+  failedCount = 0;
+
   if (cacheType == ClearCacheType::ReadingStats) {
     const bool existed = Storage.exists("/.crosspoint/reading_stats.json");
     READING_STATS.clear();
@@ -141,8 +173,6 @@ void ClearCacheActivity::clearCache() {
   }
 
   if (cacheType == ClearCacheType::Flashcards) {
-    clearedCount = 0;
-    failedCount = 0;
     if (Storage.exists("/.crosspoint/flashcards")) {
       if (Storage.removeDir("/.crosspoint/flashcards")) ++clearedCount;
       else ++failedCount;
@@ -177,8 +207,6 @@ void ClearCacheActivity::clearCache() {
     return;
   }
 
-  clearedCount = 0;
-  failedCount = 0;
   char name[128];
 
   // Iterate through all entries in the directory
