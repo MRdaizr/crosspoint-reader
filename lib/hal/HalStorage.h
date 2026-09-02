@@ -15,6 +15,8 @@ class HalStorage {
   HalStorage();
   bool begin();
   bool ready() const;
+  // Shut down mounted storage before deep sleep so the SD bus is left idle.
+  void prepareForDeepSleep();
   bool getSpace(uint64_t& totalBytes, uint64_t& freeBytes);
   std::vector<String> listFiles(const char* path = "/", int maxFiles = 200);
   // Read the entire file at `path` into a String. Returns empty string on failure.
