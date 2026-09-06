@@ -51,11 +51,19 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
     if (sdFont->isOverflowGlyph(glyph)) {
       return sdFont->getOverflowBitmap(glyph);  // may be nullptr for zero-width glyphs
     }
+    // Prewarmed SD glyphs use a chunked, non-contiguous bitmap arena. Resolve
+    // the virtual offset instead of indexing fontData->bitmap.
     if (!sdFont->isBitmapResident(fontData, glyph)) {
       LOG_ERR("GFX", "SD glyph bitmap is not resident (offset=%u length=%u)", glyph->dataOffset,
               glyph->dataLength);
       return nullptr;
     }
+    const uint8_t* bitmap = sdFont->miniGlyphBitmap(fontData->glyphMissCtx, glyph->dataOffset);
+    if (!bitmap && glyph->dataLength > 0) {
+      LOG_ERR("GFX", "SD glyph bitmap is not resident (offset=%u length=%u)", glyph->dataOffset,
+              glyph->dataLength);
+    }
+    return bitmap;
   }
   if (!fontData->bitmap) return nullptr;
   return &fontData->bitmap[glyph->dataOffset];

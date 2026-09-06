@@ -103,6 +103,11 @@ class SdCardFont {
   // Returns the bitmap for an on-demand-loaded (overflow) glyph.
   const uint8_t* getOverflowBitmap(const EpdGlyph* glyph) const;
 
+  // Resolves a prewarmed mini glyph's chunked bitmap. `ctx` is the glyphMissCtx
+  // (an OverflowContext identifying the style); `dataOffset` is the glyph's
+  // virtual offset into the style's chunked bitmap arena.
+  const uint8_t* miniGlyphBitmap(const void* ctx, uint32_t dataOffset) const;
+
   // Returns true when a glyph's dataOffset points into a valid resident mini
   // bitmap arena. Metadata-only minis deliberately keep file offsets, so
   // callers must reject those glyphs before dereferencing bitmap data.
@@ -142,6 +147,15 @@ class SdCardFont {
     uint8_t kernRightClassCount = 0;
     uint8_t ligaturePairCount = 0;
   };
+
+  // A full page of SD-font glyph bitmaps can require tens of KB of contiguous
+  // memory. The ESP32 heap may have enough total free memory but no single
+  // block that large, so keep the mini bitmap arena in fixed-size chunks.
+  // Every glyph is kept wholly inside one chunk and addressed by a virtual
+  // offset resolved by miniGlyphBitmap().
+  static constexpr uint32_t MINI_BM_CHUNK_SHIFT = 12;  // 4 KB
+  static constexpr uint32_t MINI_BM_CHUNK_SIZE = 1u << MINI_BM_CHUNK_SHIFT;
+  static constexpr uint32_t MINI_BM_MAX_CHUNKS = 24;  // 96 KB per style/page
 
   // All per-style data: file offsets, intervals, kern/lig, prewarm cache, EpdFont
   struct PerStyle {
@@ -185,7 +199,10 @@ class SdCardFont {
     EpdFontData miniData{};
     EpdUnicodeInterval* miniIntervals = nullptr;
     EpdGlyph* miniGlyphs = nullptr;
-    uint8_t* miniBitmap = nullptr;
+    // Chunked mini bitmap arena. Chunks are allocated on demand and retained
+    // across page turns when the cache retention policy allows it.
+    uint8_t* miniBitmapChunks[MINI_BM_MAX_CHUNKS] = {};
+    uint32_t miniBitmapChunkCount = 0;
     uint32_t miniIntervalCount = 0;
     uint32_t miniGlyphCount = 0;
 

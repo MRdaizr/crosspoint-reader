@@ -92,8 +92,11 @@ void SdCardFont::freeStyleMiniData(PerStyle& s) {
   s.miniIntervals = nullptr;
   delete[] s.miniGlyphs;
   s.miniGlyphs = nullptr;
-  delete[] s.miniBitmap;
-  s.miniBitmap = nullptr;
+  for (auto& chunk : s.miniBitmapChunks) {
+    delete[] chunk;
+    chunk = nullptr;
+  }
+  s.miniBitmapChunkCount = 0;
   s.miniIntervalCount = 0;
   s.miniGlyphCount = 0;
   s.miniIntervalCapacity = 0;
@@ -905,12 +908,12 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   // prewarm their own strings, but no SD reads or cache rebuild are needed.
   // A metadata-only mini contains valid glyph metrics, but its dataOffset
   // fields still point into the .cpfont file because no bitmap arena was
-  // built.  It can satisfy another metadata request, but it must never be
-  // treated as a resident bitmap cache for a full render.  In particular,
-  // miniBitmap may still be non-null when the previous full prewarm's arena
-  // was retained for reuse.
+  // built. It can satisfy another metadata request, but it must never be
+  // treated as a resident bitmap cache for a full render. A full mini may have
+  // no bitmap chunks when every requested glyph has zero bitmap length.
   if (validCount > 0 && s.miniGlyphCount > 0 && s.miniIntervals != nullptr &&
-      !(s.miniMetadataOnly && !metadataOnly) && (metadataOnly || s.miniBitmap != nullptr)) {
+      !(s.miniMetadataOnly && !metadataOnly) &&
+      (metadataOnly || s.miniBitmapChunkCount > 0 || s.miniBitmapUsed == 0)) {
     bool allResident = true;
     for (uint32_t i = 0; i < validCount && allResident; i++) {
       const uint32_t cp = mappings[i].codepoint;
@@ -1041,31 +1044,65 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       totalBitmapSize += s.miniGlyphs[i].dataLength;
     }
 
-    if (!ensureArrayCapacity(s.miniBitmap, s.miniBitmapCapacity, totalBitmapSize)) {
-      LOG_ERR("SDCF", "Failed to allocate mini bitmap (%u bytes) for style %u", totalBitmapSize, styleIdx);
-      delete[] readOrder;
-      delete[] mappings;
-      freeStyleMiniData(s);
-      return static_cast<int>(cpCount);
-    }
-    s.miniBitmapUsed = totalBitmapSize;
-
-    // Read bitmap data sorted by file offset
+    // Read bitmap data sorted by file offset. The virtual `span` offset is
+    // decoded into a chunk and an in-chunk offset by miniGlyphBitmap().
     std::sort(readOrder, readOrder + validCount,
               [&](uint32_t a, uint32_t b) { return s.miniGlyphs[a].dataOffset < s.miniGlyphs[b].dataOffset; });
 
-    uint32_t miniBitmapOffset = 0;
+    // Keep each glyph wholly inside one fixed-size chunk. This avoids the
+    // large contiguous allocation that fails on a fragmented heap even when
+    // enough total memory is available. Chunks are allocated on demand and
+    // retained across pages, just like the other mini-cache buffers.
+    uint32_t span = 0;
     uint32_t lastBitmapEnd = UINT32_MAX;
     for (uint32_t i = 0; i < validCount; i++) {
-      uint32_t mapIdx = readOrder[i];
+      const uint32_t mapIdx = readOrder[i];
       EpdGlyph& glyph = s.miniGlyphs[mapIdx];
+      const uint32_t len = glyph.dataLength;
 
-      if (glyph.dataLength == 0) {
-        glyph.dataOffset = miniBitmapOffset;
+      if (len == 0) {
+        glyph.dataOffset = span;
         continue;
       }
 
-      uint32_t fileOff = s.bitmapFileOffset + glyph.dataOffset;
+      if (len > MINI_BM_CHUNK_SIZE) {
+        LOG_ERR("SDCF", "Prewarm: glyph %u B exceeds chunk %u B (style %u)", len, MINI_BM_CHUNK_SIZE, styleIdx);
+        file.close();
+        delete[] readOrder;
+        delete[] mappings;
+        freeStyleMiniData(s);
+        return static_cast<int>(cpCount);
+      }
+
+      // Do not let a glyph straddle a chunk boundary.
+      const uint32_t within = span & (MINI_BM_CHUNK_SIZE - 1);
+      if (within != 0 && within + len > MINI_BM_CHUNK_SIZE) {
+        span += MINI_BM_CHUNK_SIZE - within;
+      }
+      const uint32_t chunkIdx = span >> MINI_BM_CHUNK_SHIFT;
+      if (chunkIdx >= MINI_BM_MAX_CHUNKS) {
+        LOG_ERR("SDCF", "Prewarm: mini bitmap needs > %u chunks (style %u)", MINI_BM_MAX_CHUNKS, styleIdx);
+        file.close();
+        delete[] readOrder;
+        delete[] mappings;
+        freeStyleMiniData(s);
+        return static_cast<int>(cpCount);
+      }
+      if (!s.miniBitmapChunks[chunkIdx]) {
+        s.miniBitmapChunks[chunkIdx] = new (std::nothrow) uint8_t[MINI_BM_CHUNK_SIZE];
+        if (!s.miniBitmapChunks[chunkIdx]) {
+          LOG_ERR("SDCF", "Failed to allocate mini bitmap chunk %u (style %u)", chunkIdx, styleIdx);
+          file.close();
+          delete[] readOrder;
+          delete[] mappings;
+          freeStyleMiniData(s);
+          return static_cast<int>(cpCount);
+        }
+        if (chunkIdx + 1 > s.miniBitmapChunkCount) s.miniBitmapChunkCount = chunkIdx + 1;
+      }
+
+      const uint32_t off = span & (MINI_BM_CHUNK_SIZE - 1);
+      const uint32_t fileOff = s.bitmapFileOffset + glyph.dataOffset;
       if (fileOff != lastBitmapEnd) {
         if (!file.seekSet(fileOff)) {
           LOG_ERR("SDCF", "Prewarm: failed to seek to bitmap (style %u)", styleIdx);
@@ -1077,18 +1114,21 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
         }
         seekCount++;
       }
-      if (file.read(s.miniBitmap + miniBitmapOffset, glyph.dataLength) != static_cast<int>(glyph.dataLength)) {
+      if (file.read(s.miniBitmapChunks[chunkIdx] + off, len) != static_cast<int>(len)) {
         LOG_ERR("SDCF", "Prewarm: short bitmap read (style %u)", styleIdx);
         delete[] readOrder;
         delete[] mappings;
         freeStyleMiniData(s);
         return static_cast<int>(cpCount);
       }
-      lastBitmapEnd = fileOff + glyph.dataLength;
+      lastBitmapEnd = fileOff + len;
 
-      glyph.dataOffset = miniBitmapOffset;
-      miniBitmapOffset += glyph.dataLength;
+      glyph.dataOffset = span;
+      span += len;
     }
+    // Include inter-chunk padding in the retention/underuse signal.
+    s.miniBitmapUsed = span;
+    s.miniBitmapCapacity = s.miniBitmapChunkCount * MINI_BM_CHUNK_SIZE;
   }
 
   uint32_t sdTime = millis() - sdStart;
@@ -1111,7 +1151,9 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   s.miniMetadataOnly = metadataOnly;
   s.miniHysteresisPending = !metadataOnly;
   memset(&s.miniData, 0, sizeof(s.miniData));
-  s.miniData.bitmap = s.miniBitmap;
+  // SD mini bitmaps are chunked and therefore have no single base pointer.
+  // GfxRenderer resolves their virtual offsets through miniGlyphBitmap().
+  s.miniData.bitmap = nullptr;
   s.miniData.glyph = s.miniGlyphs;
   s.miniData.intervals = s.miniIntervals;
   s.miniData.intervalCount = s.miniIntervalCount;
@@ -1545,6 +1587,20 @@ const uint8_t* SdCardFont::getOverflowBitmap(const EpdGlyph* glyph) const {
   return nullptr;
 }
 
+const uint8_t* SdCardFont::miniGlyphBitmap(const void* ctx, uint32_t dataOffset) const {
+  if (!ctx) return nullptr;
+  const auto* overflowCtx = static_cast<const OverflowContext*>(ctx);
+  if (overflowCtx->self != this || overflowCtx->styleIdx >= MAX_STYLES) return nullptr;
+
+  const auto& s = styles_[overflowCtx->styleIdx];
+  const uint32_t chunkIdx = dataOffset >> MINI_BM_CHUNK_SHIFT;
+  if (chunkIdx >= s.miniBitmapChunkCount) return nullptr;
+
+  const uint8_t* chunk = s.miniBitmapChunks[chunkIdx];
+  if (!chunk) return nullptr;
+  return chunk + (dataOffset & (MINI_BM_CHUNK_SIZE - 1));
+}
+
 bool SdCardFont::isBitmapResident(const EpdFontData* fontData, const EpdGlyph* glyph) const {
   if (!fontData || !glyph) return false;
 
@@ -1560,10 +1616,12 @@ bool SdCardFont::isBitmapResident(const EpdFontData* fontData, const EpdGlyph* g
 
       // Zero-length glyphs (for example space) do not dereference bitmap.
       if (glyph->dataLength == 0) return true;
-      if (s.miniMetadataOnly || !s.miniBitmap) return false;
+      if (s.miniMetadataOnly) return false;
 
-      const uint64_t end = static_cast<uint64_t>(glyph->dataOffset) + glyph->dataLength;
-      return end <= s.miniBitmapUsed;
+      const uint32_t chunkIdx = glyph->dataOffset >> MINI_BM_CHUNK_SHIFT;
+      const uint32_t within = glyph->dataOffset & (MINI_BM_CHUNK_SIZE - 1);
+      if (chunkIdx >= s.miniBitmapChunkCount || !s.miniBitmapChunks[chunkIdx]) return false;
+      return glyph->dataLength <= MINI_BM_CHUNK_SIZE - within;
     }
 
     // The glyph does not belong to this mini table. It must not be used with
