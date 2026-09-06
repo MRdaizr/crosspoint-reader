@@ -104,7 +104,10 @@ class Section {
                                  spec.focusReadingEnabled, progressFn);
   }
   enum class BuildResult { InProgress, Complete, PausedLowMemory, Failed };
-  BuildResult buildNextChunk(uint8_t maxChunks = 1);
+  // Foreground page turns may use the lower upstream-style heap floor after
+  // disposable font caches have been released. Background construction keeps
+  // the stricter default floor so it cannot compete with page rendering.
+  BuildResult buildNextChunk(uint8_t maxChunks = 1, bool foreground = false);
   bool isBuilding() const { return buildActive; }
   bool isPartial() const { return partial_; }
   uint16_t estimatedTotalPages() const;

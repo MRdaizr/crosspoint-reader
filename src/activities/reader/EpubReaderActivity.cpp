@@ -1161,10 +1161,13 @@ void EpubReaderActivity::applyPageTurnLocked(const bool isForwardTurn) {
       section->currentPage++;
       pageRenderRequested = true;
     } else if (section->isBuilding()) {
-      // Keep the user's forward turn pending until the incremental index has
-      // produced the next page. Do not treat a partial cache as chapter end.
-      pendingForwardPageTurn = true;
-      lastIncrementalBuildTick = millis() - INCREMENTAL_BUILD_TICK_MS;
+      // Match the upstream boundary behavior: advance into the not-yet-built
+      // page and let renderBook() build just enough of the partial section to
+      // make that page readable. Keeping currentPage at the watermark makes a
+      // low-memory pause look like a dead button because no visible state
+      // changes and the next page request is never materialized.
+      section->currentPage++;
+      pageRenderRequested = true;
     } else {
       nextPageNumber = 0;
       clearNextChapterPreload();
@@ -1269,15 +1272,19 @@ void EpubReaderActivity::renderBook() {
     // the background builder must not leave the user stuck on an indexing
     // popup. Only advance the parser before rendering when the requested page
     // is not available yet, or when this is an idle build tick.
-    const bool buildTargetPending = !pendingAnchor.empty() || pendingPercentJump || pendingResumePageTarget.has_value() ||
-                                    pendingForwardPageTurn;
+    const bool buildTargetPending = !pendingAnchor.empty() || pendingPercentJump || pendingResumePageTarget.has_value();
     const bool canRenderCachedPage = section->hasBuiltPage(section->currentPage) && !buildTargetPending;
     if (!canRenderCachedPage || !pageRenderRequested) {
       // The Section-level guard protects parser allocations, while this reader
       // gate prevents even entering a build slice when the current page/image
       // render has left too little contiguous heap for the next allocation.
       if (!buildTickHeapGate()) return;
-      const auto buildResult = section->buildNextChunk(1);
+      // A user turn that crossed the partial-cache watermark is foreground
+      // work. It uses the lower upstream-compatible Section floor; idle ticks
+      // retain the stricter guard above and cannot consume render headroom.
+      const bool foregroundBuild = pageRenderRequested &&
+                                   (!section->hasBuiltPage(section->currentPage) || buildTargetPending);
+      const auto buildResult = section->buildNextChunk(1, foregroundBuild);
       if (buildResult == Section::BuildResult::Failed) {
         LOG_ERR("ERS", "Incremental section build failed");
         section.reset();
@@ -1334,12 +1341,6 @@ void EpubReaderActivity::renderBook() {
       if (pendingResumePageTarget && section->hasBuiltPage(*pendingResumePageTarget)) {
         section->currentPage = *pendingResumePageTarget;
         pendingResumePageTarget.reset();
-        pageRenderRequested = true;
-      }
-
-      if (pendingForwardPageTurn && section->currentPage < section->pageCount - 1) {
-        section->currentPage++;
-        pendingForwardPageTurn = false;
         pageRenderRequested = true;
       }
 

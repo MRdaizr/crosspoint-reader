@@ -59,7 +59,6 @@ class EpubReaderActivity final : public ReaderActivity {
   uint8_t pageLoadRetryCount = 0;
   static constexpr uint8_t MAX_PAGE_LOAD_RETRIES = 3;
   bool pageRenderRequested = true;
-  bool pendingForwardPageTurn = false;
   // Input runs on the main task while cache construction runs on the render
   // task. Keep a few requests when the render lock is busy instead of making
   // the input task wait for a parser slice to finish.

@@ -53,6 +53,11 @@ constexpr size_t MIN_INCREMENTAL_FREE_HEAP = 48 * 1024;
 // 16 KiB).  Keep a margin for the parser, but allow the one-chunk incremental
 // path to run with the 24 KiB contiguous blocks used by the earlier guard.
 constexpr size_t MIN_INCREMENTAL_MAX_ALLOC = 24 * 1024;
+// A user-requested page must be able to cross a partial-cache watermark. Match
+// the upstream foreground floor, while keeping the stricter thresholds above
+// for idle/background construction.
+constexpr size_t MIN_FOREGROUND_FREE_HEAP = 32 * 1024;
+constexpr size_t MIN_FOREGROUND_MAX_ALLOC = 16 * 1024;
 constexpr uint16_t INCREMENTAL_PARSE_BUFFER_SIZE = 256;
 constexpr uint32_t BUILD_CHECKPOINT_MAGIC = 0x43504231;  // CPB1
 // ImageBlock page records gained a serialized source href in section v32. An
@@ -884,7 +889,7 @@ bool Section::beginIncrementalBuild(
   return true;
 }
 
-Section::BuildResult Section::buildNextChunk(const uint8_t maxChunks) {
+Section::BuildResult Section::buildNextChunk(const uint8_t maxChunks, const bool foreground) {
   if (!buildActive || !buildParser) {
     return BuildResult::Failed;
   }
@@ -901,9 +906,12 @@ Section::BuildResult Section::buildNextChunk(const uint8_t maxChunks) {
       maxAlloc = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
     }
   }
-  if (freeHeap < MIN_INCREMENTAL_FREE_HEAP || maxAlloc < MIN_INCREMENTAL_MAX_ALLOC) {
+  const size_t requiredFreeHeap = foreground ? MIN_FOREGROUND_FREE_HEAP : MIN_INCREMENTAL_FREE_HEAP;
+  const size_t requiredMaxAlloc = foreground ? MIN_FOREGROUND_MAX_ALLOC : MIN_INCREMENTAL_MAX_ALLOC;
+  if (freeHeap < requiredFreeHeap || maxAlloc < requiredMaxAlloc) {
     if (!lowMemoryPauseLogged) {
-      LOG_INF("SCT", "Pausing incremental build for low memory: free=%u maxAlloc=%u", freeHeap, maxAlloc);
+      LOG_INF("SCT", "Pausing %s incremental build for low memory: free=%u maxAlloc=%u required=%u/%u",
+              foreground ? "foreground" : "background", freeHeap, maxAlloc, requiredFreeHeap, requiredMaxAlloc);
       lowMemoryPauseLogged = true;
     }
     return BuildResult::PausedLowMemory;
