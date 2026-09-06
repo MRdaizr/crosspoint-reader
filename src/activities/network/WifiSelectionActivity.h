@@ -12,6 +12,7 @@
 
 struct Rect;
 struct ThemeMetrics;
+struct WifiCredential;
 
 // Structure to hold WiFi network information
 struct WifiNetworkInfo {
@@ -19,6 +20,7 @@ struct WifiNetworkInfo {
   int32_t rssi;
   bool isEncrypted;
   bool hasSavedPassword;  // Whether we have saved credentials for this network
+  bool isHiddenPlaceholder = false;
 };
 
 // WiFi selection states
@@ -26,6 +28,7 @@ enum class WifiSelectionState {
   AUTO_CONNECTING,    // Trying to connect to the last known network
   SCANNING,           // Scanning for networks
   NETWORK_LIST,       // Displaying available networks
+  HIDDEN_SSID_ENTRY,  // Entering a hidden network SSID
   PASSWORD_ENTRY,     // Entering password for selected network
   CONNECTING,         // Attempting to connect
   CONNECTED,          // Successfully connected
@@ -51,6 +54,7 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   WifiSelectionState state = WifiSelectionState::SCANNING;
   size_t selectedNetworkIndex = 0;
   std::vector<WifiNetworkInfo> networks;
+  size_t realNetworkCount = 0;
   std::vector<std::string> networkStatuses;
   std::vector<freeink::ui::ListItem> networkRowItems;
   freeink::ui::ListNav listNav;
@@ -83,6 +87,8 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
 
   // Whether we are attempting to auto-connect
   bool autoConnecting = false;
+  bool manualNetworkListRequested = false;
+  std::vector<std::string> autoAttemptedSsids;
 
   // Save/forget prompt selection (0 = Yes, 1 = No)
   int savePromptSelection = 0;
@@ -90,6 +96,7 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
 
   // Connection timeout
   static constexpr unsigned long CONNECTION_TIMEOUT_MS = 15000;
+  static constexpr unsigned long AUTO_CONNECTION_TIMEOUT_MS = 7000;
   unsigned long connectionStartTime = 0;
 
   void renderNetworkList(const Rect* screen, const ThemeMetrics* metrics) const;
@@ -100,11 +107,19 @@ class WifiSelectionActivity final : public Activity, private UiAppHost {
   void renderConnectionFailed(const Rect* screen, const ThemeMetrics* metrics) const;
   void renderForgetPrompt(const Rect* screen, const ThemeMetrics* metrics) const;
 
-  void startWifiScan();
+  void startWifiScan(bool autoScan = false);
   void processWifiScanResults();
+  void appendHiddenNetworkEntry();
   void selectNetwork(int index);
+  void promptHiddenSsid();
+  void promptPasswordEntry();
   void attemptConnection();
   void checkConnectionStatus();
+  bool hasAttemptedAutoSsid(const std::string& ssid) const;
+  bool tryAutoConnectCredential(const WifiCredential& cred);
+  bool tryNextSavedNetworkFromScan();
+  void handleAutoConnectFailure();
+  void showNetworkListFromAutoConnect();
   std::string getSignalStrengthIndicator(int32_t rssi) const;
 
   void onComplete(bool connected);
