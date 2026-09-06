@@ -446,27 +446,18 @@ void RoundedRaffTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, 
   const std::string upText = (btn3 && btn3[0] != '\0') ? std::string(btn3) : "";
   const std::string downText = (btn4 && btn4[0] != '\0') ? std::string(btn4) : "";
 
-  // Button hints are rendered outside the FUI list renderer, so resolve CJK
-  // labels explicitly.  This keeps labels such as the Chinese "词库"
-  // consistent with headers and list rows when an SD-card UI font is active,
-  // while still using the bundled UI face when no SD font is selected.
-  const int fallbackFontId = guideFontId();
-  const int backFontId = DynamicFont::fontForCjkText(renderer, backLabel.c_str(), fallbackFontId);
-  const int selectFontId = DynamicFont::fontForCjkText(renderer, selectText.c_str(), fallbackFontId);
-  const int upFontId = DynamicFont::fontForCjkText(renderer, upText.c_str(), fallbackFontId);
-  const int downFontId = DynamicFont::fontForCjkText(renderer, downText.c_str(), fallbackFontId);
-  DynamicFont::prewarmIfSdFont(renderer, backFontId, backLabel);
-  DynamicFont::prewarmIfSdFont(renderer, selectFontId, selectText);
-  DynamicFont::prewarmIfSdFont(renderer, upFontId, upText);
-  DynamicFont::prewarmIfSdFont(renderer, downFontId, downText);
+  // Keep the physical-button hints on the bundled UI face. List rows and
+  // book metadata may use an SD-card font, but these fixed-size controls must
+  // retain stable built-in metrics and must not switch font families per page.
+  const int hintFontId = guideFontId();
 
   // Ensure button hints always "win" visually even if other elements accidentally render into this area.
   renderer.fillRect(leftGroupX, hintY, groupWidth, hintHeight, false);
   renderer.fillRect(rightGroupX, hintY, groupWidth, hintHeight, false);
 
   renderer.drawRoundedRect(leftGroupX, hintY, groupWidth, hintHeight, 2, kBottomRadius, true);
-  const int selectWidth = renderer.getTextWidth(selectFontId, selectText.c_str(), EpdFontFamily::REGULAR);
-  const int downWidth = renderer.getTextWidth(downFontId, downText.c_str(), EpdFontFamily::REGULAR);
+  const int selectWidth = renderer.getTextWidth(hintFontId, selectText.c_str(), EpdFontFamily::REGULAR);
+  const int downWidth = renderer.getTextWidth(hintFontId, downText.c_str(), EpdFontFamily::REGULAR);
   constexpr int innerEdgePadding = 16;
 
   const int backX = leftGroupX + innerEdgePadding;
@@ -475,14 +466,14 @@ void RoundedRaffTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, 
   const int downX = rightGroupX + groupWidth - innerEdgePadding - downWidth;
 
   if (!backDisabled) {
-    renderer.drawText(backFontId, backX, textY, backLabel.c_str(), true, EpdFontFamily::REGULAR);
+    renderer.drawText(hintFontId, backX, textY, backLabel.c_str(), true, EpdFontFamily::REGULAR);
   }
-  renderer.drawText(selectFontId, selectX, textY, selectText.c_str(), true, EpdFontFamily::REGULAR);
+  renderer.drawText(hintFontId, selectX, textY, selectText.c_str(), true, EpdFontFamily::REGULAR);
 
   renderer.drawRoundedRect(rightGroupX, hintY, groupWidth, hintHeight, 2, kBottomRadius, true);
 
-  renderer.drawText(upFontId, upX, textY, upText.c_str(), true, EpdFontFamily::REGULAR);
-  renderer.drawText(downFontId, downX, textY, downText.c_str(), true, EpdFontFamily::REGULAR);
+  renderer.drawText(hintFontId, upX, textY, upText.c_str(), true, EpdFontFamily::REGULAR);
+  renderer.drawText(hintFontId, downX, textY, downText.c_str(), true, EpdFontFamily::REGULAR);
 
   renderer.setOrientation(origOrientation);
 }
