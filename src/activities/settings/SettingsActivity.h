@@ -21,6 +21,7 @@ enum class SettingAction {
   CacheDataManagement,
   SdFirmwareUpdate,
   Language,
+  DeviceInfo,
 };
 
 struct SettingInfo {
