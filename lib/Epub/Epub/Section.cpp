@@ -47,7 +47,12 @@ constexpr uint8_t SECTION_FILE_INCOMPLETE_VERSION = 0;
 // cannot be mistaken for this one. v28 -> 0xFE, v41 -> 0xF1.
 constexpr uint8_t SECTION_FILE_PARTIAL_VERSION = 0xFE - (SECTION_FILE_VERSION - 28);
 constexpr size_t MIN_INCREMENTAL_FREE_HEAP = 48 * 1024;
-constexpr size_t MIN_INCREMENTAL_MAX_ALLOC = 32 * 1024;
+// The reader already keeps a 32 KiB total-heap gate before scheduling a build
+// slice.  Requiring another 32 KiB contiguous block here makes normal page
+// turns stall on fragmented heaps (the upstream reader proceeds at roughly
+// 16 KiB).  Keep a margin for the parser, but allow the one-chunk incremental
+// path to run with the 24 KiB contiguous blocks used by the earlier guard.
+constexpr size_t MIN_INCREMENTAL_MAX_ALLOC = 24 * 1024;
 constexpr uint16_t INCREMENTAL_PARSE_BUFFER_SIZE = 256;
 constexpr uint32_t BUILD_CHECKPOINT_MAGIC = 0x43504231;  // CPB1
 // ImageBlock page records gained a serialized source href in section v32. An

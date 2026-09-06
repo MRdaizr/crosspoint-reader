@@ -1278,80 +1278,90 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   }
 
   if (section && section->isBuilding()) {
-    // The Section-level guard protects parser allocations, while this reader
-    // gate prevents even entering a build slice when the current page/image
-    // render has left too little contiguous heap for the next allocation.
-    if (!buildTickHeapGate()) return;
-    const auto buildResult = section->buildNextChunk(1);
-    if (buildResult == Section::BuildResult::Failed) {
-      LOG_ERR("ERS", "Incremental section build failed");
-      section.reset();
-      showBuildError();
-      return;
-    }
-    if (buildResult == Section::BuildResult::PausedLowMemory) {
-      // Keep the preview or last completed page visible. The main-loop
-      // scheduler will retry after transient page/image allocations are freed.
-      return;
-    }
-
-    // A visible-text target can become resolvable before the whole chapter is
-    // indexed. Rebase as soon as the active build reaches it; this avoids
-    // waiting for a large chapter to finish before a bookmark/sync jump lands.
-    applyCachedVisibleTextOffset();
-
-    // Anchors follow the same incremental rule as visible offsets.  The HTML
-    // parser may discover an id several pages ahead of the last flushed page;
-    // Section::findAnchorDuringBuild() deliberately hides that future page so
-    // this jump is applied only when it is safe to render immediately.
-    if (!pendingAnchor.empty()) {
-      if (const auto page = section->findAnchorDuringBuild(pendingAnchor)) {
-        section->currentPage = *page;
-        LOG_DBG("ERS", "Resolved incremental anchor '%s' to page %d", pendingAnchor.c_str(), *page);
-        pendingAnchor.clear();
-        pageRenderRequested = true;
+    // A committed partial cache is readable even while its replacement build
+    // is active. Render an available resume page first; a low-memory pause in
+    // the background builder must not leave the user stuck on an indexing
+    // popup. Only advance the parser before rendering when the requested page
+    // is not available yet, or when this is an idle build tick.
+    const bool buildTargetPending = !pendingAnchor.empty() || pendingPercentJump || pendingResumePageTarget.has_value() ||
+                                    pendingForwardPageTurn;
+    const bool canRenderCachedPage = section->hasBuiltPage(section->currentPage) && !buildTargetPending;
+    if (!canRenderCachedPage || !pageRenderRequested) {
+      // The Section-level guard protects parser allocations, while this reader
+      // gate prevents even entering a build slice when the current page/image
+      // render has left too little contiguous heap for the next allocation.
+      if (!buildTickHeapGate()) return;
+      const auto buildResult = section->buildNextChunk(1);
+      if (buildResult == Section::BuildResult::Failed) {
+        LOG_ERR("ERS", "Incremental section build failed");
+        section.reset();
+        showBuildError();
+        return;
       }
-    }
+      if (buildResult == Section::BuildResult::PausedLowMemory) {
+        // Keep the committed partial page visible. The main-loop scheduler
+        // will retry after transient page/image allocations are freed.
+        return;
+      }
 
-    if (buildResult == Section::BuildResult::Complete) {
-      // Anchor and percentage navigation need the completed page table for an
-      // exact result. Build it incrementally, then reposition without ever
-      // falling back to a blocking createSectionFile() call.
-      if (!pendingAnchor.empty()) {
-        if (const auto page = section->getPageForAnchor(pendingAnchor)) {
-          section->currentPage = *page;
-          LOG_DBG("ERS", "Resolved deferred anchor '%s' to page %d", pendingAnchor.c_str(), *page);
-        } else {
-          LOG_DBG("ERS", "Deferred anchor '%s' not found", pendingAnchor.c_str());
-        }
-        pendingAnchor.clear();
-        pageRenderRequested = true;
-      }
-      if (pendingPercentJump && section->pageCount > 0) {
-        int targetPage = static_cast<int>(pendingSpineProgress * static_cast<float>(section->pageCount));
-        section->currentPage = std::min(targetPage, static_cast<int>(section->pageCount) - 1);
-        pendingPercentJump = false;
-        pageRenderRequested = true;
-      }
+      // A visible-text target can become resolvable before the whole chapter is
+      // indexed. Rebase as soon as the active build reaches it; this avoids
+      // waiting for a large chapter to finish before a bookmark/sync jump lands.
       applyCachedVisibleTextOffset();
-    }
 
-    if (pendingResumePageTarget && section->hasBuiltPage(*pendingResumePageTarget)) {
-      section->currentPage = *pendingResumePageTarget;
-      pendingResumePageTarget.reset();
-      pageRenderRequested = true;
-    }
+      // Anchors follow the same incremental rule as visible offsets.  The HTML
+      // parser may discover an id several pages ahead of the last flushed page;
+      // Section::findAnchorDuringBuild() deliberately hides that future page so
+      // this jump is applied only when it is safe to render immediately.
+      if (!pendingAnchor.empty()) {
+        if (const auto page = section->findAnchorDuringBuild(pendingAnchor)) {
+          section->currentPage = *page;
+          LOG_DBG("ERS", "Resolved incremental anchor '%s' to page %d", pendingAnchor.c_str(), *page);
+          pendingAnchor.clear();
+          pageRenderRequested = true;
+        }
+      }
 
-    if (pendingForwardPageTurn && section->currentPage < section->pageCount - 1) {
-      section->currentPage++;
-      pendingForwardPageTurn = false;
-      pageRenderRequested = true;
-    }
+      if (buildResult == Section::BuildResult::Complete) {
+        // Anchor and percentage navigation need the completed page table for an
+        // exact result. Build it incrementally, then reposition without ever
+        // falling back to a blocking createSectionFile() call.
+        if (!pendingAnchor.empty()) {
+          if (const auto page = section->getPageForAnchor(pendingAnchor)) {
+            section->currentPage = *page;
+            LOG_DBG("ERS", "Resolved deferred anchor '%s' to page %d", pendingAnchor.c_str(), *page);
+          } else {
+            LOG_DBG("ERS", "Deferred anchor '%s' not found", pendingAnchor.c_str());
+          }
+          pendingAnchor.clear();
+          pageRenderRequested = true;
+        }
+        if (pendingPercentJump && section->pageCount > 0) {
+          int targetPage = static_cast<int>(pendingSpineProgress * static_cast<float>(section->pageCount));
+          section->currentPage = std::min(targetPage, static_cast<int>(section->pageCount) - 1);
+          pendingPercentJump = false;
+          pageRenderRequested = true;
+        }
+        applyCachedVisibleTextOffset();
+      }
 
-    // Keep the already rendered page on screen until its replacement has
-    // been produced. This render tick only advances the parser.
-    if (!section->hasBuiltPage(section->currentPage) || !pageRenderRequested) {
-      return;
+      if (pendingResumePageTarget && section->hasBuiltPage(*pendingResumePageTarget)) {
+        section->currentPage = *pendingResumePageTarget;
+        pendingResumePageTarget.reset();
+        pageRenderRequested = true;
+      }
+
+      if (pendingForwardPageTurn && section->currentPage < section->pageCount - 1) {
+        section->currentPage++;
+        pendingForwardPageTurn = false;
+        pageRenderRequested = true;
+      }
+
+      // Keep the already rendered page on screen until its replacement has
+      // been produced. This render tick only advances the parser.
+      if (!section->hasBuiltPage(section->currentPage) || !pageRenderRequested) {
+        return;
+      }
     }
   }
 
@@ -1373,10 +1383,13 @@ void EpubReaderActivity::render(RenderLock&& lock) {
     if (!sectionCacheLoaded || section->isPartial()) {
       LOG_DBG("ERS", section->isPartial() ? "Partial section cache found, extending..." : "Cache not found, building...");
 
-      GUI.drawPopup(renderer, tr(STR_INDEXING));
       const auto popupFn = [this]() { GUI.drawPopup(renderer, tr(STR_INDEXING)); };
       const auto preloadProgressFn = [this](const uint8_t progress) { updatePreloadProgress(progress, true); };
       const bool loadedPartial = sectionCacheLoaded && section->isPartial();
+      const int requestedPage = pendingPageJump.has_value() ? static_cast<int>(*pendingPageJump) : nextPageNumber;
+      const bool partialTargetAvailable = loadedPartial && pendingAnchor.empty() && !pendingPercentJump &&
+                                           requestedPage >= 0 && requestedPage < static_cast<int>(section->pageCount);
+      if (!partialTargetAvailable) GUI.drawPopup(renderer, tr(STR_INDEXING));
 
       if (loadedPartial) {
         // A partial cache is immediately readable. Start a fresh parser from
@@ -1384,7 +1397,6 @@ void EpubReaderActivity::render(RenderLock&& lock) {
         // background; loadPageFromSectionFile() falls back to the old file
         // until the new parser reaches the requested page.
         if (section->beginIncrementalBuild(renderSpec, preloadProgressFn)) {
-          const int requestedPage = pendingPageJump.has_value() ? static_cast<int>(*pendingPageJump) : nextPageNumber;
           pendingPageJump.reset();
           if (requestedPage >= section->pageCount) {
             pendingResumePageTarget = static_cast<uint16_t>(std::max(0, requestedPage));

@@ -4,7 +4,6 @@
 #include <I18n.h>
 #include <WiFi.h>
 
-#include "BootClockSyncTask.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderSyncClient.h"
 #include "MappedInputManager.h"
@@ -55,8 +54,6 @@ void KOReaderAuthActivity::performAuthentication() {
 
 void KOReaderAuthActivity::onEnter() {
   Activity::onEnter();
-  BootClockSyncTask::cancel();
-
   // Check if already connected
   if (WiFi.status() == WL_CONNECTED) {
     onWifiSelectionComplete(true);

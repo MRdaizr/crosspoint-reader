@@ -10,7 +10,6 @@
 
 #include <cstddef>
 
-#include "BootClockSyncTask.h"
 #include "MappedInputManager.h"
 #include "NetworkModeSelectionActivity.h"
 #include "SilentRestart.h"
@@ -67,8 +66,6 @@ int barsForRssi(int rssi, int currentBars) {
 
 void CrossPointWebServerActivity::onEnter() {
   Activity::onEnter();
-  BootClockSyncTask::cancel();
-
   LOG_DBG("WEBACT", "Free heap at onEnter: %d bytes", ESP.getFreeHeap());
 
   if (auto* fcm = renderer.getFontCacheManager()) {

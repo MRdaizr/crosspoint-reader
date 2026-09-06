@@ -51,7 +51,13 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
     if (sdFont->isOverflowGlyph(glyph)) {
       return sdFont->getOverflowBitmap(glyph);  // may be nullptr for zero-width glyphs
     }
+    if (!sdFont->isBitmapResident(fontData, glyph)) {
+      LOG_ERR("GFX", "SD glyph bitmap is not resident (offset=%u length=%u)", glyph->dataOffset,
+              glyph->dataLength);
+      return nullptr;
+    }
   }
+  if (!fontData->bitmap) return nullptr;
   return &fontData->bitmap[glyph->dataOffset];
 }
 

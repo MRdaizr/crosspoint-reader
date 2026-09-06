@@ -10,7 +10,6 @@
 #endif
 
 #include "SdCardFontSystem.h"
-#include "BootClockSyncTask.h"
 #include "activities/RenderLock.h"
 
 namespace {
@@ -53,10 +52,6 @@ MemorySnapshot readMemorySnapshot() {
 namespace NetworkStartup {
 
 void prepare(GfxRenderer& renderer) {
-  // Any caller entering a foreground network flow takes ownership from the
-  // optional post-boot clock-sync task, including callers that only need the
-  // preparation step before managing Wi-Fi themselves.
-  BootClockSyncTask::cancel();
   if (!shouldReleaseRenderMemory(readMemorySnapshot())) return;
 
   RenderLock lock;

@@ -6,7 +6,6 @@
 #include <I18n.h>
 #include <WiFi.h>
 
-#include "BootClockSyncTask.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
 #include "WifiSelectionActivity.h"
@@ -20,8 +19,6 @@ constexpr const char* HOSTNAME = "crosspoint";
 
 void CalibreConnectActivity::onEnter() {
   Activity::onEnter();
-  BootClockSyncTask::cancel();
-
   requestUpdate();
   state = CalibreConnectState::WIFI_SELECTION;
   connectedIP.clear();

@@ -903,8 +903,14 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   // A subset hit can be served directly from the resident mini. This is the
   // common path after a list batch prewarm: row-by-row draw calls still ask to
   // prewarm their own strings, but no SD reads or cache rebuild are needed.
+  // A metadata-only mini contains valid glyph metrics, but its dataOffset
+  // fields still point into the .cpfont file because no bitmap arena was
+  // built.  It can satisfy another metadata request, but it must never be
+  // treated as a resident bitmap cache for a full render.  In particular,
+  // miniBitmap may still be non-null when the previous full prewarm's arena
+  // was retained for reuse.
   if (validCount > 0 && s.miniGlyphCount > 0 && s.miniIntervals != nullptr &&
-      (metadataOnly || s.miniBitmap != nullptr)) {
+      !(s.miniMetadataOnly && !metadataOnly) && (metadataOnly || s.miniBitmap != nullptr)) {
     bool allResident = true;
     for (uint32_t i = 0; i < validCount && allResident; i++) {
       const uint32_t cp = mappings[i].codepoint;
@@ -1537,6 +1543,35 @@ const uint8_t* SdCardFont::getOverflowBitmap(const EpdGlyph* glyph) const {
     }
   }
   return nullptr;
+}
+
+bool SdCardFont::isBitmapResident(const EpdFontData* fontData, const EpdGlyph* glyph) const {
+  if (!fontData || !glyph) return false;
+
+  // Only miniData uses the compact offsets rewritten by prewarmStyle().
+  // Other SD-card data views are either the stub (whose glyphs are served by
+  // the miss handler) or an overflow glyph handled separately by the caller.
+  for (const auto& s : styles_) {
+    if (fontData != &s.miniData) continue;
+    if (!s.miniGlyphs) return false;
+
+    for (uint32_t i = 0; i < s.miniGlyphCount; ++i) {
+      if (&s.miniGlyphs[i] != glyph) continue;
+
+      // Zero-length glyphs (for example space) do not dereference bitmap.
+      if (glyph->dataLength == 0) return true;
+      if (s.miniMetadataOnly || !s.miniBitmap) return false;
+
+      const uint64_t end = static_cast<uint64_t>(glyph->dataOffset) + glyph->dataLength;
+      return end <= s.miniBitmapUsed;
+    }
+
+    // The glyph does not belong to this mini table. It must not be used with
+    // this font data view even if its offset happens to look plausible.
+    return false;
+  }
+
+  return true;
 }
 
 SdCardFont* SdCardFont::fromMissCtx(void* ctx) { return static_cast<OverflowContext*>(ctx)->self; }

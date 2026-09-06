@@ -21,7 +21,6 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "AchievementsStore.h"
-#include "BootClockSyncTask.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
@@ -45,10 +44,6 @@ FontDecompressor fontDecompressor;
 SdCardFontSystem sdFontSystem;
 FontCacheManager fontCacheManager(renderer.getFontMap(), renderer.getSdCardFonts());
 static unsigned long allowSleepAt = 0;
-
-namespace {
-bool bootClockSyncAllowed = false;
-}  // namespace
 
 // Fonts
 EpdFont notoserif14RegularFont(&notoserif_14_regular);
@@ -223,7 +218,6 @@ void enterDeepSleep(bool fromTimeout = false) {
 
   // Tear down WiFi so the modem power domain isn't held alive across deep sleep.
   // Wake from deep sleep is effectively a chip reset, so no state needs to survive.
-  BootClockSyncTask::cancel();
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
@@ -453,10 +447,6 @@ void setup() {
     gpio.update();
   }
 
-  // Defer optional network startup until the first activity has actually
-  // rendered. This keeps SD/JSON work and Wi-Fi association out of the
-  // critical path that puts the first UI on the panel.
-  bootClockSyncAllowed = !recoveryFirmwareMode && !rebootedFromPanic;
   allowSleepAt = millis() + 2000;
 }
 
@@ -587,8 +577,6 @@ void loop() {
   const unsigned long activityStartTime = millis();
   activityManager.loop();
   const unsigned long activityDuration = millis() - activityStartTime;
-
-  if (bootClockSyncAllowed && activityManager.hasRenderedOnce()) BootClockSyncTask::start();
 
   if (activityManager.isCurrentActivityReader()) {
     READING_STATS.tickActiveSession();

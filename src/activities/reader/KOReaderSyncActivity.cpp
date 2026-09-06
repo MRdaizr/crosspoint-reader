@@ -15,7 +15,6 @@
 
 #include "Epub/Section.h"
 #include "EpubReaderUtils.h"
-#include "BootClockSyncTask.h"
 #include "KOReaderCredentialStore.h"
 #include "KOReaderDocumentId.h"
 #include "MappedInputManager.h"
@@ -358,7 +357,6 @@ void KOReaderSyncActivity::performUpload() {
 
 void KOReaderSyncActivity::onEnter() {
   Activity::onEnter();
-  BootClockSyncTask::cancel();
   ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
 
   resetUi();

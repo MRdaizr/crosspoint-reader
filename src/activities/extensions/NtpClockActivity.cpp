@@ -9,7 +9,6 @@
 #include <cstdio>
 #include <Logging.h>
 
-#include "BootClockSyncTask.h"
 #include "MappedInputManager.h"
 #include "BigClock.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -30,7 +29,6 @@ bool NtpClockActivity::hasValidSystemTime() { return time(nullptr) >= VALID_EPOC
 
 void NtpClockActivity::onEnter() {
   Activity::onEnter();
-  BootClockSyncTask::cancel();
   lastSyncFailed = false;
   beginSync();
 }

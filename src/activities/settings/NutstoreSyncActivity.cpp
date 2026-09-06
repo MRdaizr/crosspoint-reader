@@ -7,7 +7,6 @@
 
 #include <memory>
 
-#include "BootClockSyncTask.h"
 #include "MappedInputManager.h"
 #include "NutstoreConfigStore.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -16,7 +15,6 @@
 
 void NutstoreSyncActivity::onEnter() {
   Activity::onEnter();
-  BootClockSyncTask::cancel();
   WiFi.mode(WIFI_STA);
   status.phase = NutstoreSyncPhase::IDLE;
   status.message = "Select Wi-Fi for Nutstore sync";
