@@ -64,16 +64,33 @@ int FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t sty
     return missed;
   }
 
-  // Standard compressed font prewarm path: loop over all requested styles
+  // Standard compressed font prewarm path.  EpdFontFamily falls back missing
+  // bold/italic faces to another face, so two requested style bits can resolve
+  // to the same EpdFontData.  Avoid rebuilding that cache twice; this is common
+  // for Focus Reading (regular + bold) on the compact UI font families.
   if (!fontDecompressor_ || fontMap_.count(fontId) == 0) return 0;
 
+  const EpdFontFamily& family = fontMap_.at(fontId);
+  const EpdFontData* prewarmedData[4] = {};
+  uint8_t prewarmedCount = 0;
   int totalMissed = 0;
 
   for (uint8_t i = 0; i < 4; i++) {
     if (!(styleMask & (1 << i))) continue;
     auto style = static_cast<EpdFontFamily::Style>(i);
-    const EpdFontData* data = fontMap_.at(fontId).getData(style);
+    const EpdFontData* data = family.getData(style);
     if (!data || !data->groups) continue;
+
+    bool alreadyPrewarmed = false;
+    for (uint8_t j = 0; j < prewarmedCount; j++) {
+      if (prewarmedData[j] == data) {
+        alreadyPrewarmed = true;
+        break;
+      }
+    }
+    if (alreadyPrewarmed) continue;
+    prewarmedData[prewarmedCount++] = data;
+
     int missed = fontDecompressor_->prewarmCache(data, utf8Text);
     totalMissed += missed;
     if (missed > 0) {
