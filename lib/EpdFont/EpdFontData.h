@@ -95,17 +95,33 @@ typedef struct {
 
 /// Maps a codepoint to a kerning class ID, sorted by codepoint for binary search.
 /// Class IDs are 1-based; codepoints not in the table have implicit class 0 (no kerning).
+#if defined(_MSC_VER)
+#define EPD_PACKED_BEGIN __pragma(pack(push, 1))
+#define EPD_PACKED_END __pragma(pack(pop))
+#define EPD_PACKED_ATTR
+#else
+#define EPD_PACKED_BEGIN
+#define EPD_PACKED_END
+#define EPD_PACKED_ATTR __attribute__((packed))
+#endif
+
+// These records are mapped directly from SD-card .cpfont files. Keep their
+// wire layout identical in host tools/tests and on the ESP32 firmware.
+EPD_PACKED_BEGIN
 typedef struct {
   uint16_t codepoint;  ///< Unicode codepoint
   uint8_t classId;     ///< 1-based kerning class ID
-} __attribute__((packed)) EpdKernClassEntry;
+} EPD_PACKED_ATTR EpdKernClassEntry;
+EPD_PACKED_END
 
 /// Ligature substitution for a specific glyph pair, sorted by `pair` for binary search.
 /// `pair` encodes (leftCodepoint << 16 | rightCodepoint) for single-key lookup.
+EPD_PACKED_BEGIN
 typedef struct {
   uint32_t pair;        ///< Packed codepoint pair (left << 16 | right)
   uint32_t ligatureCp;  ///< Codepoint of the replacement ligature glyph
-} __attribute__((packed)) EpdLigaturePair;
+} EPD_PACKED_ATTR EpdLigaturePair;
+EPD_PACKED_END
 
 /// Data stored for FONT AS A WHOLE
 typedef struct {
