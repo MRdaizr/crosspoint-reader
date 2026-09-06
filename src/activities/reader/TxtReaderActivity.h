@@ -22,7 +22,6 @@ class TxtReaderActivity final : public ReaderActivity {
 
   int currentPage = 0;
   int totalPages = 1;
-  int pagesUntilFullRefresh = 0;
 
   // Streaming text reader - stores file offsets for each page
   std::vector<size_t> pageOffsets;  // File offset for start of each page
@@ -114,6 +113,8 @@ class TxtReaderActivity final : public ReaderActivity {
   void onReturnFromEndOfBook() override;
   bool loadBook() override;
   std::string getBookTitle() const override { return txt ? txt->getTitle() : std::string{}; }
+  void renderBook() override;
+  void onEndOfBookRendered() override;
   void onBookEntered() override;
   void onBookExited() override;
   bool pageTurn(bool isForward) override;
@@ -127,14 +128,5 @@ class TxtReaderActivity final : public ReaderActivity {
       : ReaderActivity("TxtReader", renderer, mappedInput, txt ? txt->getPath() : "", allowFastInitialRefresh),
         txt(std::move(txt)) {}
   void loop() override;
-  void render(RenderLock&&) override;
-  bool handleForcedRefresh() override {
-    {
-      RenderLock lock(*this);
-      pagesUntilFullRefresh = 1;
-    }
-    requestUpdate();
-    return true;
-  }
   ScreenshotInfo getScreenshotInfo() const override;
 };

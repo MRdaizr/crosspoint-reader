@@ -18,7 +18,6 @@ class XtcReaderActivity final : public ReaderActivity {
   std::shared_ptr<Xtc> xtc;
 
   uint32_t currentPage = 0;
-  int pagesUntilFullRefresh = 0;
 
   enum class StatusBarOverlayPosition { Bottom, Top };
   struct StatusBarInfo {
@@ -36,6 +35,8 @@ class XtcReaderActivity final : public ReaderActivity {
   std::string getBookTitle() const override { return xtc ? xtc->getTitle() : std::string{}; }
   std::string getBookAuthor() const override { return xtc ? xtc->getAuthor() : std::string{}; }
   std::string getBookThumbBmpPath() const override { return xtc ? xtc->getThumbBmpPath() : std::string{}; }
+  void renderBook() override;
+  void onEndOfBookRendered() override;
   uint8_t getInitialProgressPercent() const override {
     return xtc && xtc->getPageCount() ? xtc->calculateProgress(currentPage) : 0;
   }
@@ -55,14 +56,5 @@ class XtcReaderActivity final : public ReaderActivity {
       : ReaderActivity("XtcReader", renderer, mappedInput, xtc ? xtc->getPath() : "", allowFastInitialRefresh),
         xtc(std::move(xtc)) {}
   void loop() override;
-  void render(RenderLock&&) override;
-  bool handleForcedRefresh() override {
-    {
-      RenderLock lock(*this);
-      pagesUntilFullRefresh = 1;
-    }
-    requestUpdate();
-    return true;
-  }
   ScreenshotInfo getScreenshotInfo() const override;
 };

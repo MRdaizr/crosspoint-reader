@@ -7,25 +7,35 @@
 
 #include "activities/Activity.h"
 #include "activities/reader/EndOfBookOptions.h"
+#include "CrossPointSettings.h"
 #include <Epub/ReaderRenderSpec.h>
 
 class Epub;
 class Xtc;
 class Txt;
 
-// ReaderActivity is the common lifecycle/metadata layer for the EPUB, TXT and
-// XTC readers.  The concrete readers still own their format-specific render
-// loops (EPUB has overlays and incremental sections, TXT has a streaming
-// indexer, and XTC has a pre-rendered page store), but all three now enter and
-// leave through the same hooks and expose the same page-turn contract.
+// ReaderActivity is the common lifecycle/metadata and render boundary for the
+// EPUB, TXT and XTC readers. Each format still owns its input loop and layout
+// engine, but activity entry/exit, refresh state and end-page rendering are
+// shared so those paths cannot drift between formats.
 class ReaderActivity : public Activity {
  protected:
   ReaderActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
                  bool allowFastInitialRefresh = false)
       : Activity(name, renderer, mappedInput), bookPath(std::move(bookPath)),
-        allowFastInitialRefresh_(allowFastInitialRefresh) {}
+        allowFastInitialRefresh_(allowFastInitialRefresh) {
+    if (allowFastInitialRefresh_) {
+      const int refreshFrequency = SETTINGS.getRefreshFrequency();
+      pagesUntilFullRefresh = refreshFrequency > 1 ? refreshFrequency : 2;
+    }
+  }
 
   std::string bookPath;
+  // Refresh cadence belongs to the reader session, not to a concrete file
+  // format. Keeping it here prevents TXT/EPUB/XTC from drifting when a manual
+  // refresh is requested while an activity is on the stack.
+  int pagesUntilFullRefresh = 0;
+  bool forcedRefreshPending = false;
   // Kept in the common layer so all format readers can opt into the same
   // first-open refresh cadence when launched by ActivityManager. Existing X4
   // callers default to false and retain their current refresh behavior.
@@ -45,6 +55,7 @@ class ReaderActivity : public Activity {
   virtual bool pageTurn(bool isForward) = 0;
   virtual bool skipPages(int amount) { return pageTurn(amount > 0); }
   virtual void applyInitialOrientation();
+  virtual void renderBook() = 0;
 
   void clearEndOfBookOptionsIfNeeded(bool atEndOfBook);
   bool handleEndOfBookMenu(bool atEndOfBook, bool suppressConfirmRelease = false);
@@ -53,6 +64,10 @@ class ReaderActivity : public Activity {
   void renderEndOfBook(const MappedInputManager& input);
   virtual bool isAtEndOfBook() const = 0;
   virtual void onReturnFromEndOfBook() {}
+  // Called after the end-of-book UI has been composed but before it is sent
+  // to the panel. Format readers use this for completion bookkeeping and
+  // transient messages without duplicating the end-page render path.
+  virtual void onEndOfBookRendered() {}
 
   static std::unique_ptr<Epub> loadEpub(const std::string& path);
   static std::unique_ptr<Xtc> loadXtc(const std::string& path);
@@ -73,5 +88,7 @@ class ReaderActivity : public Activity {
                                                 std::string path, bool allowFastInitialRefresh = false);
   void onEnter() override;
   void onExit() override;
+  bool handleForcedRefresh() final;
+  void render(RenderLock&& lock) final;
   bool isReaderActivity() const override { return true; }
 };

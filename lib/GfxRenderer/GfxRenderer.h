@@ -220,6 +220,9 @@ class GfxRenderer {
                   float cropY = 0, bool allowUpscale = false) const;
   void drawBitmap1Bit(const Bitmap& bitmap, int x, int y, int maxWidth, int maxHeight,
                       bool allowUpscale = false) const;
+  // Images keep their original black/white polarity when the global display
+  // is inverted for night mode. Text and UI remain inverted as usual.
+  void preserveImagePolarity(int x, int y, int width, int height) const;
   void fillPolygon(const int* xPoints, const int* yPoints, int numPoints, bool state = true) const;
 
   // Text

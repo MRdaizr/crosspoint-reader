@@ -232,11 +232,6 @@ void EpubReaderActivity::idlePrewarmNextPage() {
 }
 
 void EpubReaderActivity::onBookEntered() {
-
-  if (allowFastInitialRefresh_) {
-    pagesUntilFullRefresh = std::max(SETTINGS.getRefreshFrequency(), 2);
-  }
-
   currentPageVisibleOffset.reset();
   pendingOffsetJump.reset();
 
@@ -1191,7 +1186,7 @@ void EpubReaderActivity::applyPageTurnLocked(const bool isForwardTurn) {
 }
 
 // TODO: Failure handling
-void EpubReaderActivity::render(RenderLock&& lock) {
+void EpubReaderActivity::renderBook() {
   if (!epub) {
     return;
   }
@@ -1226,15 +1221,6 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   // based bounds of book, show end of book screen
   if (currentSpineIndex > epub->getSpineItemsCount()) {
     currentSpineIndex = epub->getSpineItemsCount();
-  }
-
-  // Show end of book screen
-  if (currentSpineIndex == epub->getSpineItemsCount()) {
-    READING_STATS.updateProgress(100, true);
-    renderEndOfBook(mappedInput);
-    automaticPageTurnActive = false;
-    showPendingSyncSaveError();
-    return;
   }
 
   // Apply screen viewable areas and additional padding
@@ -1665,6 +1651,15 @@ void EpubReaderActivity::render(RenderLock&& lock) {
   }
   if (showDictionaryMessage) {
     GUI.drawPopup(renderer, tr(STR_DICT_NO_DICT_SET));
+  }
+}
+
+void EpubReaderActivity::onEndOfBookRendered() {
+  READING_STATS.updateProgress(100, true);
+  automaticPageTurnActive = false;
+  if (pendingSyncSaveError) {
+    pendingSyncSaveError = false;
+    GUI.drawPopup(renderer, tr(STR_SAVE_PROGRESS_FAILED));
   }
 }
 

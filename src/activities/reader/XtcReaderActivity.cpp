@@ -41,10 +41,6 @@ bool XtcReaderActivity::loadBook() {
 }
 
 void XtcReaderActivity::onBookEntered() {
-  if (allowFastInitialRefresh_) {
-    pagesUntilFullRefresh = std::max(SETTINGS.getRefreshFrequency(), 2);
-  }
-
   xtc->setupCacheDir();
 
   // Load saved progress
@@ -121,20 +117,19 @@ void XtcReaderActivity::loop() {
   }
 }
 
-void XtcReaderActivity::render(RenderLock&&) {
+void XtcReaderActivity::renderBook() {
   if (!xtc) {
-    return;
-  }
-
-  // Bounds check
-  if (currentPage >= xtc->getPageCount()) {
-    // Show end of book screen
-    renderEndOfBook(mappedInput);
     return;
   }
 
   renderPage();
   saveProgress();
+}
+
+void XtcReaderActivity::onEndOfBookRendered() {
+  if (xtc) {
+    READING_STATS.updateProgress(100, true);
+  }
 }
 
 XtcReaderActivity::StatusBarInfo XtcReaderActivity::getStatusBarInfo() const {

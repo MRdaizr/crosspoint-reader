@@ -30,10 +30,8 @@ class EpubReaderActivity final : public ReaderActivity {
   // Set when navigating to a footnote href with a fragment (e.g. #note1).
   // Cleared on the next render after the new section loads and resolves it to a page.
   std::string pendingAnchor;
-  int pagesUntilFullRefresh = 0;
   // Image pages use a dedicated double-FAST refresh path. Keep a manual
   // refresh request until renderContents can issue its clean base pass.
-  bool forcedRefreshPending = false;
   int cachedSpineIndex = 0;
   int cachedChapterTotalPageCount = 0;
   char wereadBookId_[64] = {};
@@ -156,6 +154,8 @@ class EpubReaderActivity final : public ReaderActivity {
   std::string getBookTitle() const override { return epub ? epub->getTitle() : std::string{}; }
   std::string getBookAuthor() const override { return epub ? epub->getAuthor() : std::string{}; }
   std::string getBookThumbBmpPath() const override { return epub ? epub->getThumbBmpPath() : std::string{}; }
+  void renderBook() override;
+  void onEndOfBookRendered() override;
   void onBookEntered() override;
   void onBookExited() override;
   void addBookmark();
@@ -196,16 +196,6 @@ class EpubReaderActivity final : public ReaderActivity {
       : ReaderActivity("EpubReader", renderer, mappedInput, epub ? epub->getPath() : "", allowFastInitialRefresh),
         epub(std::move(epub)) {}
   void loop() override;
-  void render(RenderLock&& lock) override;
-  bool handleForcedRefresh() override {
-    {
-      RenderLock lock(*this);
-      pagesUntilFullRefresh = 1;
-      forcedRefreshPending = true;
-    }
-    requestUpdate();
-    return true;
-  }
   ScreenshotInfo getScreenshotInfo() const override;
   CrossPointPosition getCurrentPosition() const;
 };

@@ -102,11 +102,6 @@ bool TxtReaderActivity::loadBook() {
 }
 
 void TxtReaderActivity::onBookEntered() {
-
-  if (allowFastInitialRefresh_) {
-    pagesUntilFullRefresh = std::max(SETTINGS.getRefreshFrequency(), 2);
-  }
-
   txt->setupCacheDir();
 }
 
@@ -859,7 +854,7 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
   }
 }
 
-void TxtReaderActivity::render(RenderLock&&) {
+void TxtReaderActivity::renderBook() {
   if (!txt) {
     return;
   }
@@ -875,12 +870,6 @@ void TxtReaderActivity::render(RenderLock&&) {
   if (percentJumpApplied) {
     indexBuildOnlyRequested = false;
     applyPercentJump(requestedPercent);
-  }
-
-  if (isAtEndOfBook()) {
-    READING_STATS.updateProgress(100, true);
-    renderEndOfBook(mappedInput);
-    return;
   }
 
   if (!pageTurnApplied && !percentJumpApplied &&
@@ -979,6 +968,8 @@ void TxtReaderActivity::render(RenderLock&&) {
 
   scheduleBackgroundWork();
 }
+
+void TxtReaderActivity::onEndOfBookRendered() { READING_STATS.updateProgress(100, true); }
 
 void TxtReaderActivity::renderPage(const bool fontPrewarmed) {
   const int lineHeight = renderer.getLineHeight(cachedFontId);

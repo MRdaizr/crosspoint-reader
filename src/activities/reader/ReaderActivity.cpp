@@ -157,6 +157,19 @@ void ReaderActivity::onExit() {
   APP_STATE.saveToFile();
 }
 
+bool ReaderActivity::handleForcedRefresh() {
+  // Only touch the shared refresh state while holding the render lock. The
+  // request originates from the input task, while the next page is rendered
+  // on ActivityManager's render task.
+  {
+    RenderLock lock(*this);
+    pagesUntilFullRefresh = 1;
+    forcedRefreshPending = true;
+  }
+  requestUpdate();
+  return true;
+}
+
 ReaderRenderSpec ReaderActivity::currentReaderRenderSpec() const {
   return SETTINGS.readerRenderSpec(static_cast<uint16_t>(renderer.getScreenWidth()),
                                    static_cast<uint16_t>(renderer.getScreenHeight()));
@@ -232,5 +245,14 @@ void ReaderActivity::renderEndOfBook(const MappedInputManager& input) {
     endOfBookOptionsReady.store(true, std::memory_order_release);
     endOfBookOptions->render(renderer, input);
   }
+  onEndOfBookRendered();
   renderer.displayBuffer();
+}
+
+void ReaderActivity::render(RenderLock&&) {
+  if (isAtEndOfBook()) {
+    renderEndOfBook(mappedInput);
+    return;
+  }
+  renderBook();
 }
