@@ -19,36 +19,36 @@
 
 namespace {
 constexpr int MENU_ITEMS = 8;
-const StrId menuLabels[MENU_ITEMS] = {StrId::STR_FLASHCARDS, StrId::STR_FLASHCARD_STATS_TITLE, StrId::STR_READING_STATS,
-                                      StrId::STR_POMODORO, StrId::STR_TIMER, StrId::STR_NTP_CLOCK, StrId::STR_TODOS,
-                                      StrId::STR_WEREAD_TITLE};
-const StrId menuDescs[MENU_ITEMS] = {StrId::STR_FLASHCARDS_DESC, StrId::STR_FLASHCARD_STATS_DESC,
-                                     StrId::STR_READING_STATS_DESC, StrId::STR_POMODORO_DESC, StrId::STR_TIMER_DESC,
-                                     StrId::STR_NTP_CLOCK_DESC, StrId::STR_TODOS_DESC, StrId::STR_WEREAD_DESC};
-const UIIcon menuIcons[MENU_ITEMS] = {UIIcon::Book, UIIcon::Recent, UIIcon::Recent, UIIcon::Settings, UIIcon::Settings,
-                                      UIIcon::Recent, UIIcon::File, UIIcon::Book};
+const StrId menuLabels[MENU_ITEMS] = {StrId::STR_READING_STATS, StrId::STR_FLASHCARDS, StrId::STR_FLASHCARD_STATS_TITLE,
+                                      StrId::STR_POMODORO, StrId::STR_TIMER, StrId::STR_TODOS, StrId::STR_WEREAD_TITLE,
+                                      StrId::STR_NTP_CLOCK};
+const StrId menuDescs[MENU_ITEMS] = {StrId::STR_READING_STATS_DESC, StrId::STR_FLASHCARDS_DESC,
+                                     StrId::STR_FLASHCARD_STATS_DESC, StrId::STR_POMODORO_DESC, StrId::STR_TIMER_DESC,
+                                     StrId::STR_TODOS_DESC, StrId::STR_WEREAD_DESC, StrId::STR_NTP_CLOCK_DESC};
+const UIIcon menuIcons[MENU_ITEMS] = {UIIcon::Recent, UIIcon::Book, UIIcon::Recent, UIIcon::Settings, UIIcon::Settings,
+                                      UIIcon::File, UIIcon::Book, UIIcon::Recent};
 const FuiMenuIconSlot menuIconSlots[MENU_ITEMS] = {
+    FuiMenuIconSlot::ExtensionsReadingStats,
     FuiMenuIconSlot::ExtensionsFlashcards,
     FuiMenuIconSlot::ExtensionsFlashcardStats,
-    FuiMenuIconSlot::ExtensionsReadingStats,
     FuiMenuIconSlot::ExtensionsPomodoro,
     FuiMenuIconSlot::ExtensionsTimer,
-    FuiMenuIconSlot::ExtensionsNtpClock,
     FuiMenuIconSlot::ExtensionsTodos,
     FuiMenuIconSlot::ExtensionsWeRead,
+    FuiMenuIconSlot::ExtensionsNtpClock,
 };
 }  // namespace
 
 void ExtensionsMenuActivity::activateIndex(const int index) {
   switch (index) {
       case 0:
-        startActivityForResult(std::make_unique<FlashcardDeckListActivity>(renderer, mappedInput), nullptr);
+        startActivityForResult(std::make_unique<ReadingStatsActivity>(renderer, mappedInput), nullptr);
         break;
       case 1:
-        startActivityForResult(std::make_unique<FlashcardStatsActivity>(renderer, mappedInput), nullptr);
+        startActivityForResult(std::make_unique<FlashcardDeckListActivity>(renderer, mappedInput), nullptr);
         break;
       case 2:
-        startActivityForResult(std::make_unique<ReadingStatsActivity>(renderer, mappedInput), nullptr);
+        startActivityForResult(std::make_unique<FlashcardStatsActivity>(renderer, mappedInput), nullptr);
         break;
       case 3:
         startActivityForResult(std::make_unique<PomodoroActivity>(renderer, mappedInput), nullptr);
@@ -57,13 +57,13 @@ void ExtensionsMenuActivity::activateIndex(const int index) {
         startActivityForResult(std::make_unique<TimerActivity>(renderer, mappedInput), nullptr);
         break;
       case 5:
-        startActivityForResult(std::make_unique<NtpClockActivity>(renderer, mappedInput), nullptr);
-        break;
-      case 6:
         startActivityForResult(std::make_unique<TodoActivity>(renderer, mappedInput), nullptr);
         break;
-      case 7:
+      case 6:
         startActivityForResult(std::make_unique<WeReadActivity>(renderer, mappedInput), nullptr);
+        break;
+      case 7:
+        startActivityForResult(std::make_unique<NtpClockActivity>(renderer, mappedInput), nullptr);
         break;
       default:
         break;
