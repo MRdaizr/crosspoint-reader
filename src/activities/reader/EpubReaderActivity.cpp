@@ -235,10 +235,7 @@ void EpubReaderActivity::onBookEntered() {
   currentPageVisibleOffset.reset();
   pendingOffsetJump.reset();
 
-  // Failed image assets are suppressed for one reader session so repeated
-  // grayscale passes cannot keep retrying a broken decoder. A new EPUB open
-  // starts a fresh retry window.
-  ImageBlock::clearSessionRenderFailures();
+  ImageBlock::clearRenderFailures();
   ImageBlock::setExtractor(epub.get(), [](void* ctx, const char* srcPath, const char* destPath) {
     return static_cast<Epub*>(ctx)->extractItemToFile(srcPath, destPath);
   });
@@ -1031,12 +1028,14 @@ bool EpubReaderActivity::launchWeReadSync() {
 bool EpubReaderActivity::launchKOReaderSync() {
   if (!KOREADER_STORE.hasCredentials()) return false;  // no-op: nothing to launch
 
+  RenderLock renderLock;
+
   const int currentPage = section ? section->currentPage : nextPageNumber;
   const int totalPages = section ? section->estimatedTotalPages() : cachedChapterTotalPageCount;
 
-  // Pre-compute local KO position and chapter name while Epub is still in RAM.
+  // Keep the current content position and chapter before releasing the page.
   CrossPointPosition localPos = getCurrentPosition();
-  SavedProgressPosition localKoPos = ProgressMapper::toSavedProgress(epub, localPos);
+  SavedProgressPosition localKoPos;
   const int tocIdx = epub->getTocIndexForSpineIndex(currentSpineIndex);
   std::string localChapterName = (tocIdx >= 0) ? epub->getTocItem(tocIdx).title : "";
   const std::string savedEpubPath = epub->getPath();
@@ -1052,15 +1051,23 @@ bool EpubReaderActivity::launchKOReaderSync() {
 
   // Release Epub and Section to free ~65KB RAM for the TLS handshake.
   LOG_DBG("KOSync", "Releasing epub for sync (heap before: %u)", (unsigned)ESP.getFreeHeap());
-  {
-    RenderLock lock(*this);
-    if (section) {
-      nextPageNumber = section->currentPage;
-    }
-    ImageBlock::setExtractor(nullptr, nullptr);
-    section.reset();
-    epub.reset();
+  if (section) {
+    nextPageNumber = section->currentPage;
   }
+  discardOverlayPage();
+  ImageBlock::releaseRenderCache();
+  ImageBlock::setExtractor(nullptr, nullptr);
+  section.reset();
+  if (auto* fcm = renderer.getFontCacheManager()) {
+    fcm->releaseSdFontCaches();
+  }
+  // The XPath mapper streams the XHTML and borrows framebuffer memory; keep
+  // the reader render task excluded while both resources are in use.
+  {
+    GfxRenderer::FrameBufferLoan loan(renderer);
+    localKoPos = ProgressMapper::toSavedProgress(epub, localPos);
+  }
+  epub.reset();
   LOG_DBG("KOSync", "Epub released (heap after: %u)", (unsigned)ESP.getFreeHeap());
 
   activityManager.replaceActivity(std::make_unique<KOReaderSyncActivity>(
@@ -1857,6 +1864,7 @@ void EpubReaderActivity::renderContents(std::unique_ptr<Page> page, const int or
                                         const int orientedMarginLeft) {
   const auto t0 = millis();
   const int fontId = SETTINGS.getReaderFontId();
+  ImageBlock::clearRenderFailures();
 
   // The same page may be rendered for BW, image cleanup, and multiple grayscale
   // bands. ImageBlock owns a bounded payload cache for those passes; release it
