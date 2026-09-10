@@ -618,8 +618,17 @@ void loop() {
   if (skipLoopDelay) {
     yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
-    // Keep the CPU at normal frequency while awake. Deep sleep remains the
-    // power-saving mechanism selected by the user's auto-sleep timeout.
-    delay(10);
+    if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
+      // Poll for raw button contact during idle in short slices. The next
+      // InputManager update can then confirm a short press before it ends.
+      const unsigned long idleStart = millis();
+      while (millis() - idleStart < 50) {
+        delay(10);
+        if (gpio.rawInputActive()) break;
+      }
+    } else {
+      // Short delay to prevent tight loop while remaining responsive.
+      delay(10);
+    }
   }
 }

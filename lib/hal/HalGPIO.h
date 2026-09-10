@@ -83,6 +83,9 @@ class HalGPIO {
   unsigned long getHeldTime() const;
   unsigned long getPowerButtonHeldTime() const;
 
+  // True when a button contact is active before the debounced input state updates.
+  bool rawInputActive();
+
   // Touch input is provided by the official FreeInk InputManager.  These
   // wrappers keep the rest of the firmware on the HAL boundary and remain
   // inert on boards/builds without a touch controller.
