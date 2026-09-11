@@ -783,10 +783,13 @@ SavedProgressPosition ProgressMapper::toSavedProgress(const std::shared_ptr<Epub
   float intra =
       (pos.totalPages > 1) ? static_cast<float>(pos.pageNumber) / static_cast<float>(pos.totalPages - 1) : 0.0f;
   result.percentage = epub->calculateProgress(pos.spineIndex, intra);
+  if (pos.hasVisibleTextOffset) {
+    result.xpath = ChapterXPathResolver::findXPathForVisibleTextOffset(epub, pos.spineIndex, pos.visibleTextOffset);
+  }
   // A paragraph XPath is more stable than a page-fraction XPath when the
   // reader is re-paginated. Use it first, then retain the existing progress
   // and synthetic fallbacks for pages without a paragraph mapping.
-  if (pos.hasParagraphIndex && pos.paragraphIndex > 0) {
+  if (result.xpath.empty() && pos.hasParagraphIndex && pos.paragraphIndex > 0) {
     result.xpath = ChapterXPathResolver::findXPathForParagraph(epub, pos.spineIndex, pos.paragraphIndex);
   }
   if (result.xpath.empty()) {
