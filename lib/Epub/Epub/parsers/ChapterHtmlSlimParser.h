@@ -121,7 +121,7 @@ class ChapterHtmlSlimParser {
   uint16_t tableRowsSpannedRemaining = 0;
   size_t tableCellTextBytes = 0;
   std::vector<std::unique_ptr<ParsedText>> tableRowCells;
-  std::array<std::vector<std::shared_ptr<TextBlock>>, MAX_GRID_TABLE_COLUMNS> tableCellLines;
+  std::array<std::vector<std::unique_ptr<TextBlock>>, MAX_GRID_TABLE_COLUMNS> tableCellLines;
   std::vector<uint32_t> tableLineVisibleOffsets;
 
   // Anchor-to-page mapping: tracks which page each HTML id attribute lands on
@@ -211,6 +211,6 @@ class ChapterHtmlSlimParser {
   // only the input stream position, not parser internals.
   size_t parseBytesConsumed() const { return inputFile ? inputFile.position() : 0; }
   size_t parseTotalBytes() const { return totalBytes; }
-  void addLineToPage(std::shared_ptr<TextBlock> line, uint32_t visibleTextOffset);
+  void addLineToPage(std::unique_ptr<TextBlock> line, uint32_t visibleTextOffset);
   const std::vector<std::pair<std::string, uint16_t>>& getAnchors() const { return anchorData; }
 };

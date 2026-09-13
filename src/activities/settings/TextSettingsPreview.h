@@ -23,7 +23,10 @@ struct PreviewKey {
 };
 
 struct PreviewLayout {
-  std::vector<std::shared_ptr<TextBlock>> lines;
+  PreviewLayout();
+  ~PreviewLayout();
+
+  std::vector<std::unique_ptr<TextBlock>> lines;
   PreviewKey key;
 };
 

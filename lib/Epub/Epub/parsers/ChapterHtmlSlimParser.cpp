@@ -437,8 +437,7 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
 
   currentPageNextY += topSpacing;
 
-  auto pageRule = std::shared_ptr<PageHorizontalRule>(
-      new (std::nothrow) PageHorizontalRule(width, ruleThickness, xPos, currentPageNextY));
+  auto pageRule = makeUniqueNoThrow<PageHorizontalRule>(width, ruleThickness, xPos, currentPageNextY);
   if (!pageRule) {
     LOG_ERR("EHP", "Failed to create PageHorizontalRule");
     return;
@@ -446,7 +445,7 @@ void ChapterHtmlSlimParser::emitHorizontalRule(const BlockStyle& blockStyle) {
   if (currentPage->elements.empty()) {
     currentPage->visibleTextOffset = visibleTextOffset;
   }
-  currentPage->elements.push_back(pageRule);
+  currentPage->elements.push_back(std::move(pageRule));
   currentPageNextY = static_cast<int16_t>(currentPageNextY + ruleThickness + bottomSpacing);
 
   if (!pendingAnchorId.empty()) {
@@ -509,9 +508,8 @@ void ChapterHtmlSlimParser::addTableRowSeparator() {
     return;
   }
 
-  auto separator = std::shared_ptr<PageHorizontalRule>(new (std::nothrow)
-                                                           PageHorizontalRule(viewportWidth, TABLE_ROW_SEPARATOR_THICKNESS,
-                                                                              0, currentPageNextY + 1));
+  auto separator = makeUniqueNoThrow<PageHorizontalRule>(viewportWidth, TABLE_ROW_SEPARATOR_THICKNESS, 0,
+                                                         currentPageNextY + 1);
   if (!separator) {
     LOG_ERR("EHP", "OOM: table row separator");
     return;
@@ -552,9 +550,9 @@ void ChapterHtmlSlimParser::finishTableRow() {
     auto& lines = tableCellLines[column];
     tableRowCells[column]->layoutAndExtractLines(
         renderer, fontId, textWidth,
-        [&lines, this](const std::shared_ptr<TextBlock>& line, const uint32_t offset) {
+        [&lines, this](std::unique_ptr<TextBlock> line, const uint32_t offset) {
           const size_t lineIndex = lines.size();
-          lines.push_back(line);
+          lines.push_back(std::move(line));
           if (tableLineVisibleOffsets.size() <= lineIndex) {
             tableLineVisibleOffsets.resize(lineIndex + 1, UINT32_MAX);
           }
@@ -614,7 +612,7 @@ void ChapterHtmlSlimParser::finishTableRow() {
       style.paddingRight = 0;
       line->setBlockStyle(style);
 
-      auto pageLine = std::shared_ptr<PageLine>(new (std::nothrow) PageLine(line, style.leftInset(), rowY));
+      auto pageLine = makeUniqueNoThrow<PageLine>(std::move(line), style.leftInset(), rowY);
       if (!pageLine) {
         LOG_ERR("EHP", "OOM: table cell line");
         continue;
@@ -1139,15 +1137,13 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 // owns a substantial working set. Use nothrow allocation so a
                 // transient heap shortage fails this image cleanly instead of
                 // aborting the firmware when exceptions are disabled.
-                auto imageBlock = std::shared_ptr<ImageBlock>(
-                    new (std::nothrow) ImageBlock(cachedImagePath, resolvedPath, displayWidth, displayHeight));
+                auto imageBlock = makeUniqueNoThrow<ImageBlock>(cachedImagePath, resolvedPath, displayWidth, displayHeight);
                 if (!imageBlock) {
                   LOG_ERR("EHP", "Failed to create ImageBlock");
                   return;
                 }
                 int xPos = (self->viewportWidth - displayWidth) / 2;
-                auto pageImage =
-                    std::shared_ptr<PageImage>(new (std::nothrow) PageImage(imageBlock, xPos, self->currentPageNextY));
+                auto pageImage = makeUniqueNoThrow<PageImage>(std::move(imageBlock), xPos, self->currentPageNextY);
                 if (!pageImage) {
                   LOG_ERR("EHP", "Failed to create PageImage");
                   return;
@@ -1155,7 +1151,7 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
                 if (self->currentPage->elements.empty()) {
                   self->currentPage->visibleTextOffset = self->visibleTextOffset;
                 }
-                self->currentPage->elements.push_back(pageImage);
+                self->currentPage->elements.push_back(std::move(pageImage));
                 self->currentPageNextY += displayHeight + imageMarginBottom;
 
                 // The image consumed the empty block's accumulated vertical spacing.
@@ -1700,8 +1696,8 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
                                         : self->viewportWidth;
     self->currentTextBlock->layoutAndExtractLines(
         self->renderer, self->fontId, effectiveWidth,
-        [self](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) {
-          self->addLineToPage(textBlock, offset);
+        [self](std::unique_ptr<TextBlock> textBlock, const uint32_t offset) {
+          self->addLineToPage(std::move(textBlock), offset);
         },
         false);
   }
@@ -2122,7 +2118,7 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
   }
 }
 
-void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const uint32_t visibleTextOffset) {
+void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const uint32_t visibleTextOffset) {
   const int lineHeight = renderer.getLineHeight(fontId) * lineCompression +
                          line->getRubyShift(renderer.getFontAscenderSize(fontId));
 
@@ -2152,7 +2148,12 @@ void ChapterHtmlSlimParser::addLineToPage(std::shared_ptr<TextBlock> line, const
 
   // Apply horizontal left inset (margin + padding) as x position offset
   const int16_t xOffset = line->getBlockStyle().leftInset();
-  currentPage->elements.push_back(std::make_shared<PageLine>(line, xOffset, currentPageNextY));
+  auto pageLine = makeUniqueNoThrow<PageLine>(std::move(line), xOffset, currentPageNextY);
+  if (!pageLine) {
+    LOG_ERR("EHP", "OOM: PageLine");
+    return;
+  }
+  currentPage->elements.push_back(std::move(pageLine));
   currentPageNextY += lineHeight;
 }
 
@@ -2185,7 +2186,9 @@ void ChapterHtmlSlimParser::makePages() {
 
   currentTextBlock->layoutAndExtractLines(
       renderer, fontId, effectiveWidth,
-      [this](const std::shared_ptr<TextBlock>& textBlock, const uint32_t offset) { addLineToPage(textBlock, offset); });
+      [this](std::unique_ptr<TextBlock> textBlock, const uint32_t offset) {
+        addLineToPage(std::move(textBlock), offset);
+      });
 
   // Fallback: transfer any remaining pending footnotes to current page.
   // Normally addLineToPage handles this via word-index tracking, but this catches

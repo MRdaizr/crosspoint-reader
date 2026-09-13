@@ -17,6 +17,10 @@
 #include "fontIds.h"
 
 namespace textsettings {
+
+PreviewLayout::PreviewLayout() = default;
+PreviewLayout::~PreviewLayout() = default;
+
 namespace {
 CssTextAlign toCssAlign(const uint8_t align) {
   return align == CrossPointSettings::BOOK_STYLE ? CssTextAlign::Justify : static_cast<CssTextAlign>(align);
@@ -43,7 +47,7 @@ void relayout(PreviewLayout& layout, const GfxRenderer& renderer, const int font
     }
   }
   parsed.layoutAndExtractLines(renderer, fontId, static_cast<uint16_t>(textWidth),
-                               [&layout](std::shared_ptr<TextBlock> line, uint32_t) {
+                               [&layout](std::unique_ptr<TextBlock> line, uint32_t) {
                                  layout.lines.push_back(std::move(line));
                                });
 }
