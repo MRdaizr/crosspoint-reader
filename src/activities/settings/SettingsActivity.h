@@ -208,4 +208,5 @@ class SettingsActivity final : public UiTabListActivity {
       : UiTabListActivity("Settings", renderer, mappedInput) {}
   void onEnter() override;
   void onExit() override;
+  void render(RenderLock&& lock) override;
 };

@@ -171,6 +171,12 @@ void UiListActivity::navigateButtons() {
 }
 
 void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, const bool hasSubtitle) {
+  props.partialTrailingRow = true;
+  auto& n = activeNav();
+  const int prevTop = n.top;
+  const bool trusted = n.trusts(listCount());
+  const int drawn = n.drawnRows;
+
   int16_t rowHeight = screen.theme().rowHeight;
   if (!mappedInput.hasTouch()) {
     // Non-touch hardware (X3/X4) keeps the original, denser per-theme row
@@ -184,7 +190,18 @@ void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, c
     // A label that must wrap (maxLines > 1) grows only its own row: list()
     // sizes wrapped items per-row, so the dense height stays for the rest.
   }
-  activeNav().syncToProps(screen.body(), rowHeight, screen.theme().listRowGap, listCount(), props);
+  n.syncToProps(screen.body(), rowHeight, screen.theme().listRowGap, listCount(), props);
+
+  // When the selection is already visible in the current viewport (based on
+  // the measured drawnRows rather than the unweighted visibleRows estimate),
+  // keep the viewport anchored instead of jumping to top.
+  if (trusted && drawn > 0) {
+    const int sel = props.selectedIndex;
+    if (sel >= prevTop && sel < prevTop + drawn) {
+      n.top = prevTop;
+      props.topIndex = static_cast<uint16_t>(prevTop);
+    }
+  }
 }
 
 void UiListActivity::drawChrome() {

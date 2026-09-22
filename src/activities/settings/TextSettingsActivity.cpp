@@ -169,20 +169,22 @@ const char* TextSettingsActivity::confirmLabelText() const {
   return tab_ == Tab::Style ? tr(STR_TOGGLE) : tr(STR_SELECT);
 }
 
-void TextSettingsActivity::render(RenderLock&&) {
-  if (optionPopup_.processRender(renderer, mappedInput)) return;
-  renderer.clearScreen();
-  GUI.drawHeader(renderer, Rect{0, metrics_.topPadding, renderer.getScreenWidth(), metrics_.headerHeight},
-                 tr(STR_TEXT_SETTINGS));
-  const char* family = currentFamilyIndex_ >= 0 && currentFamilyIndex_ < static_cast<int>(fonts_.size())
-                           ? fonts_[currentFamilyIndex_].name.c_str()
-                           : "";
-  const char* size = currentSizeIndex_ >= 0 && currentSizeIndex_ < static_cast<int>(sizes_.size())
-                         ? sizes_[currentSizeIndex_].name.c_str()
-                         : "";
+void TextSettingsActivity::drawChrome() {
+  const auto pageWidth = renderer.getScreenWidth();
+
+  GUI.drawHeader(renderer, Rect{0, metrics_.topPadding, pageWidth, metrics_.headerHeight}, tr(STR_TEXT_SETTINGS));
+
+  const char* familyName = (currentFamilyIndex_ >= 0 && currentFamilyIndex_ < static_cast<int>(fonts_.size()))
+                               ? fonts_[currentFamilyIndex_].name.c_str()
+                               : "";
+  const char* sizeName = (currentSizeIndex_ >= 0 && currentSizeIndex_ < static_cast<int>(sizes_.size()))
+                             ? sizes_[currentSizeIndex_].name.c_str()
+                             : "";
   textsettings::renderPreview(renderer, previewLayout_, metrics_.previewPadding, metrics_.verticalSpacing, afterHeader,
-                              previewHeight, family, size);
-  renderUi();
+                              previewHeight, familyName, sizeName);
+}
+
+void TextSettingsActivity::drawFooter() {
   if (focusedRowHasNoPreview()) {
     const int captionHeight = renderer.getTextHeight(UI_10_FONT_ID) + metrics_.verticalSpacing;
     renderer.drawText(UI_10_FONT_ID, metrics_.previewPadding,
@@ -190,7 +192,11 @@ void TextSettingsActivity::render(RenderLock&&) {
   }
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabelText(), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-  renderer.displayBuffer();
+}
+
+void TextSettingsActivity::render(RenderLock&& lock) {
+  if (optionPopup_.processRender(renderer, mappedInput)) return;  // picker draws over everything
+  UiListActivity::render(std::move(lock));
 }
 
 void TextSettingsActivity::applyFamily(const int index) {

@@ -409,3 +409,8 @@ void SettingsActivity::drawFooter() {
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
+
+void SettingsActivity::render(RenderLock&& lock) {
+  if (optionPopup.processRender(renderer, mappedInput)) return;
+  UiListActivity::render(std::move(lock));
+}
