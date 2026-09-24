@@ -1,13 +1,33 @@
 #include "UiListActivity.h"
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+
 #include <GfxRenderer.h>
 #include <I18n.h>
 
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/DynamicFont.h"
 
 namespace fui = freeink::ui;
+
+namespace {
+struct VisibleRowsPrewarmContext {
+  const std::vector<std::string>* labels;
+  std::size_t first;
+  std::size_t count;
+};
+
+const char* getVisibleRowPrewarmText(const void* opaqueContext, const std::uint32_t index) {
+  static constexpr char ellipsis[] = "\xe2\x80\xa6";
+  const auto& context = *static_cast<const VisibleRowsPrewarmContext*>(opaqueContext);
+  if (index >= context.count) return ellipsis;
+  return (*context.labels)[context.first + index].c_str();
+}
+}  // namespace
 
 UiListActivity::UiListActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput,
                                const bool wantsTouchLongPress)
@@ -15,6 +35,7 @@ UiListActivity::UiListActivity(const char* name, GfxRenderer& renderer, MappedIn
 
 void UiListActivity::onEnter() {
   Activity::onEnter();
+  invalidateListFontPrewarm();
   activeNav().reset();
   resetUi();
   app.on(ACTION_ROW, &UiListActivity::rowActionTrampoline, this);
@@ -75,6 +96,31 @@ void UiListActivity::moveSelectionTo(const int index) {
     n.follow(listCount());
   }
   requestUpdate();
+}
+
+int UiListActivity::prewarmVisibleListRowsIfNeeded(const int fontId, const std::vector<std::string>& labels,
+                                                   int first, int count) {
+  if (!renderer.isSdCardFont(fontId)) {
+    invalidateListFontPrewarm();
+    return 0;
+  }
+
+  const int rowCount = static_cast<int>(labels.size());
+  first = std::clamp(first, 0, rowCount);
+  count = std::clamp(count, 0, rowCount - first);
+  if (listFontPrewarmValid && lastPrewarmedFontId == fontId && lastPrewarmedFirst == first &&
+      lastPrewarmedCount == count) {
+    return 0;
+  }
+
+  const VisibleRowsPrewarmContext context{&labels, static_cast<std::size_t>(first), static_cast<std::size_t>(count)};
+  const int missed = DynamicFont::prewarmIfSdFont(renderer, fontId, &getVisibleRowPrewarmText, &context,
+                                                  static_cast<uint32_t>(count + 1));
+  lastPrewarmedFontId = fontId;
+  lastPrewarmedFirst = first;
+  lastPrewarmedCount = count;
+  listFontPrewarmValid = true;
+  return missed;
 }
 
 void UiListActivity::onExit() {

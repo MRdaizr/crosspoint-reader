@@ -55,7 +55,6 @@ void EpubReaderChapterSelectionActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const int bodyFontId = DynamicFont::fontForSdCardText(renderer, UI_12_FONT_ID);
   const int listFontId = DynamicFont::fontForSdCardText(renderer, UI_10_FONT_ID);
-  const bool usingSdFont = renderer.isSdCardFont(listFontId);
   uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_BODY, bodyFontId);
   uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_SMALL, listFontId);
 
@@ -67,20 +66,23 @@ void EpubReaderChapterSelectionActivity::buildScreen(UiScreen& screen) {
     screen.centeredText(tr(STR_NO_CHAPTERS), screen.theme().bodyText);
     return;
   }
-  rowLabels.clear();
-  rowItems.clear();
-  rowLabels.reserve(static_cast<size_t>(count));
-  rowItems.reserve(static_cast<size_t>(count));
-  for (int i = 0; i < count; ++i) {
-    const auto itemData = epub->getTocItem(i);
-    const int indent = itemData.level > 0 ? static_cast<int>(itemData.level - 1) * 2 : 0;
-    rowLabels.emplace_back(std::string(static_cast<size_t>(indent), ' ') +
-                           (itemData.title.empty() ? tr(STR_UNNAMED) : itemData.title));
-    fui::ListItem item;
-    item.label = rowLabels.back().c_str();
-    item.actionValue = static_cast<int16_t>(i);
-    item.icon = {};
-    rowItems.push_back(item);
+  if (rowItems.size() != static_cast<size_t>(count)) {
+    invalidateListFontPrewarm();
+    rowLabels.clear();
+    rowItems.clear();
+    rowLabels.reserve(static_cast<size_t>(count));
+    rowItems.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+      const auto itemData = epub->getTocItem(i);
+      const int indent = itemData.level > 0 ? static_cast<int>(itemData.level - 1) * 2 : 0;
+      rowLabels.emplace_back(std::string(static_cast<size_t>(indent), ' ') +
+                             (itemData.title.empty() ? tr(STR_UNNAMED) : itemData.title));
+      fui::ListItem item;
+      item.label = rowLabels.back().c_str();
+      item.actionValue = static_cast<int16_t>(i);
+      item.icon = {};
+      rowItems.push_back(item);
+    }
   }
   fui::ListProps props;
   props.items = rowItems.data();
@@ -91,15 +93,9 @@ void EpubReaderChapterSelectionActivity::buildScreen(UiScreen& screen) {
   props.labelText.maxLines = 2;
   syncListViewport(screen, props);
 
-  if (usingSdFont) {
-    const int first = std::clamp(nav.top, 0, static_cast<int>(rowLabels.size()));
-    const int count = std::min(static_cast<int>(rowLabels.size()) - first, std::max(1, nav.visibleRows));
-    for (int i = 0; i < count; ++i) {
-      const size_t row = static_cast<size_t>(first + i);
-      DynamicFont::prewarmIfSdFont(renderer, listFontId, rowLabels[row]);
-    }
-    DynamicFont::prewarmIfSdFont(renderer, listFontId, "\xe2\x80\xa6");
-  }
+  const int first = std::clamp(nav.top, 0, static_cast<int>(rowLabels.size()));
+  const int visibleCount = std::min(static_cast<int>(rowLabels.size()) - first, std::max(1, nav.visibleRows));
+  prewarmVisibleListRowsIfNeeded(listFontId, rowLabels, first, visibleCount);
 
   screen.list(props);
 }

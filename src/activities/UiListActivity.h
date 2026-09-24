@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <vector>
+
 #include "activities/Activity.h"
 #include "components/UiAppHost.h"
 #include "util/ButtonNavigator.h"
@@ -81,6 +84,11 @@ class UiListActivity : public Activity, protected UiAppHost {
   void syncListViewport(UiScreen& screen, freeink::ui::ListProps& props, bool hasSubtitle = false);
   // Move the selection to index and pull the viewport to it.
   void moveSelectionTo(int index);
+  // Prewarm SD-font glyphs for visible list rows only when the viewport,
+  // font, or row data changes. Call invalidateListFontPrewarm() when labels
+  // are rebuilt in place.
+  int prewarmVisibleListRowsIfNeeded(int fontId, const std::vector<std::string>& labels, int first, int count);
+  void invalidateListFontPrewarm() { listFontPrewarmValid = false; }
 
   // --- shared state ----------------------------------------------------------
   // Selection + viewport (selected/top/visibleRows/followOnBuild). Access via
@@ -89,6 +97,11 @@ class UiListActivity : public Activity, protected UiAppHost {
   ButtonNavigator buttonNavigator;
 
  private:
+  int lastPrewarmedFontId = -1;
+  int lastPrewarmedFirst = -1;
+  int lastPrewarmedCount = -1;
+  bool listFontPrewarmValid = false;
+
   static void screenTrampoline(UiScreen& screen, void* user);
   static void rowActionTrampoline(const freeink::ui::ActionEvent& event, void* user);
   // Named apart from UiAppHost::routeTouch so the host overload stays visible

@@ -1,5 +1,7 @@
 #include "InflateReader.h"
 
+#include <BuildScratch.h>
+
 #include <cstring>
 #include <type_traits>
 
@@ -17,9 +19,16 @@ bool InflateReader::init(const bool streaming) {
   deinit();  // free any previously allocated ring buffer and reset state
 
   if (streaming) {
-    ringBuffer = static_cast<uint8_t*>(malloc(INFLATE_DICT_SIZE));
-    if (!ringBuffer) return false;
-    ownsRing = true;
+    // EPUB builds can temporarily lend the display framebuffer as scratch.
+    // Reuse it before asking a fragmented heap for another 32 KiB block.
+    ringBuffer = buildscratch::claim(INFLATE_DICT_SIZE);
+    if (ringBuffer) {
+      usesBuildScratch = true;
+    } else {
+      ringBuffer = static_cast<uint8_t*>(malloc(INFLATE_DICT_SIZE));
+      if (!ringBuffer) return false;
+      ownsRing = true;
+    }
     memset(ringBuffer, 0, INFLATE_DICT_SIZE);
   }
 
@@ -32,15 +41,21 @@ bool InflateReader::initWithRing(uint8_t* ring) {
   if (!ring) return false;
   ringBuffer = ring;
   ownsRing = false;
+  usesBuildScratch = false;
   memset(ringBuffer, 0, INFLATE_DICT_SIZE);
   uzlib_uncompress_init(&decomp, ringBuffer, INFLATE_DICT_SIZE);
   return true;
 }
 
 void InflateReader::deinit() {
-  if (ringBuffer && ownsRing) free(ringBuffer);
+  if (ringBuffer && usesBuildScratch) {
+    buildscratch::release(ringBuffer);
+  } else if (ringBuffer && ownsRing) {
+    free(ringBuffer);
+  }
   ringBuffer = nullptr;
   ownsRing = false;
+  usesBuildScratch = false;
   memset(&decomp, 0, sizeof(decomp));
 }
 

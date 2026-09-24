@@ -127,6 +127,8 @@ struct DavStream {
     error.clear();
     if (!parser) {
       error = "XML parser allocation failed";
+      LOG_ERR("NUT", "WebDAV XML parser allocation failed (heap: %u, max alloc: %u)",
+              (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
       return false;
     }
     XML_SetUserData(parser, &state);
@@ -137,6 +139,14 @@ struct DavStream {
 
   bool feed(const char* data, const int length, const bool finished = false) {
     if (!parser || XML_Parse(parser, data, length, finished ? XML_TRUE : XML_FALSE) != XML_STATUS_OK) {
+      const XML_Error code = parser ? XML_GetErrorCode(parser) : XML_ERROR_UNCLOSED_TOKEN;
+      const XML_LChar* description = XML_ErrorString(code);
+      LOG_ERR("NUT",
+              "WebDAV XML parse failed: code=%d (%s), line=%lu, col=%lu, final=%d, chunk=%d, heap=%u, max alloc=%u",
+              static_cast<int>(code), description ? description : "unknown",
+              static_cast<unsigned long>(parser ? XML_GetCurrentLineNumber(parser) : 0),
+              static_cast<unsigned long>(parser ? XML_GetCurrentColumnNumber(parser) : 0), finished ? 1 : 0, length,
+              (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
       error = "WebDAV XML parse failed";
       return false;
     }
@@ -193,7 +203,10 @@ void XMLCALL characterData(void* userData, const XML_Char* s, int len) {
 esp_err_t onDavHttpEvent(esp_http_client_event_t* event) {
   if (event->event_id != HTTP_EVENT_ON_DATA || !event->user_data) return ESP_OK;
   auto* stream = static_cast<DavStream*>(event->user_data);
-  return stream->feed(static_cast<const char*>(event->data), event->data_len) ? ESP_OK : ESP_FAIL;
+  // Continue reading the response after a parse error so the caller can inspect
+  // the final HTTP status instead of receiving only a generic ESP_FAIL.
+  if (stream->error.empty()) stream->feed(static_cast<const char*>(event->data), event->data_len);
+  return ESP_OK;
 }
 
 void setBasicAuth(esp_http_client_handle_t client, const std::string& username, const std::string& password) {
@@ -300,13 +313,33 @@ bool NutstoreWebDavClient::listRecursive(const std::string& remotePath, EntryCal
             (unsigned)ESP.getMaxAllocHeap());
     const esp_err_t requestErr = esp_http_client_perform(client);
     const int status = esp_http_client_get_status_code(client);
-    if (requestErr != ESP_OK || !stream.feed(nullptr, 0, true)) {
+    if (requestErr != ESP_OK) {
+      LOG_ERR("NUT", "PROPFIND request failed: HTTP %d, transport=%s, XML=%s, heap=%u, max alloc=%u", status,
+              esp_err_to_name(requestErr), stream.error.empty() ? "ok" : stream.error.c_str(),
+              (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
       error = !stream.error.empty() ? stream.error : std::string("PROPFIND failed: ") + esp_err_to_name(requestErr);
       esp_http_client_cleanup(client);
       return false;
     }
     if (status != 207 && status != 200) {
+      LOG_ERR("NUT", "PROPFIND returned HTTP %d (XML=%s, heap=%u, max alloc=%u)", status,
+              stream.error.empty() ? "ok" : stream.error.c_str(), (unsigned)ESP.getFreeHeap(),
+              (unsigned)ESP.getMaxAllocHeap());
       error = "PROPFIND failed: HTTP " + std::to_string(status);
+      esp_http_client_cleanup(client);
+      return false;
+    }
+    if (!stream.error.empty()) {
+      LOG_ERR("NUT", "PROPFIND XML failed with HTTP %d: %s (heap=%u, max alloc=%u)", status,
+              stream.error.c_str(), (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+      error = stream.error;
+      esp_http_client_cleanup(client);
+      return false;
+    }
+    if (!stream.feed(nullptr, 0, true)) {
+      LOG_ERR("NUT", "PROPFIND XML finalization failed with HTTP %d: %s (heap=%u, max alloc=%u)", status,
+              stream.error.c_str(), (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+      error = stream.error;
       esp_http_client_cleanup(client);
       return false;
     }

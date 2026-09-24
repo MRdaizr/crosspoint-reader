@@ -51,13 +51,13 @@ void FontCacheManager::releaseSdFontCaches() {
   }
 }
 
-int FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask) {
+int FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask, bool accumulate) {
   if (utf8Text == nullptr || utf8Text[0] == '\0') return 0;
 
   // SD card font prewarm path: prewarm all requested styles in one call
   auto it = sdCardFonts_.find(fontId);
   if (it != sdCardFonts_.end()) {
-    int missed = it->second->prewarm(utf8Text, styleMask);
+    int missed = it->second->prewarm(utf8Text, styleMask, false, true, accumulate);
     if (missed > 0) {
       LOG_DBG("FCM", "prewarmCache(SD): %d glyph(s) not found (styleMask=0x%02X)", missed, styleMask);
     }
@@ -249,7 +249,9 @@ void FontCacheManager::PrewarmScope::endScanAndPrewarm() {
 
     const uint8_t fontSlot = static_cast<uint8_t>(group) / 4;
     const uint8_t style = static_cast<uint8_t>(group) & 0x03;
-    manager_->prewarmCache(manager_->scanFontIds_[fontSlot], utf8Text, 1 << style);
+    // This group is the complete glyph set for one font/style in this render.
+    // Keep old glyphs on cache hits, but replace them when the page needs a rebuild.
+    manager_->prewarmCache(manager_->scanFontIds_[fontSlot], utf8Text, 1 << style, false);
   }
 
   manager_->scanCodepointCount_ = 0;

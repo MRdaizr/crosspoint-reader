@@ -1,10 +1,10 @@
 #include "Section.h"
 
+#include <FontCacheManager.h>
+#include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
 #include <Serialization.h>
-#include <FontCacheManager.h>
-#include <GfxRenderer.h>
 #include <esp_heap_caps.h>
 #include <esp_system.h>
 
@@ -68,6 +68,19 @@ constexpr uint32_t BUILD_CHECKPOINT_MAGIC = 0x43504231;  // CPB1
 // v5 invalidates any checkpoint whose pages lack Ruby payloads; v6 aligns the
 // checkpoint with section semantics v36-v41 and the partial-cache format.
 constexpr uint16_t BUILD_CHECKPOINT_VERSION = 6;
+
+void releaseFontCachesForBuild(GfxRenderer& renderer) {
+  if (auto* fontCache = renderer.getFontCacheManager()) {
+    fontCache->releaseSdFontCaches();
+  }
+}
+
+bool streamEpubItemWithScratch(GfxRenderer& renderer, Epub& epub, const std::string& itemPath, Print& output,
+                               const size_t chunkSize) {
+  GfxRenderer::FrameBufferLoan loan(renderer);
+  return epub.readItemContentsToStream(itemPath, output, chunkSize);
+}
+
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
                                  sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
@@ -139,7 +152,7 @@ uint32_t Section::onPageComplete(std::unique_ptr<Page> page) {
 Section::~Section() { suspendBuild(); }
 
 uint32_t Section::onIncrementalPageComplete(std::unique_ptr<Page> page, const uint16_t paragraphIndex,
-                                             const uint16_t listItemIndex, const uint32_t visibleTextOffset) {
+                                            const uint16_t listItemIndex, const uint32_t visibleTextOffset) {
   if (!buildFile) {
     LOG_ERR("SCT", "Build file not open for page %d", builtPageCount);
     return 0;
@@ -199,8 +212,7 @@ void Section::discardIncrementalBuild(const bool keepHtml) {
   buildHtmlReused_ = keepHtml;
 }
 
-bool Section::commitIncrementalBuild(const uint8_t version, const uint32_t bytesConsumed,
-                                     const uint32_t totalBytes) {
+bool Section::commitIncrementalBuild(const uint8_t version, const uint32_t bytesConsumed, const uint32_t totalBytes) {
   if (!buildFile || !buildParser) {
     LOG_ERR("SCT", "Cannot commit incremental section cache without active parser");
     return false;
@@ -309,10 +321,9 @@ bool Section::finishIncrementalBuild() {
 
 void Section::writeSectionFileHeader(HalFile& target, const int fontId, const float lineCompression,
                                      const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
-                                     const uint16_t viewportWidth,
-                                     const uint16_t viewportHeight, const bool hyphenationEnabled,
-                                     const bool embeddedStyle, const uint8_t imageRendering,
-                                     const bool focusReadingEnabled) {
+                                     const uint16_t viewportWidth, const uint16_t viewportHeight,
+                                     const bool hyphenationEnabled, const bool embeddedStyle,
+                                     const uint8_t imageRendering, const bool focusReadingEnabled) {
   if (!target) {
     LOG_DBG("SCT", "File not open for writing header");
     return;
@@ -471,6 +482,9 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
                                 const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
                                 const uint8_t imageRendering, const bool focusReadingEnabled,
                                 const std::function<void()>& popupFn, const std::function<void(uint8_t)>& progressFn) {
+  // A fresh section can require substantial CSS/layout allocations. Drop
+  // rebuildable glyph and advance caches before streaming or parsing it.
+  releaseFontCachesForBuild(renderer);
   pageCount = 0;
   builtPageCount = 0;
   partial_ = false;
@@ -504,7 +518,7 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     if (!Storage.openFileForWrite("SCT", tmpHtmlPath, tmpHtml)) {
       continue;
     }
-    success = epub->readItemContentsToStream(localPath, tmpHtml, 1024);
+    success = streamEpubItemWithScratch(renderer, *epub, localPath, tmpHtml, 1024);
     fileSize = tmpHtml.size();
     // Explicitly close() file before calling Storage.remove()
     tmpHtml.close();
@@ -654,11 +668,11 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
   return true;
 }
 
-bool Section::resumeIncrementalBuild(
-    const int fontId, const float lineCompression, const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
-    const uint16_t viewportWidth, const uint16_t viewportHeight, const bool hyphenationEnabled,
-    const bool embeddedStyle, const uint8_t imageRendering, const bool focusReadingEnabled,
-    const std::function<void(uint8_t)>& progressFn) {
+bool Section::resumeIncrementalBuild(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
+                                     const uint8_t paragraphAlignment, const uint16_t viewportWidth,
+                                     const uint16_t viewportHeight, const bool hyphenationEnabled,
+                                     const bool embeddedStyle, const uint8_t imageRendering,
+                                     const bool focusReadingEnabled, const std::function<void(uint8_t)>& progressFn) {
   if (!Storage.exists(buildFilePath.c_str()) || !Storage.exists(buildHtmlPath.c_str()) ||
       !Storage.exists(buildIndexPath.c_str())) {
     return false;
@@ -670,12 +684,11 @@ bool Section::resumeIncrementalBuild(
   }
   BuildCheckpointHeader header{};
   const uint32_t layoutHash =
-      buildLayoutHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
-                      viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled);
+      buildLayoutHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth, viewportHeight,
+                      hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled);
   if (checkpoint.read(&header, sizeof(header)) != sizeof(header) || checkpoint.size() < sizeof(header) ||
-      header.magic != BUILD_CHECKPOINT_MAGIC ||
-      header.version != BUILD_CHECKPOINT_VERSION || header.layoutHash != layoutHash ||
-      (checkpoint.size() - sizeof(header)) % sizeof(BuildPageEntry) != 0) {
+      header.magic != BUILD_CHECKPOINT_MAGIC || header.version != BUILD_CHECKPOINT_VERSION ||
+      header.layoutHash != layoutHash || (checkpoint.size() - sizeof(header)) % sizeof(BuildPageEntry) != 0) {
     checkpoint.close();
     return false;
   }
@@ -780,11 +793,14 @@ bool Section::resumeIncrementalBuild(
   return true;
 }
 
-bool Section::beginIncrementalBuild(
-    const int fontId, const float lineCompression, const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
-    const uint16_t viewportWidth, const uint16_t viewportHeight, const bool hyphenationEnabled,
-    const bool embeddedStyle, const uint8_t imageRendering, const bool focusReadingEnabled,
-    const std::function<void(uint8_t)>& progressFn) {
+bool Section::beginIncrementalBuild(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
+                                    const uint8_t paragraphAlignment, const uint16_t viewportWidth,
+                                    const uint16_t viewportHeight, const bool hyphenationEnabled,
+                                    const bool embeddedStyle, const uint8_t imageRendering,
+                                    const bool focusReadingEnabled, const std::function<void(uint8_t)>& progressFn) {
+  // Release caches before resumeIncrementalBuild too: it may allocate parser
+  // state while reopening an existing HTML cache.
+  releaseFontCachesForBuild(renderer);
   if (resumeIncrementalBuild(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
                              viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled,
                              progressFn)) {
@@ -813,7 +829,7 @@ bool Section::beginIncrementalBuild(
       if (!Storage.openFileForWrite("SCT", buildHtmlPath, tmpHtml)) {
         continue;
       }
-      streamed = epub->readItemContentsToStream(localPath, tmpHtml, 1024);
+      streamed = streamEpubItemWithScratch(renderer, *epub, localPath, tmpHtml, 1024);
       tmpHtml.close();
       if (!streamed) {
         Storage.remove(buildHtmlPath.c_str());
@@ -835,8 +851,8 @@ bool Section::beginIncrementalBuild(
   }
   const BuildCheckpointHeader checkpointHeader{
       BUILD_CHECKPOINT_MAGIC, BUILD_CHECKPOINT_VERSION,
-      buildLayoutHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
-                      viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled)};
+      buildLayoutHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth, viewportHeight,
+                      hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled)};
   checkpoint.write(&checkpointHeader, sizeof(checkpointHeader));
   checkpoint.close();
 
@@ -952,8 +968,8 @@ void Section::suspendBuild() {
 
   // Persist only complete pages and only when this pass made progress beyond
   // an older partial. The current parser may still own an unfinished page.
-  const bool worthKeeping = buildParser && buildFile && builtPageCount > 0 &&
-                            (!partial_ || builtPageCount > partialPageCount_);
+  const bool worthKeeping =
+      buildParser && buildFile && builtPageCount > 0 && (!partial_ || builtPageCount > partialPageCount_);
   bool committed = false;
   if (worthKeeping) {
     const uint32_t consumed = static_cast<uint32_t>(buildParser->parseBytesConsumed());
@@ -1018,6 +1034,9 @@ std::unique_ptr<Page> Section::buildPagePreview(const int fontId, const float li
                                                 const bool hyphenationEnabled, const bool embeddedStyle,
                                                 const uint8_t imageRendering, const bool focusReadingEnabled,
                                                 const uint16_t targetPage) {
+  // This bounded preview is the first layout operation on a section-cache
+  // miss, so reclaim page/font caches before its EPUB inflate and parser work.
+  releaseFontCachesForBuild(renderer);
   const auto localPath = epub->getSpineItem(spineIndex).href;
   const auto tmpHtmlPath = epub->getCachePath() + "/.tmp_preview_" + std::to_string(spineIndex) + ".html";
 
@@ -1034,7 +1053,7 @@ std::unique_ptr<Page> Section::buildPagePreview(const int fontId, const float li
     if (!Storage.openFileForWrite("SCT", tmpHtmlPath, tmpHtml)) {
       continue;
     }
-    success = epub->readItemContentsToStream(localPath, tmpHtml, 1024);
+    success = streamEpubItemWithScratch(renderer, *epub, localPath, tmpHtml, 1024);
     tmpHtml.close();
   }
 
