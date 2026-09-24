@@ -363,7 +363,7 @@ class WeReadChapterRangeActivity final : public UiListActivity {
       return;
     }
 
-    const int selected = std::clamp(nav.selected, 0, count - 1);
+    const int selected = std::clamp(nav.selected.load(), 0, count - 1);
     nav.selected = selected;
     freeink::ui::ListProps props;
     props.count = static_cast<uint16_t>(count);
