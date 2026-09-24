@@ -162,12 +162,16 @@ void UITheme::drawCenteredText(const GfxRenderer& renderer, Rect screen, int fon
 }
 
 void UITheme::drawCenteredWrappedText(const GfxRenderer& renderer, Rect screen, const int fontId, const char* text,
-                                      const int maxLines, const bool black, const EpdFontFamily::Style style) {
+                                      const int maxLines, const bool black, const EpdFontFamily::Style style,
+                                      const TextVerticalAlignment verticalAlignment) {
   if (!text || maxLines <= 0) return;
   const auto lines = renderer.wrappedText(fontId, text, screen.width, maxLines, style);
   const int lineHeight = renderer.getLineHeight(fontId);
   const int totalHeight = static_cast<int>(lines.size()) * lineHeight;
-  int y = screen.y + std::max(0, (screen.height - totalHeight) / 2);
+  int y = screen.y;
+  if (verticalAlignment == TextVerticalAlignment::CENTER) {
+    y += std::max(0, (screen.height - totalHeight) / 2);
+  }
   for (const auto& line : lines) {
     drawCenteredText(renderer, screen, fontId, y, line.c_str(), black, style);
     y += lineHeight;

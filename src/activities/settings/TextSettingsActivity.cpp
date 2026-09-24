@@ -327,7 +327,7 @@ void TextSettingsActivity::switchTab(const int direction) {
   constexpr int count = static_cast<int>(Tab::Count);
   tab_ = static_cast<Tab>((static_cast<int>(tab_) + direction + count) % count);
   rebuildRowItems();
-  activeNav().selected = onTabBar ? 0 : activeNav().selected;
+  if (onTabBar) activeNav().selected = 0;
   activeNav().followOnBuild = true;
   requestUpdate();
 }
