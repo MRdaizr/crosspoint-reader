@@ -909,7 +909,9 @@ std::vector<size_t> ParsedText::computeLineBreaks(const GfxRenderer& renderer, c
         }
       }
 
-      if (cost < dp[i]) {
+      // On equal badness, keep the later candidate so CJK text prefers fuller
+      // lines over an unnecessarily early break.
+      if (cost <= dp[i]) {
         dp[i] = cost;
         ans[i] = j;  // j is the index of the last word in this optimal line
       }

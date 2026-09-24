@@ -41,7 +41,8 @@ namespace {
 // v41: Simple HTML table rows are laid out as positioned columns.
 // v42: Parent styles after block closure strip vertical margin/padding so they
 //      are not re-applied to following bare text when paragraph spacing is off.
-constexpr uint8_t SECTION_FILE_VERSION = 42;
+// v43: Equal-cost line breaks prefer longer lines, changing cached CJK layout.
+constexpr uint8_t SECTION_FILE_VERSION = 43;
 // A section being written is never readable. The version is stamped with the
 // final/partial value only after all page tables have been written.
 constexpr uint8_t SECTION_FILE_INCOMPLETE_VERSION = 0;
@@ -67,9 +68,9 @@ constexpr uint32_t BUILD_CHECKPOINT_MAGIC = 0x43504231;  // CPB1
 // its old-format prefix, so invalidate the incremental checkpoint as well.
 // v4 also invalidates partially built sections after the table column layout
 // change, which otherwise could mix old flattened rows with new grid rows.
-// v5 invalidates any checkpoint whose pages lack Ruby payloads; v7 aligns the
-// checkpoint with section semantics v36-v42 and the partial-cache format.
-constexpr uint16_t BUILD_CHECKPOINT_VERSION = 7;
+// v5 invalidates any checkpoint whose pages lack Ruby payloads; v8 aligns the
+// checkpoint with section semantics v36-v43 and the partial-cache format.
+constexpr uint16_t BUILD_CHECKPOINT_VERSION = 8;
 
 void releaseFontCachesForBuild(GfxRenderer& renderer) {
   if (auto* fontCache = renderer.getFontCacheManager()) {
