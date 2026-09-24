@@ -100,6 +100,15 @@ class ChapterHtmlSlimParser {
   };
   std::vector<StyleStackEntry> inlineStyleStack;
   std::vector<BlockStyle> blockStyleStack;  // accumulated block styles from open ancestor elements
+  // Tracks the innermost open list so each <li> gets the right marker. Depth
+  // prevents a hidden nested list's closing tag from popping its visible parent.
+  struct ListContext {
+    bool ordered = false;
+    bool styleNone = false;
+    int counter = 0;
+    int depth = 0;
+  };
+  std::vector<ListContext> listStack;
   CssStyle currentCssStyle;
   bool effectiveBold = false;
   bool effectiveItalic = false;

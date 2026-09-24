@@ -42,7 +42,9 @@ namespace {
 // v42: Parent styles after block closure strip vertical margin/padding so they
 //      are not re-applied to following bare text when paragraph spacing is off.
 // v43: Equal-cost line breaks prefer longer lines, changing cached CJK layout.
-constexpr uint8_t SECTION_FILE_VERSION = 43;
+// v44: Ordered lists number their items, list-style-type: none suppresses markers,
+//      and <ul>/<ol> containers contribute margins/padding to child insets.
+constexpr uint8_t SECTION_FILE_VERSION = 44;
 // A section being written is never readable. The version is stamped with the
 // final/partial value only after all page tables have been written.
 constexpr uint8_t SECTION_FILE_INCOMPLETE_VERSION = 0;

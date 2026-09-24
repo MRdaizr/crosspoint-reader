@@ -16,7 +16,8 @@ namespace fui = freeink::ui;
 
 namespace {
 struct VisibleRowsPrewarmContext {
-  const std::vector<std::string>* labels;
+  const char* (*getter)(const void* ctx, uint32_t absoluteIndex);
+  const void* getterContext;
   std::size_t first;
   std::size_t count;
 };
@@ -25,7 +26,12 @@ const char* getVisibleRowPrewarmText(const void* opaqueContext, const std::uint3
   static constexpr char ellipsis[] = "\xe2\x80\xa6";
   const auto& context = *static_cast<const VisibleRowsPrewarmContext*>(opaqueContext);
   if (index >= context.count) return ellipsis;
-  return (*context.labels)[context.first + index].c_str();
+  return context.getter(context.getterContext, static_cast<uint32_t>(context.first + index));
+}
+
+const char* getVectorRowText(const void* opaqueContext, const uint32_t index) {
+  const auto& labels = *static_cast<const std::vector<std::string>*>(opaqueContext);
+  return index < labels.size() ? labels[index].c_str() : "";
 }
 }  // namespace
 
@@ -101,12 +107,21 @@ void UiListActivity::moveSelectionTo(const int index) {
 
 int UiListActivity::prewarmVisibleListRowsIfNeeded(const int fontId, const std::vector<std::string>& labels,
                                                    int first, int count) {
+  return prewarmVisibleListRowsIfNeeded(fontId, &getVectorRowText, &labels, static_cast<int>(labels.size()), first,
+                                        count);
+}
+
+int UiListActivity::prewarmVisibleListRowsIfNeeded(const int fontId, const ListRowTextGetter getter, const void* ctx,
+                                                   const int rowCount, int first, int count) {
+  if (!getter || rowCount <= 0) {
+    invalidateListFontPrewarm();
+    return 0;
+  }
   if (!renderer.isSdCardFont(fontId)) {
     invalidateListFontPrewarm();
     return 0;
   }
 
-  const int rowCount = static_cast<int>(labels.size());
   first = std::clamp(first, 0, rowCount);
   count = std::clamp(count, 0, rowCount - first);
   if (listFontPrewarmValid && lastPrewarmedFontId == fontId && lastPrewarmedFirst == first &&
@@ -114,7 +129,8 @@ int UiListActivity::prewarmVisibleListRowsIfNeeded(const int fontId, const std::
     return 0;
   }
 
-  const VisibleRowsPrewarmContext context{&labels, static_cast<std::size_t>(first), static_cast<std::size_t>(count)};
+  const VisibleRowsPrewarmContext context{getter, ctx, static_cast<std::size_t>(first),
+                                          static_cast<std::size_t>(count)};
   const int missed = DynamicFont::prewarmIfSdFont(renderer, fontId, &getVisibleRowPrewarmText, &context,
                                                   static_cast<uint32_t>(count + 1));
   lastPrewarmedFontId = fontId;

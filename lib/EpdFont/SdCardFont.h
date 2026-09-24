@@ -23,6 +23,9 @@ class SdCardFont {
  public:
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
   static constexpr uint8_t MAX_STYLES = 4;
+  // prewarmStyle: bitmap chunks could not be allocated or the mini arena cap
+  // was exceeded. The caller may retry with a smaller codepoint prefix.
+  static constexpr int PREWARM_BITMAP_ARENA_TOO_LARGE = -2;
   using TextGetter = const char* (*)(const void* ctx, uint32_t index);
 
   SdCardFont() = default;
@@ -182,6 +185,9 @@ class SdCardFont {
     static_assert(sizeof(BmpInterval16) == 6, "BmpInterval16 must remain compact");
     BmpInterval16* bmpIntervals = nullptr;
     bool intervalsAreBmp16 = false;
+    // True when this style aliases another style's full interval table.
+    // Only the earliest owning style releases the shared allocation.
+    bool intervalsShared = false;
 
     // Persistent kern-class + ligature tables (lazy-loaded on first prewarm).
     // The full kern MATRIX is NOT resident — on Literata-class fonts a single
@@ -215,6 +221,9 @@ class SdCardFont {
     uint32_t miniGlyphCapacity = 0;
     uint32_t miniBitmapCapacity = 0;
     uint32_t miniBitmapUsed = 0;
+    // Estimated bitmap bytes per glyph from the last prewarm attempt; used to
+    // choose a smaller retry after chunk allocation failure.
+    uint32_t measuredBitmapBytesPerGlyph = 0;
     uint8_t miniUnderuseRuns = 0;
     bool miniMetadataOnly = false;
     bool miniHysteresisPending = false;

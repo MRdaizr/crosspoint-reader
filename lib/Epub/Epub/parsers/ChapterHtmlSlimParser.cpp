@@ -51,7 +51,7 @@ constexpr uint8_t TABLE_ROW_SEPARATOR_THICKNESS = 1;
 constexpr int16_t TABLE_MIN_CELL_WIDTH_LINE_HEIGHTS = 3;
 
 constexpr const char* HEADER_TAGS[] = {"h1", "h2", "h3", "h4", "h5", "h6"};
-constexpr const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote"};
+constexpr const char* BLOCK_TAGS[] = {"p", "li", "div", "br", "blockquote", "ul", "ol"};
 constexpr const char* BOLD_TAGS[] = {"b", "strong"};
 constexpr const char* ITALIC_TAGS[] = {"i", "em"};
 constexpr const char* UNDERLINE_TAGS[] = {"u", "ins"};
@@ -1330,9 +1330,27 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       self->updateEffectiveInlineStyle();
 
       if (strcmp(name, "li") == 0) {
-        self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR, false, false,
-                                       self->visibleTextOffset);
-        self->listItemBulletOnly = true;
+        // Innermost open list controls whether an item is numbered, bulleted,
+        // or has no marker. Malformed <li> elements retain the bullet fallback.
+        if (!self->listStack.empty() && self->listStack.back().styleNone) {
+          // No marker: the otherwise-empty block behaves like a paragraph.
+        } else if (!self->listStack.empty() && self->listStack.back().ordered) {
+          self->listStack.back().counter += 1;
+          char marker[16];
+          snprintf(marker, sizeof(marker), "%d.", self->listStack.back().counter);
+          self->currentTextBlock->addWord(marker, EpdFontFamily::REGULAR, false, false, self->visibleTextOffset);
+          self->listItemBulletOnly = true;
+        } else {
+          self->currentTextBlock->addWord("\xe2\x80\xa2", EpdFontFamily::REGULAR, false, false,
+                                          self->visibleTextOffset);
+          self->listItemBulletOnly = true;
+        }
+      } else if (strcmp(name, "ul") == 0 || strcmp(name, "ol") == 0) {
+        ListContext context;
+        context.ordered = strcmp(name, "ol") == 0;
+        context.styleNone = cssStyle.hasListStyleType() && cssStyle.listStyleType == CssListStyleType::None;
+        context.depth = self->depth;
+        self->listStack.push_back(context);
       }
     }
   } else if (matches(name, UNDERLINE_TAGS, std::size(UNDERLINE_TAGS))) {
@@ -1938,6 +1956,13 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       self->listItemBulletOnly = false;
     }
   }
+
+  // Reset numbering/style for sibling lists. A hidden list returns early from
+  // startElement and therefore has no context to pop; compare the saved depth.
+  if ((strcmp(name, "ul") == 0 || strcmp(name, "ol") == 0) && !self->listStack.empty() &&
+      self->listStack.back().depth == self->depth) {
+    self->listStack.pop_back();
+  }
 }
 
 ChapterHtmlSlimParser::~ChapterHtmlSlimParser() {
@@ -1966,6 +1991,8 @@ bool ChapterHtmlSlimParser::beginParsing() {
   blockStyleStack.clear();
   blockStyleStack.reserve(8);
   blockStyleStack.push_back(rootBlockStyle);
+  listStack.clear();
+  listStack.reserve(4);
 
   tableDepth = 0;
   insideTableCell = false;

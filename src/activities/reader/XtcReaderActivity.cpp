@@ -209,10 +209,10 @@ void XtcReaderActivity::renderPage() {
 
   // Calculate buffer size for one page
   // XTG (1-bit): Row-major, ((width+7)/8) * height bytes
-  // XTH (2-bit): Two bit planes, column-major, ((width * height + 7) / 8) * 2 bytes
+  // XTH (2-bit): Two column-major bit planes; each column occupies ceil(height/8) bytes
   size_t pageBufferSize;
   if (bitDepth == 2) {
-    pageBufferSize = ((static_cast<size_t>(pageWidth) * pageHeight + 7) / 8) * 2;
+    pageBufferSize = static_cast<size_t>(pageWidth) * ((static_cast<size_t>(pageHeight) + 7) / 8) * 2;
   } else {
     pageBufferSize = ((pageWidth + 7) / 8) * pageHeight;
   }
@@ -254,7 +254,7 @@ void XtcReaderActivity::renderPage() {
     // - Pixel value = (bit1 << 1) | bit2
     // - Grayscale: 0=White, 1=Dark Grey, 2=Light Grey, 3=Black
 
-    const size_t planeSize = (static_cast<size_t>(pageWidth) * pageHeight + 7) / 8;
+    const size_t planeSize = static_cast<size_t>(pageWidth) * ((static_cast<size_t>(pageHeight) + 7) / 8);
     const uint8_t* plane1 = pageBuffer;              // Bit1 plane
     const uint8_t* plane2 = pageBuffer + planeSize;  // Bit2 plane
     const size_t colBytes = (pageHeight + 7) / 8;    // Bytes per column (100 for 800 height)

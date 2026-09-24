@@ -52,3 +52,27 @@ TEST(Utf8ComposeNfc, ComposesWithinWord) {
   // "Ti" + e+circ+acute + "ng" -> "Tiếng"
   EXPECT_EQ(utf8ComposeNfc("Ti" + std::string("e") + kCombCirc + kCombAcute + "ng"), "Ti\xE1\xBA\xBFng");
 }
+
+TEST(Utf8ComposeNfc, ComposesDecomposedHangul) {
+  // U+1100 HANGUL CHOSEONG KIYEOK + U+1161 JUNGSEONG A (+ U+11A8 JONGSEONG KIYEOK).
+  EXPECT_EQ(utf8ComposeNfc("\xE1\x84\x80\xE1\x85\xA1"), "\xEA\xB0\x80");  // 가
+  EXPECT_EQ(utf8ComposeNfc("\xE1\x84\x80\xE1\x85\xA1\xE1\x86\xA8"), "\xEA\xB0\x81");  // 각
+}
+
+TEST(Utf8ComposeNfcInPlace, ComposesWithoutExpandingBuffer) {
+  char buffer[32] = "e\xCC\x81 and \xE1\x84\x80\xE1\x85\xA1\xE1\x86\xA8";
+  utf8ComposeNfcInPlace(buffer);
+  EXPECT_STREQ(buffer, "\xC3\xA9 and \xEA\xB0\x81");
+}
+
+TEST(Utf8ComposeNfcInPlace, PreservesUncomposableAndMalformedBytes) {
+  char buffer[16] = {'q', static_cast<char>(0xCC), static_cast<char>(0x81), ' ',
+                     static_cast<char>(0xFF), '\0'};
+  utf8ComposeNfcInPlace(buffer);
+  EXPECT_EQ(buffer[0], 'q');
+  EXPECT_EQ(static_cast<unsigned char>(buffer[1]), 0xCC);
+  EXPECT_EQ(static_cast<unsigned char>(buffer[2]), 0x81);
+  EXPECT_EQ(buffer[3], ' ');
+  EXPECT_EQ(static_cast<unsigned char>(buffer[4]), 0xFF);
+  EXPECT_EQ(buffer[5], '\0');
+}

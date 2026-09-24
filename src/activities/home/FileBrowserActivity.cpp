@@ -5,6 +5,7 @@
 #include <HalStorage.h>
 #include <I18n.h>
 #include <Memory.h>
+#include <Utf8.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -27,17 +28,59 @@ constexpr unsigned long GO_HOME_MS = 1000;
 constexpr size_t NAME_BUFFER_SIZE = 500;
 }  // namespace
 
-// Row caches are built before the display helpers' definitions below, so keep
-// their declarations visible to rebuildRowItems().
-std::string getFileName(std::string filename);
-std::string getFileExtension(std::string filename);
+namespace {
+void formatFileName(const std::string& filename, char* buffer, const size_t bufferSize) {
+  if (bufferSize == 0) return;
+  if (filename.empty()) {
+    buffer[0] = '\0';
+    return;
+  }
+  const bool isDirectory = filename.back() == '/';
+  const size_t dot = isDirectory ? filename.size() - 1 : filename.rfind('.');
+  const int length = static_cast<int>(dot == std::string::npos ? filename.size() : dot);
+  const char* format = isDirectory && !UITheme::getInstance().getTheme().showsFileIcons() ? "[%.*s]" : "%.*s";
+  snprintf(buffer, bufferSize, format, length, filename.c_str());
+  // Normalize only the bounded display copy; keep the raw filesystem entry
+  // untouched for opening, renaming, and cache lookups.
+  utf8ComposeNfcInPlace(buffer);
+}
+
+void formatFileExtension(const std::string& filename, char* buffer, const size_t bufferSize) {
+  if (bufferSize == 0) return;
+  buffer[0] = '\0';
+  if (filename.empty() || filename.back() == '/') return;
+  const size_t dot = filename.rfind('.');
+  if (dot != std::string::npos) snprintf(buffer, bufferSize, "%s", filename.c_str() + dot);
+}
+}  // namespace
+
+void FileBrowserActivity::provideRow(void* ctx, const uint16_t index, fui::ListItem& item) {
+  auto* self = static_cast<FileBrowserActivity*>(ctx);
+  if (index >= self->files.size()) return;
+  const auto& entry = self->files[index];
+  formatFileName(entry, self->rowNameBuf, sizeof(self->rowNameBuf));
+  item.label = self->rowNameBuf;
+  formatFileExtension(entry, self->rowExtensionBuf, sizeof(self->rowExtensionBuf));
+  item.value = self->rowExtensionBuf[0] == '\0' ? nullptr : self->rowExtensionBuf;
+  item.actionValue = static_cast<int16_t>(index);
+  // RoundedRaffExt and the current text-first menu intentionally suppress
+  // generic row icons.
+  item.icon = {};
+}
+
+const char* FileBrowserActivity::prewarmRowLabel(const void* ctx, const uint32_t absoluteIndex) {
+  auto* self = const_cast<FileBrowserActivity*>(static_cast<const FileBrowserActivity*>(ctx));
+  if (absoluteIndex >= self->files.size()) return "";
+  formatFileName(self->files[absoluteIndex], self->rowNameBuf, sizeof(self->rowNameBuf));
+  return self->rowNameBuf;
+}
 
 void FileBrowserActivity::loadFiles() {
+  invalidateListFontPrewarm();
   files.clear();
 
   auto root = Storage.open(basepath.c_str());
   if (!root || !root.isDirectory()) {
-    rebuildRowItems();
     return;
   }
 
@@ -46,7 +89,6 @@ void FileBrowserActivity::loadFiles() {
   if (!fileNameBuffer) {
     LOG_ERR("FileBrowser", "fileNameBuffer not allocated");
     root.close();
-    rebuildRowItems();
     return;
   }
 
@@ -75,30 +117,6 @@ void FileBrowserActivity::loadFiles() {
   }
   root.close();
   FsHelpers::sortFileList(files);
-  rebuildRowItems();
-}
-
-void FileBrowserActivity::rebuildRowItems() {
-  invalidateListFontPrewarm();
-  rowsShowFileIcons = UITheme::getInstance().getTheme().showsFileIcons();
-  rowLabels.resize(files.size());
-  rowValues.resize(files.size());
-  rowItems.clear();
-  rowItems.reserve(files.size());
-
-  for (size_t i = 0; i < files.size(); ++i) {
-    rowLabels[i] = getFileName(files[i]);
-    rowValues[i] = getFileExtension(files[i]);
-
-    fui::ListItem item;
-    item.label = rowLabels[i].c_str();
-    item.value = rowValues[i].empty() ? nullptr : rowValues[i].c_str();
-    item.actionValue = static_cast<int16_t>(i);
-    // RoundedRaffExt and the current text-first menu intentionally suppress
-    // all generic row icons.
-    item.icon = {};
-    rowItems.push_back(item);
-  }
 }
 
 void FileBrowserActivity::onEnter() {
@@ -148,9 +166,8 @@ void FileBrowserActivity::onEnter() {
 void FileBrowserActivity::onExit() {
   UiListActivity::onExit();
   files.clear();
-  rowLabels.clear();
-  rowValues.clear();
-  rowItems.clear();
+  rowNameBuf[0] = '\0';
+  rowExtensionBuf[0] = '\0';
   fileNameBuffer.reset();
 }
 
@@ -410,26 +427,6 @@ bool FileBrowserActivity::handleButtons() {
   return false;
 }
 
-std::string getFileName(std::string filename) {
-  if (filename.back() == '/') {
-    filename.pop_back();
-    if (!UITheme::getInstance().getTheme().showsFileIcons()) {
-      return "[" + filename + "]";
-    }
-    return filename;
-  }
-  const auto pos = filename.rfind('.');
-  return filename.substr(0, pos);
-}
-
-std::string getFileExtension(std::string filename) {
-  if (filename.back() == '/') {
-    return "";
-  }
-  const auto pos = filename.rfind('.');
-  return filename.substr(pos);
-}
-
 void FileBrowserActivity::drawChrome() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   std::string folderName =
@@ -461,12 +458,13 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
     screen.centeredText(emptyMessage, emptyStyle);
     return;
   }
-  // Folder labels depend on the active theme (RoundedRaffExt uses the
-  // bracketed text form when icons are disabled).  Rebuild only for a theme
-  // change or if a defensive size check detects stale data; normal repaints
-  // reuse stable pointers into rowLabels/rowValues.
-  if (rowItems.size() != files.size() || rowsShowFileIcons != UITheme::getInstance().getTheme().showsFileIcons()) {
-    rebuildRowItems();
+  // Folder labels depend on the active theme. Resolve them on demand and
+  // invalidate glyph prewarming if the theme changed while this page was paused.
+  const bool showFileIcons = UITheme::getInstance().getTheme().showsFileIcons();
+  if (!rowThemeKnown || rowsShowFileIcons != showFileIcons) {
+    rowsShowFileIcons = showFileIcons;
+    rowThemeKnown = true;
+    invalidateListFontPrewarm();
   }
 
   // A FUI list has one shared label slot.  Bind it to the selected SD face
@@ -476,12 +474,16 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   uiTarget.setFont(freeink::ui::GfxRendererTarget::FONT_SMALL, listFontId);
 
   fui::ListProps props;
-  props.items = rowItems.data(); props.count = static_cast<uint16_t>(rowItems.size()); props.action = ACTION_ROW;
-  props.inputMask = fui::InputTouch; props.valueInset = 8; props.labelText = screen.theme().smallText; props.labelText.maxLines = 2;
+  props.rowProvider = &FileBrowserActivity::provideRow;
+  props.rowProviderCtx = this;
+  props.count = static_cast<uint16_t>(files.size());
+  props.action = ACTION_ROW;
+  props.inputMask = fui::InputTouch; props.valueInset = 8; props.labelText = screen.theme().smallText; props.labelText.maxLines = 1;
   syncListViewport(screen, props);
-  const int first = std::clamp(nav.top, 0, static_cast<int>(rowLabels.size()));
-  const int count = std::min(static_cast<int>(rowLabels.size()) - first, std::max(1, nav.visibleRows));
-  const int missed = prewarmVisibleListRowsIfNeeded(listFontId, rowLabels, first, count);
+  const int first = std::clamp(nav.top, 0, static_cast<int>(files.size()));
+  const int count = std::min(static_cast<int>(files.size()) - first, std::max(1, nav.visibleRows));
+  const int missed = prewarmVisibleListRowsIfNeeded(listFontId, &FileBrowserActivity::prewarmRowLabel, this,
+                                                    static_cast<int>(files.size()), first, count);
   if (missed > 0) {
     LOG_INF("FBR", "visible rows first=%d count=%d SD glyphs missing=%d", first, count, missed);
   }

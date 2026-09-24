@@ -88,6 +88,9 @@ class UiListActivity : public Activity, protected UiAppHost {
   // font, or row data changes. Call invalidateListFontPrewarm() when labels
   // are rebuilt in place.
   int prewarmVisibleListRowsIfNeeded(int fontId, const std::vector<std::string>& labels, int first, int count);
+  using ListRowTextGetter = const char* (*)(const void* ctx, uint32_t absoluteIndex);
+  int prewarmVisibleListRowsIfNeeded(int fontId, ListRowTextGetter getter, const void* ctx, int rowCount, int first,
+                                     int count);
   void invalidateListFontPrewarm() { listFontPrewarmValid = false; }
 
   // --- shared state ----------------------------------------------------------

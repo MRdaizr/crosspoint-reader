@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <Memory.h>
+
 // ============================================================================
 // IMAGE PROCESSING OPTIONS
 // ============================================================================
@@ -168,9 +170,9 @@ BmpReaderError Bitmap::parseHeaders() {
   const bool highColor = !nativePalette;
   if (highColor && dithering) {
     if (USE_ATKINSON) {
-      atkinsonDitherer = new AtkinsonDitherer(width);
+      atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(width).release();
     } else {
-      fsDitherer = new FloydSteinbergDitherer(width);
+      fsDitherer = makeUniqueNoThrow<FloydSteinbergDitherer>(width).release();
     }
   }
 

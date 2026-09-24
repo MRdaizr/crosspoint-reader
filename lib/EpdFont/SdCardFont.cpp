@@ -123,6 +123,12 @@ void SdCardFont::resetStyleMiniData(PerStyle& s) {
 }
 
 void SdCardFont::freeStyleKernLigatureData(PerStyle& s) {
+  // Both font views borrow the resident ligature table. Clear their aliases
+  // before releasing it so a later cache miss cannot observe a dangling pointer.
+  s.stubData.ligaturePairs = nullptr;
+  s.stubData.ligaturePairCount = 0;
+  s.miniData.ligaturePairs = nullptr;
+  s.miniData.ligaturePairCount = 0;
   delete[] s.kernLeftClasses;
   s.kernLeftClasses = nullptr;
   delete[] s.kernRightClasses;
@@ -150,10 +156,15 @@ void SdCardFont::freeStyleMiniKern(PerStyle& s) {
 
 void SdCardFont::freeStyleAll(PerStyle& s) {
   freeStyleMiniData(s);
-  delete[] s.fullIntervals;
+  // A shared table is owned by an earlier style. That style's freeStyleAll()
+  // releases the allocation; deleting it here would double-free it.
+  if (!s.intervalsShared) {
+    delete[] s.fullIntervals;
+    delete[] s.bmpIntervals;
+  }
   s.fullIntervals = nullptr;
-  delete[] s.bmpIntervals;
   s.bmpIntervals = nullptr;
+  s.intervalsShared = false;
   s.intervalsAreBmp16 = false;
   freeStyleKernLigatureData(s);
   s.present = false;
@@ -616,6 +627,14 @@ bool SdCardFont::load(const char* path) {
     uint32_t expectedOffset = 0;
     uint32_t prevLast = 0;
     EpdUnicodeInterval iv{};
+    uint8_t shareCandidates = 0;
+    for (uint8_t k = 0; k < i; ++k) {
+      const auto& owner = styles_[k];
+      if (!owner.present || owner.header.intervalCount != s.header.intervalCount) continue;
+      if (owner.bmpIntervals == nullptr && owner.fullIntervals == nullptr) continue;
+      shareCandidates |= static_cast<uint8_t>(1u << k);
+    }
+
     for (uint32_t j = 0; j < s.header.intervalCount; ++j) {
       if (file.read(reinterpret_cast<uint8_t*>(&iv), sizeof(iv)) != sizeof(iv)) {
         LOG_ERR("SDCF", "Failed to read interval %u for style %u", j, i);
@@ -644,17 +663,47 @@ bool SdCardFont::load(const char* path) {
       if (iv.first > UINT16_MAX || iv.last > UINT16_MAX || iv.offset > UINT16_MAX) {
         canUseBmp16 = false;
       }
+      for (uint8_t k = 0; k < i && shareCandidates != 0; ++k) {
+        if ((shareCandidates & (1u << k)) == 0) continue;
+        const auto& owner = styles_[k];
+        const uint32_t ownerFirst = owner.intervalsAreBmp16 ? owner.bmpIntervals[j].first : owner.fullIntervals[j].first;
+        const uint32_t ownerLast = owner.intervalsAreBmp16 ? owner.bmpIntervals[j].last : owner.fullIntervals[j].last;
+        const uint32_t ownerOffset = owner.intervalsAreBmp16 ? owner.bmpIntervals[j].offset : owner.fullIntervals[j].offset;
+        if (ownerFirst != iv.first || ownerLast != iv.last || ownerOffset != iv.offset) {
+          shareCandidates &= static_cast<uint8_t>(~(1u << k));
+        }
+      }
       expectedOffset += span;
       prevLast = iv.last;
     }
 
-    if (!file.seekSet(s.intervalsFileOffset)) {
+    // Matching interval tables are common across regular/bold/italic styles.
+    // Share only when both styles use the same representation; a BMP16 table
+    // cannot safely stand in for a full-width table.
+    for (uint8_t k = 0; k < i && shareCandidates != 0; ++k) {
+      if ((shareCandidates & (1u << k)) == 0) continue;
+      auto& owner = styles_[k];
+      if (owner.intervalsAreBmp16 != canUseBmp16) continue;
+      s.bmpIntervals = owner.bmpIntervals;
+      s.fullIntervals = owner.fullIntervals;
+      s.intervalsAreBmp16 = owner.intervalsAreBmp16;
+      s.intervalsShared = true;
+      LOG_DBG("SDCF", "Style %u: sharing style %u's %u-interval table (%u B not allocated)", i, k,
+              s.header.intervalCount,
+              s.header.intervalCount *
+                  (canUseBmp16 ? 6u : static_cast<uint32_t>(sizeof(EpdUnicodeInterval))));
+      break;
+    }
+
+    if (!s.intervalsShared && !file.seekSet(s.intervalsFileOffset)) {
       LOG_ERR("SDCF", "Failed to seek back to intervals for style %u", i);
       freeAll();
       return false;
     }
 
-    if (canUseBmp16) {
+    if (s.intervalsShared) {
+      // The validated table is already aliased above.
+    } else if (canUseBmp16) {
       s.bmpIntervals = new (std::nothrow) PerStyle::BmpInterval16[s.header.intervalCount];
       if (!s.bmpIntervals) {
         LOG_ERR("SDCF", "Failed to allocate compact intervals for style %u", i);
@@ -856,7 +905,39 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
   int totalMissed = 0;
   for (uint8_t si = 0; si < MAX_STYLES; si++) {
     if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
-    totalMissed += prewarmStyle(si, codepoints.get(), cpCount, metadataOnly, loadKernLig);
+    int missedForStyle = prewarmStyle(si, codepoints.get(), cpCount, metadataOnly, loadKernLig);
+    if (missedForStyle == PREWARM_BITMAP_ARENA_TOO_LARGE) {
+      auto& style = styles_[si];
+      const uint32_t bytesPerGlyph = style.measuredBitmapBytesPerGlyph;
+      const uint32_t maxAlloc = ESP.getMaxAllocHeap();
+      const uint32_t freeHeap = ESP.getFreeHeap();
+      constexpr uint32_t PREWARM_HEAP_RESERVE = 8 * 1024;
+
+      uint32_t fit = 0;
+      if (bytesPerGlyph > 0 && maxAlloc >= MINI_BM_CHUNK_SIZE && freeHeap > PREWARM_HEAP_RESERVE) {
+        fit = (freeHeap - PREWARM_HEAP_RESERVE) / bytesPerGlyph;
+      }
+      // The failed full-size attempt proves the estimate is optimistic. Always
+      // reduce the batch, even when the aggregate free-heap estimate says it fits.
+      if (fit == 0 || fit >= cpCount) fit = cpCount / 2;
+
+      while (fit > 0 && maxAlloc >= MINI_BM_CHUNK_SIZE) {
+        LOG_DBG("SDCF", "Bitmap retry: %u -> %u glyphs (%u B/glyph, free=%u maxAlloc=%u)", cpCount, fit,
+                bytesPerGlyph, freeHeap, maxAlloc);
+        const int retryMissed = prewarmStyle(si, codepoints.get(), fit, metadataOnly, loadKernLig);
+        if (retryMissed != PREWARM_BITMAP_ARENA_TOO_LARGE) {
+          missedForStyle = retryMissed + static_cast<int>(cpCount - fit);
+          break;
+        }
+        if (fit == 1) {
+          missedForStyle = static_cast<int>(cpCount);
+          break;
+        }
+        fit = std::max<uint32_t>(1, fit / 2);
+      }
+      if (missedForStyle == PREWARM_BITMAP_ARENA_TOO_LARGE) missedForStyle = static_cast<int>(cpCount);
+    }
+    totalMissed += missedForStyle;
   }
 
   stats_.prewarmTotalMs = millis() - startMs;
@@ -1038,13 +1119,22 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   // Release it before allocating any additional bitmap chunks.
   mappings.reset();
 
-  uint32_t totalBitmapSize = 0;
+  uint64_t totalBitmapSize = 0;
 
   if (!metadataOnly) {
     // Compute total bitmap size
     for (uint32_t i = 0; i < validCount; i++) {
+      if (s.miniGlyphs[i].dataLength > MINI_BM_CHUNK_SIZE) {
+        LOG_ERR("SDCF", "Prewarm: glyph %u B exceeds chunk %u B (style %u)", s.miniGlyphs[i].dataLength,
+                MINI_BM_CHUNK_SIZE, styleIdx);
+        file.close();
+        freeStyleMiniData(s);
+        return static_cast<int>(cpCount);
+      }
       totalBitmapSize += s.miniGlyphs[i].dataLength;
     }
+    s.measuredBitmapBytesPerGlyph =
+        static_cast<uint32_t>((totalBitmapSize + validCount - 1) / validCount);
 
     // Read bitmap data sorted by file offset. The virtual `span` offset is
     // decoded into a chunk and an in-chunk offset by miniGlyphBitmap().
@@ -1086,7 +1176,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
         file.close();
 
         freeStyleMiniData(s);
-        return static_cast<int>(cpCount);
+        return PREWARM_BITMAP_ARENA_TOO_LARGE;
       }
       if (!s.miniBitmapChunks[chunkIdx]) {
         s.miniBitmapChunks[chunkIdx] = new (std::nothrow) uint8_t[MINI_BM_CHUNK_SIZE];
@@ -1102,7 +1192,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
           file.close();
 
           freeStyleMiniData(s);
-          return static_cast<int>(cpCount);
+          return PREWARM_BITMAP_ARENA_TOO_LARGE;
         }
         if (chunkIdx + 1 > s.miniBitmapChunkCount) s.miniBitmapChunkCount = chunkIdx + 1;
       }

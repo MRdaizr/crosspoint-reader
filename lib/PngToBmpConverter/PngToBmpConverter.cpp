@@ -518,20 +518,24 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
   const ScopedCleanup releaseScanlineScratch{[scanlineScratch]() {
     if (scanlineScratch != nullptr) buildscratch::release(scanlineScratch);
   }};
+  std::unique_ptr<uint8_t[]> scanlineHeap;
   if (scanlineScratch != nullptr) {
     ctx.currentRow = scanlineScratch;
     ctx.previousRow = scanlineScratch + rawRowBytes;
     memset(ctx.previousRow, 0, rawRowBytes);
   } else {
-    ctx.currentRow = static_cast<uint8_t*>(malloc(rawRowBytes));
-    ctx.previousRow = static_cast<uint8_t*>(calloc(rawRowBytes, 1));
+    // Keep the fallback scanlines contiguous as well, so both paths use one
+    // allocation and the build-scratch arena remains the preferred fast path.
+    scanlineHeap = makeUniqueNoThrow<uint8_t[]>(scanlineBytes);
+    if (!scanlineHeap) {
+      LOG_ERR("PNG", "Failed to allocate scanline buffers (%u bytes each)", rawRowBytes);
+      return false;
+    }
+    ctx.currentRow = scanlineHeap.get();
+    ctx.previousRow = ctx.currentRow + rawRowBytes;
   }
   if (!ctx.currentRow || !ctx.previousRow) {
     LOG_ERR("PNG", "Failed to allocate scanline buffers (%u bytes each)", rawRowBytes);
-    if (scanlineScratch == nullptr) {
-      free(ctx.currentRow);
-      free(ctx.previousRow);
-    }
     return false;
   }
 
@@ -567,20 +571,12 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
 
   if (!foundIdat) {
     LOG_ERR("PNG", "No IDAT chunk found");
-    if (scanlineScratch == nullptr) {
-      free(ctx.currentRow);
-      free(ctx.previousRow);
-    }
     return false;
   }
 
   // Initialize streaming decompressor with 32KB ring buffer for back-reference history
   if (!ctx.reader.init(true)) {
     LOG_ERR("PNG", "Failed to init inflate reader");
-    if (scanlineScratch == nullptr) {
-      free(ctx.currentRow);
-      free(ctx.previousRow);
-    }
     return false;
   }
   ctx.reader.setReadCallback(pngIdatReadCallback);
@@ -631,60 +627,58 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
     bytesPerRow = (outWidth * 2 + 31) / 32 * 4;
   }
 
-  // Allocate BMP row buffer
-  auto* rowBuffer = static_cast<uint8_t*>(malloc(bytesPerRow));
-  if (!rowBuffer) {
-    LOG_ERR("PNG", "Failed to allocate row buffer");
-    if (scanlineScratch == nullptr) {
-      free(ctx.currentRow);
-      free(ctx.previousRow);
-    }
+  const size_t rowScratchBytes = static_cast<size_t>(bytesPerRow) + static_cast<size_t>(width);
+  auto rowScratch = makeUniqueNoThrow<uint8_t[]>(rowScratchBytes);
+  if (!rowScratch) {
+    LOG_ERR("PNG", "Failed to allocate row buffers (%u bytes)", static_cast<unsigned>(rowScratchBytes));
     return false;
   }
+  uint8_t* rowBuffer = rowScratch.get();
+  uint8_t* grayRow = rowBuffer + bytesPerRow;
 
   // Create ditherers (same as JpegToBmpConverter)
-  AtkinsonDitherer* atkinsonDitherer = nullptr;
-  FloydSteinbergDitherer* fsDitherer = nullptr;
-  Atkinson1BitDitherer* atkinson1BitDitherer = nullptr;
+  std::unique_ptr<AtkinsonDitherer> atkinsonDitherer;
+  std::unique_ptr<FloydSteinbergDitherer> fsDitherer;
+  std::unique_ptr<Atkinson1BitDitherer> atkinson1BitDitherer;
 
   if (oneBit) {
-    atkinson1BitDitherer = new Atkinson1BitDitherer(outWidth);
+    atkinson1BitDitherer = makeUniqueNoThrow<Atkinson1BitDitherer>(outWidth);
+    if (!atkinson1BitDitherer || !atkinson1BitDitherer->isValid()) {
+      LOG_ERR("PNG", "OOM: Atkinson1BitDitherer or row buffers");
+      return false;
+    }
   } else if (!USE_8BIT_OUTPUT) {
     if (USE_ATKINSON) {
-      atkinsonDitherer = new AtkinsonDitherer(outWidth);
+      atkinsonDitherer = makeUniqueNoThrow<AtkinsonDitherer>(outWidth);
+      if (!atkinsonDitherer || !atkinsonDitherer->isValid()) {
+        LOG_ERR("PNG", "OOM: AtkinsonDitherer or row buffers");
+        return false;
+      }
     } else if (USE_FLOYD_STEINBERG) {
-      fsDitherer = new FloydSteinbergDitherer(outWidth);
+      fsDitherer = makeUniqueNoThrow<FloydSteinbergDitherer>(outWidth);
+      if (!fsDitherer || !fsDitherer->isValid()) {
+        LOG_ERR("PNG", "OOM: FloydSteinbergDitherer or row buffers");
+        return false;
+      }
     }
   }
 
   // Scaling accumulators
+  std::unique_ptr<uint32_t[]> scaleScratch;
   uint32_t* rowAccum = nullptr;
-  uint16_t* rowCount = nullptr;
+  uint32_t* rowCount = nullptr;
   int currentOutY = 0;
   uint32_t nextOutY_srcStart = 0;
 
   if (needsScaling) {
-    rowAccum = new uint32_t[outWidth]();
-    rowCount = new uint16_t[outWidth]();
-    nextOutY_srcStart = scaleY_fp;
-  }
-
-  // Allocate grayscale row buffer - batch-convert each scanline to avoid
-  // per-pixel getPixelGray() switch overhead in the hot loops
-  auto* grayRow = static_cast<uint8_t*>(malloc(width));
-  if (!grayRow) {
-    LOG_ERR("PNG", "Failed to allocate grayscale row buffer");
-    delete[] rowAccum;
-    delete[] rowCount;
-    delete atkinsonDitherer;
-    delete fsDitherer;
-    delete atkinson1BitDitherer;
-    free(rowBuffer);
-    if (scanlineScratch == nullptr) {
-      free(ctx.currentRow);
-      free(ctx.previousRow);
+    scaleScratch = makeUniqueNoThrow<uint32_t[]>(static_cast<size_t>(outWidth) * 2);
+    if (!scaleScratch) {
+      LOG_ERR("PNG", "OOM: scaling accumulators");
+      return false;
     }
-    return false;
+    rowAccum = scaleScratch.get();
+    rowCount = rowAccum + outWidth;
+    nextOutY_srcStart = scaleY_fp;
   }
 
   bool success = true;
@@ -818,7 +812,7 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
         }
         // Moving to next source row - reset accumulators
         memset(rowAccum, 0, outWidth * sizeof(uint32_t));
-        memset(rowCount, 0, outWidth * sizeof(uint16_t));
+        memset(rowCount, 0, outWidth * sizeof(uint32_t));
       }
     }
 
@@ -826,19 +820,6 @@ bool PngToBmpConverter::pngFileToBmpStreamInternal(HalFile& pngFile, Print& bmpO
     uint8_t* temp = ctx.previousRow;
     ctx.previousRow = ctx.currentRow;
     ctx.currentRow = temp;
-  }
-
-  // Clean up
-  free(grayRow);
-  delete[] rowAccum;
-  delete[] rowCount;
-  delete atkinsonDitherer;
-  delete fsDitherer;
-  delete atkinson1BitDitherer;
-  free(rowBuffer);
-  if (scanlineScratch == nullptr) {
-    free(ctx.currentRow);
-    free(ctx.previousRow);
   }
 
   if (success) {

@@ -28,14 +28,14 @@ class FileBrowserActivity final : public UiListActivity {
   std::string basepath = "/";
   std::vector<std::string> files;
   std::unique_ptr<char[]> fileNameBuffer;
-  std::vector<std::string> rowLabels;
-  std::vector<std::string> rowValues;
-  std::vector<freeink::ui::ListItem> rowItems;
-  // Row strings and ListItems alias the vectors above.  Build them only when
-  // the directory changes; rebuilding them during every render can invalidate
-  // pointers while the render task is drawing a list.
+  // FUI resolves only visible rows, so these buffers can be reused for each
+  // provider call instead of retaining a display string and ListItem per file.
+  char rowNameBuf[512]{};
+  char rowExtensionBuf[512]{};
+  static void provideRow(void* ctx, uint16_t index, freeink::ui::ListItem& item);
+  static const char* prewarmRowLabel(const void* ctx, uint32_t absoluteIndex);
   bool rowsShowFileIcons = false;
-  void rebuildRowItems();
+  bool rowThemeKnown = false;
 
   // Data loading
   void loadFiles();
