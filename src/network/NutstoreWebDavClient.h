@@ -32,5 +32,4 @@ class NutstoreWebDavClient {
   std::string rootPath;
 
   std::string buildCollectionUrl(const std::string& remotePath) const;
-  std::string relativeFromHref(const std::string& href) const;
 };
