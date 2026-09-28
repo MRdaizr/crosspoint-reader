@@ -23,6 +23,7 @@
 #include "html/FirmwarePageHtml.generated.h"
 #include "html/HomePageHtml.generated.h"
 #include "html/SettingsPageHtml.generated.h"
+#include "html/TodoPageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
 #include "util/TaskWatchdog.h"
@@ -178,6 +179,7 @@ void CrossPointWebServer::begin() {
   LOG_DBG("WEB", "Setting up routes...");
   server->on("/", HTTP_GET, [this] { handleRoot(); });
   server->on("/files", HTTP_GET, [this] { handleFileList(); });
+  server->on("/todos", HTTP_GET, [this] { handleTodosPage(); });
   server->on("/js/jszip.min.js", HTTP_GET, [this] { handleJszip(); });
 
   server->on("/api/status", HTTP_GET, [this] { handleStatus(); });
@@ -517,6 +519,11 @@ bool CrossPointWebServer::isEpubFile(const String& filename) const { return FsHe
 
 void CrossPointWebServer::handleFileList() const {
   sendHtmlContent(server.get(), FilesPageHtml, sizeof(FilesPageHtml));
+}
+
+void CrossPointWebServer::handleTodosPage() const {
+  sendHtmlContent(server.get(), TodoPageHtml, sizeof(TodoPageHtml));
+  LOG_DBG("WEB", "Served to-do page");
 }
 
 void CrossPointWebServer::handleFileListData() const {
