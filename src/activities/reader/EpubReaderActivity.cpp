@@ -177,9 +177,31 @@ bool EpubReaderActivity::loadBook() {
     LOG_ERR("ERS", "Cannot load EPUB with an empty path");
     return false;
   }
-  auto loaded = ReaderActivity::loadEpub(bookPath);
-  if (!loaded) return false;
-  epub = std::shared_ptr<Epub>(std::move(loaded));
+
+  auto loadedEpub = makeUniqueNoThrow<Epub>(bookPath, "/.crosspoint");
+  if (!loadedEpub) {
+    LOG_ERR("ERS", "Failed to allocate EPUB object");
+    return false;
+  }
+
+  // A fresh book needs streaming ZIP inflation while its spine/TOC cache is
+  // built. Lend the framebuffer as BuildScratch so the 32KB inflate window
+  // does not depend on a contiguous heap block on memory-constrained devices.
+  const bool uncached = !Storage.exists((loadedEpub->getCachePath() + "/book.bin").c_str());
+  if (uncached) GUI.drawPopup(renderer, tr(STR_INDEXING));
+
+  bool loaded = false;
+  {
+    std::optional<GfxRenderer::FrameBufferLoan> framebufferLoan;
+    if (uncached) framebufferLoan.emplace(renderer);
+    loaded = loadedEpub->load(true, SETTINGS.embeddedStyle == 0);
+  }
+  if (!loaded) {
+    LOG_ERR("ERS", "Failed to load EPUB");
+    return false;
+  }
+
+  epub = std::shared_ptr<Epub>(std::move(loadedEpub));
   return true;
 }
 

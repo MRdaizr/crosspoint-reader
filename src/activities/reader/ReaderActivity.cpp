@@ -8,7 +8,6 @@
 
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
-#include "Epub.h"
 #include "EpubReaderActivity.h"
 #include "RecentBooksStore.h"
 #include "ReadingStatsStore.h"
@@ -44,25 +43,6 @@ std::unique_ptr<ReaderActivity> ReaderActivity::create(GfxRenderer& renderer, Ma
     return makeUniqueNoThrow<TxtReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
   }
   return makeUniqueNoThrow<EpubReaderActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
-}
-
-std::unique_ptr<Epub> ReaderActivity::loadEpub(const std::string& path) {
-  if (!Storage.exists(path.c_str())) {
-    LOG_ERR("READER", "File does not exist: %s", path.c_str());
-    return nullptr;
-  }
-
-  auto epub = makeUniqueNoThrow<Epub>(path, "/.crosspoint");
-  if (!epub) {
-    LOG_ERR("READER", "Failed to allocate EPUB object");
-    return nullptr;
-  }
-  if (epub->load(true, SETTINGS.embeddedStyle == 0)) {
-    return epub;
-  }
-
-  LOG_ERR("READER", "Failed to load epub");
-  return nullptr;
 }
 
 std::unique_ptr<Xtc> ReaderActivity::loadXtc(const std::string& path) {
