@@ -1754,11 +1754,12 @@
 <div class="modal-overlay" id="renameModal">
   <div class="modal">
     <button class="modal-close" onclick="closeRenameModal()">&times;</button>
-    <h3>✏️ Rename File</h3>
+    <h3 id="renameModalTitle">✏️ Rename File</h3>
     <div class="folder-form">
       <p class="file-info">Renaming <strong id="renameItemName"></strong></p>
-      <input type="text" id="renameNewName" class="folder-input" placeholder="New file name...">
+      <input type="text" id="renameNewName" class="folder-input" placeholder="New name...">
       <input type="hidden" id="renameItemPath">
+      <input type="hidden" id="renameItemType" value="file">
       <button class="rename-btn-confirm" onclick="confirmRename()">Rename</button>
       <button class="delete-btn-cancel" onclick="closeRenameModal()">Cancel</button>
     </div>
@@ -1769,12 +1770,14 @@
 <div class="modal-overlay" id="moveModal">
   <div class="modal">
     <button class="modal-close" onclick="closeMoveModal()">&times;</button>
-    <h3>📂 Move File</h3>
+    <h3 id="moveModalTitle">📂 Move File</h3>
     <div class="folder-form">
       <p class="file-info">Moving <strong id="moveItemName"></strong></p>
       <input type="text" id="moveDestPath" class="folder-input" list="moveFolderOptions" placeholder="/Destination/Folder">
+      <p id="moveFolderHint" class="file-info" style="display:none;">Choose a destination outside this folder and its subfolders. Existing targets are never overwritten.</p>
       <datalist id="moveFolderOptions"></datalist>
       <input type="hidden" id="moveItemPath">
+      <input type="hidden" id="moveItemType" value="file">
       <button class="move-btn-confirm" onclick="confirmMove()">Move</button>
       <button class="delete-btn-cancel" onclick="closeMoveModal()">Cancel</button>
     </div>
@@ -1990,7 +1993,11 @@
           fileTableContent += `<td><span class="file-icon">📁</span><a href="/files?path=${encodeURIComponent(folderPath)}" class="folder-link">${escapeHtml(file.name)}</a></td>`;
           fileTableContent += '<td><span class="folder-badge">FOLDER</span></td>';
           fileTableContent += '<td>-</td>';
-          fileTableContent += `<td class="actions-col"><div class="action-icon-group"><button class="delete-btn" data-action="delete" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(folderPath)}" data-folder="true" title="Delete folder">🗑️</button></div></td>`;
+          fileTableContent += `<td class="actions-col"><div class="action-icon-group">`;
+          fileTableContent += `<button class="move-btn" data-action="move" data-type="folder" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(folderPath)}" title="Move folder">📂</button>`;
+          fileTableContent += `<button class="rename-btn" data-action="rename" data-type="folder" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(folderPath)}" title="Rename folder">✏️</button>`;
+          fileTableContent += `<button class="delete-btn" data-action="delete" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(folderPath)}" data-folder="true" title="Delete folder">🗑️</button>`;
+          fileTableContent += `</div></td>`;
           fileTableContent += '</tr>';
         } else {
           let filePath = currentPath;
@@ -2006,8 +2013,8 @@
           fileTableContent += file.isEpub ? '<td><span class="epub-badge">EPUB</span></td>' : `<td>${escapeHtml(file.name.split('.').pop().toUpperCase())}</td>`;
           fileTableContent += `<td>${formatFileSize(file.size)}</td>`;
           fileTableContent += `<td class="actions-col"><div class="action-icon-group">`;
-          fileTableContent += `<button class="move-btn" data-action="move" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(filePath)}" title="Move file">📂</button>`;
-          fileTableContent += `<button class="rename-btn" data-action="rename" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(filePath)}" title="Rename file">✏️</button>`;
+          fileTableContent += `<button class="move-btn" data-action="move" data-type="file" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(filePath)}" title="Move file">📂</button>`;
+          fileTableContent += `<button class="rename-btn" data-action="rename" data-type="file" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(filePath)}" title="Rename file">✏️</button>`;
           fileTableContent += `<button class="delete-btn" data-action="delete" data-name="${escapeHtml(file.name)}" data-path="${escapeHtml(filePath)}" data-folder="false" title="Delete file">🗑️</button>`;
           fileTableContent += `</div></td>`;
           fileTableContent += '</tr>';
@@ -2908,10 +2915,11 @@
       if (!btn) return;
       const name = btn.dataset.name;
       const path = btn.dataset.path;
+      const isFolder = btn.dataset.type === 'folder';
       if (btn.dataset.action === 'move') {
-        openMoveModal(name, path);
+        openMoveModal(name, path, isFolder);
       } else if (btn.dataset.action === 'rename') {
-        openRenameModal(name, path);
+        openRenameModal(name, path, isFolder);
       } else if (btn.dataset.action === 'delete') {
         openDeleteModal(name, path, btn.dataset.folder === 'true');
       }
@@ -5541,9 +5549,11 @@ function retryAllFailedUploads() {
   }
 
   // Rename functions
-  function openRenameModal(name, path) {
-    document.getElementById('renameItemName').textContent = '📄 ' + name;
+  function openRenameModal(name, path, isFolder = false) {
+    document.getElementById('renameItemName').textContent = (isFolder ? '📁 ' : '📄 ') + name;
+    document.getElementById('renameModalTitle').textContent = isFolder ? '✏️ Rename Folder' : '✏️ Rename File';
     document.getElementById('renameItemPath').value = path;
+    document.getElementById('renameItemType').value = isFolder ? 'folder' : 'file';
     document.getElementById('renameNewName').value = name;
     document.getElementById('renameModal').classList.add('open');
     setTimeout(() => {
@@ -5566,7 +5576,7 @@ function retryAllFailedUploads() {
       return;
     }
     if (newName.includes('/') || newName.includes('\\')) {
-      alert('File name cannot include slashes.');
+      alert('Name cannot include slashes.');
       return;
     }
 
@@ -5612,11 +5622,22 @@ function retryAllFailedUploads() {
     return idx <= 0 ? '/' : normalized.slice(0, idx);
   }
 
+  function canUseMoveDestination(path) {
+    if (document.getElementById('moveItemType').value !== 'folder') return true;
+    const source = normalizePath(document.getElementById('moveItemPath').value).toLowerCase();
+    const destination = normalizePath(path).toLowerCase();
+    return destination !== source && !destination.startsWith(source + '/');
+  }
+
   async function loadMoveFolderOptions() {
     const options = new Set();
     options.add('/');
+    const addOption = path => {
+      const normalized = normalizePath(path);
+      if (canUseMoveDestination(normalized)) options.add(normalized);
+    };
     const parent = getParentPath(currentPath);
-    if (parent) options.add(parent);
+    if (parent) addOption(parent);
 
     async function fetchFolders(path) {
       try {
@@ -5631,7 +5652,7 @@ function retryAllFailedUploads() {
     const rootFiles = await fetchFolders('/');
     rootFiles.forEach(file => {
       if (file.isDirectory) {
-        options.add('/' + file.name);
+        addOption('/' + file.name);
       }
     });
 
@@ -5642,7 +5663,7 @@ function retryAllFailedUploads() {
           let folderPath = currentPath;
           if (!folderPath.endsWith('/')) folderPath += '/';
           folderPath += file.name;
-          options.add(folderPath);
+          addOption(folderPath);
         }
       });
     }
@@ -5656,9 +5677,12 @@ function retryAllFailedUploads() {
     });
   }
 
-  function openMoveModal(name, path) {
-    document.getElementById('moveItemName').textContent = '📄 ' + name;
+  function openMoveModal(name, path, isFolder = false) {
+    document.getElementById('moveItemName').textContent = (isFolder ? '📁 ' : '📄 ') + name;
+    document.getElementById('moveModalTitle').textContent = isFolder ? '📂 Move Folder' : '📂 Move File';
     document.getElementById('moveItemPath').value = path;
+    document.getElementById('moveItemType').value = isFolder ? 'folder' : 'file';
+    document.getElementById('moveFolderHint').style.display = isFolder ? 'block' : 'none';
     document.getElementById('moveDestPath').value = currentPath === '/' ? '/' : currentPath;
     document.getElementById('moveModal').classList.add('open');
     loadMoveFolderOptions();
@@ -5679,6 +5703,14 @@ function retryAllFailedUploads() {
       alert('Please enter a destination folder.');
       return;
     }
+    if (!canUseMoveDestination(destPath)) {
+      alert('A folder cannot be moved into itself or one of its subfolders.');
+      return;
+    }
+    const isFolder = document.getElementById('moveItemType').value === 'folder';
+    if (isFolder && !confirm('Move this folder and all its contents? Existing files and folders will not be overwritten.')) {
+      return;
+    }
 
     const formData = new FormData();
     formData.append('path', path);
@@ -5689,6 +5721,7 @@ function retryAllFailedUploads() {
 
     xhr.onload = function() {
       if (xhr.status === 200) {
+        if (xhr.responseText.includes('could not be saved')) alert(xhr.responseText);
         window.location.reload();
       } else {
         alert('Failed to move: ' + xhr.responseText);

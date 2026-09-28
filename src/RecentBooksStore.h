@@ -48,6 +48,9 @@ class RecentBooksStore : public PersistableStore<RecentBooksStore> {
   void updatePath(const std::string& oldPath, const std::string& newPath, const std::string& oldCachePath,
                   const std::string& newCachePath);
 
+  // Rebase recent-book paths and cached cover paths after a directory move or rename.
+  bool updatePathPrefix(const std::string& oldPrefix, const std::string& newPrefix);
+
   // True if the book's backing file is no longer present on the SD card.
   static bool isMissing(const RecentBook& book);
 

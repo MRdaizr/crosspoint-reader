@@ -8,12 +8,26 @@
 #include <Xtc.h>
 
 #include <algorithm>
+#include <cctype>
 #include <iterator>
+
+#include "util/BookCacheUtils.h"
 
 namespace {
 constexpr uint8_t RECENT_BOOKS_FILE_VERSION = 3;
 constexpr char RECENT_BOOKS_FILE_BIN[] = "/.crosspoint/recent.bin";
 constexpr char RECENT_BOOKS_FILE_BAK[] = "/.crosspoint/recent.bin.bak";
+
+bool isPathAtOrBelow(const std::string& path, const std::string& prefix) {
+  if (path.size() < prefix.size()) return false;
+  for (size_t i = 0; i < prefix.size(); ++i) {
+    if (std::tolower(static_cast<unsigned char>(path[i])) !=
+        std::tolower(static_cast<unsigned char>(prefix[i]))) {
+      return false;
+    }
+  }
+  return path.size() == prefix.size() || path[prefix.size()] == '/';
+}
 }  // namespace
 
 void RecentBooksStore::toJson(JsonDocument& doc) const {
@@ -108,6 +122,25 @@ void RecentBooksStore::updatePath(const std::string& oldPath, const std::string&
     it->coverBmpPath = newCachePath + it->coverBmpPath.substr(oldCachePath.size());
   }
   saveToFile();
+}
+
+bool RecentBooksStore::updatePathPrefix(const std::string& oldPrefix, const std::string& newPrefix) {
+  if (oldPrefix.empty() || newPrefix.empty()) return false;
+  bool changed = false;
+  for (auto& book : recentBooks) {
+    if (!isPathAtOrBelow(book.path, oldPrefix)) continue;
+    const std::string oldPath = book.path;
+    const std::string newPath = newPrefix + oldPath.substr(oldPrefix.size());
+    const std::string oldCachePath = getBookCachePath(oldPath);
+    const std::string newCachePath = getBookCachePath(newPath);
+    book.path = newPath;
+    if (!oldCachePath.empty() && !newCachePath.empty() && !book.coverBmpPath.empty() &&
+        book.coverBmpPath.rfind(oldCachePath, 0) == 0) {
+      book.coverBmpPath = newCachePath + book.coverBmpPath.substr(oldCachePath.size());
+    }
+    changed = true;
+  }
+  return !changed || saveToFile();
 }
 
 bool RecentBooksStore::isMissing(const RecentBook& book) { return !Storage.exists(book.path.c_str()); }

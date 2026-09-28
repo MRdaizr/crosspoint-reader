@@ -6,6 +6,19 @@
 #include <Txt.h>
 #include <Xtc.h>
 
+std::string getBookCachePath(const std::string& path) {
+  if (FsHelpers::hasEpubExtension(path)) {
+    return Epub(path, "/.crosspoint").getCachePath();
+  }
+  if (FsHelpers::hasXtcExtension(path)) {
+    return Xtc(path, "/.crosspoint").getCachePath();
+  }
+  if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) {
+    return Txt(path, "/.crosspoint").getCachePath();
+  }
+  return {};
+}
+
 bool isBookCacheDirectoryName(const char* name) {
   if (!name) {
     return false;
@@ -25,7 +38,7 @@ void clearBookCache(const std::string& path) {
     Epub(path, "/.crosspoint").clearCache();
   } else if (FsHelpers::hasXtcExtension(path)) {
     Xtc(path, "/.crosspoint").clearCache();
-  } else if (FsHelpers::hasTxtExtension(path)) {
+  } else if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) {
     Txt(path, "/.crosspoint").clearCache();
   } else {
     return;

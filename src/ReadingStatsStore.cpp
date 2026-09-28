@@ -13,6 +13,7 @@
 #include <utility>
 
 #include "util/BookIdentity.h"
+#include "util/BookCacheUtils.h"
 #include "util/TimeUtils.h"
 
 namespace {
@@ -24,6 +25,17 @@ constexpr unsigned long CHECKPOINT_MS = 10UL * 60UL * 1000UL;
 constexpr unsigned long RETRY_MS = 30UL * 1000UL;
 constexpr uint64_t MIN_SESSION_MS = 3ULL * 60ULL * 1000ULL;
 constexpr size_t MAX_SESSION_LOG = 256;
+
+bool isPathAtOrBelow(const std::string& path, const std::string& prefix) {
+  if (path.size() < prefix.size()) return false;
+  for (size_t i = 0; i < prefix.size(); ++i) {
+    if (std::tolower(static_cast<unsigned char>(path[i])) !=
+        std::tolower(static_cast<unsigned char>(prefix[i]))) {
+      return false;
+    }
+  }
+  return path.size() == prefix.size() || path[prefix.size()] == '/';
+}
 
 void addDay(std::vector<ReadingDayStats>& days, uint32_t ordinal, uint64_t milliseconds) {
   if (!ordinal || !milliseconds) return;
@@ -372,12 +384,18 @@ bool ReadingStatsStore::updateBookPathPrefix(const std::string& oldPrefix, const
   bool changed = false;
   for (auto& book : books) {
     const std::string current = BookIdentity::normalizePath(book.path);
-    if (current != oldBase && current.rfind(oldBase + "/", 0) != 0) continue;
+    if (!isPathAtOrBelow(current, oldBase)) continue;
     const std::string rebased = newBase + current.substr(oldBase.size());
     book.path = rebased;
+    const std::string oldCachePath = getBookCachePath(current);
+    const std::string newCachePath = getBookCachePath(rebased);
+    if (!oldCachePath.empty() && !newCachePath.empty() && !book.coverBmpPath.empty() &&
+        book.coverBmpPath.rfind(oldCachePath, 0) == 0) {
+      book.coverBmpPath = newCachePath + book.coverBmpPath.substr(oldCachePath.size());
+    }
     for (auto& knownPath : book.knownPaths) {
       const std::string normalizedKnown = BookIdentity::normalizePath(knownPath);
-      if (normalizedKnown == oldBase || normalizedKnown.rfind(oldBase + "/", 0) == 0)
+      if (isPathAtOrBelow(normalizedKnown, oldBase))
         knownPath = newBase + normalizedKnown.substr(oldBase.size());
     }
     std::sort(book.knownPaths.begin(), book.knownPaths.end());
@@ -386,7 +404,7 @@ bool ReadingStatsStore::updateBookPathPrefix(const std::string& oldPrefix, const
   }
   if (!lastSessionSnapshot.path.empty()) {
     const std::string current = BookIdentity::normalizePath(lastSessionSnapshot.path);
-    if (current == oldBase || current.rfind(oldBase + "/", 0) == 0) {
+    if (isPathAtOrBelow(current, oldBase)) {
       lastSessionSnapshot.path = newBase + current.substr(oldBase.size());
       changed = true;
     }

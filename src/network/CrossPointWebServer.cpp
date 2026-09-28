@@ -8,15 +8,21 @@
 #include <WiFi.h>
 
 #include <algorithm>
+#include <string>
+#include <vector>
 
 #include "CrossPointSettings.h"
+#include "CrossPointState.h"
 #include "FirmwareFlasher.h"
 #include "NutstoreConfigStore.h"
-#include "network/NutstoreSync.h"
 #include "OpdsServerStore.h"
+#include "RecentBooksStore.h"
+#include "ReadingStatsStore.h"
 #include "SdCardFontSystem.h"
 #include "SettingsList.h"
 #include "TodoStore.h"
+#include "activities/ActivityManager.h"
+#include "network/NutstoreSync.h"
 #include "WebDAVHandler.h"
 #include "WifiCredentialStore.h"
 #include "html/FilesPageHtml.generated.h"
@@ -26,6 +32,7 @@
 #include "html/TodoPageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
 #include "util/BookCacheUtils.h"
+#include "util/BookmarkUtil.h"
 #include "util/TaskWatchdog.h"
 
 namespace {
@@ -36,6 +43,9 @@ constexpr uint16_t UDP_PORTS[] = {54982, 48123, 39001, 44044, 59678};
 constexpr uint16_t LOCAL_UDP_PORT = 8134;
 constexpr const char* WEB_FIRMWARE_PATH = "/.crosspoint/web_firmware.bin";
 constexpr uint8_t ESP_IMAGE_MAGIC = 0xE9;
+constexpr size_t MAX_TRACKED_BOOKS_PER_PATH_MOVE = 256;
+constexpr size_t MAX_DIRECTORY_MOVE_ENTRIES = 8192;
+constexpr uint8_t MAX_DIRECTORY_MOVE_DEPTH = 16;
 
 // Static pointer for WebSocket callback (WebSocketsServer requires C-style callback)
 CrossPointWebServer* wsInstance = nullptr;
@@ -77,11 +87,232 @@ bool isProtectedItemName(const String& name) {
     return true;
   }
   for (const auto* item : HIDDEN_ITEMS) {
-    if (name.equals(item)) {
+    if (name.equalsIgnoreCase(item)) {
       return true;
     }
   }
   return false;
+}
+
+bool isProtectedPath(const String& path) {
+  size_t start = 1;
+  for (size_t i = 1; i <= path.length(); ++i) {
+    if (i != path.length() && path.charAt(i) != '/') continue;
+    if (i > start && isProtectedItemName(path.substring(start, i))) return true;
+    start = i + 1;
+  }
+  return false;
+}
+
+bool isPathAtOrBelow(const String& path, const String& prefix) {
+  if (path.length() < prefix.length() || !path.substring(0, prefix.length()).equalsIgnoreCase(prefix)) return false;
+  return path.length() == prefix.length() || path.charAt(prefix.length()) == '/';
+}
+
+bool containsOpenReaderBook(const String& path) {
+  if (!activityManager.isReaderActivity()) return false;
+  const String openPath = APP_STATE.openEpubPath.c_str();
+  return !openPath.isEmpty() && isPathAtOrBelow(openPath, path);
+}
+
+struct BookPathMove {
+  std::string oldPath;
+  std::string newPath;
+  bool moveCache = false;
+  bool moveBookmarks = false;
+  bool cacheMoved = false;
+  bool bookmarksMoved = false;
+};
+
+struct PathMovePlan {
+  std::vector<BookPathMove> books;
+  size_t visitedEntries = 0;
+};
+
+bool addBookPathMove(const std::string& oldPath, const std::string& newPath, PathMovePlan& plan, std::string& error) {
+  const std::string oldCachePath = getBookCachePath(oldPath);
+  if (oldCachePath.empty()) return true;
+  const std::string newCachePath = getBookCachePath(newPath);
+  const bool isEpub = FsHelpers::hasEpubExtension(oldPath);
+  const std::string oldBookmarkPath = isEpub ? BookmarkUtil::getBookmarkPath(oldPath) : std::string{};
+  const std::string newBookmarkPath = isEpub ? BookmarkUtil::getBookmarkPath(newPath) : std::string{};
+
+  const bool oldCacheExists = Storage.exists(oldCachePath.c_str());
+  if (oldCachePath != newCachePath && Storage.exists(newCachePath.c_str())) {
+    error = "A reader cache already exists for the destination book path";
+    return false;
+  }
+  if (oldCacheExists && oldCachePath != newCachePath) {
+    for (const auto& planned : plan.books) {
+      if (planned.moveCache && getBookCachePath(planned.newPath) == newCachePath) {
+        error = "Multiple books map to the same destination cache";
+        return false;
+      }
+      if (planned.moveCache && getBookCachePath(planned.oldPath) == oldCachePath) {
+        error = "Multiple books share a source cache; refusing an unsafe move";
+        return false;
+      }
+    }
+  }
+
+  const bool oldBookmarkExists = isEpub && Storage.exists(oldBookmarkPath.c_str());
+  if (isEpub && oldBookmarkPath != newBookmarkPath && Storage.exists(newBookmarkPath.c_str())) {
+    error = "A bookmark file already exists for the destination book path";
+    return false;
+  }
+  if (oldBookmarkExists && oldBookmarkPath != newBookmarkPath) {
+    for (const auto& planned : plan.books) {
+      if (!planned.moveBookmarks) continue;
+      if (BookmarkUtil::getBookmarkPath(planned.newPath) == newBookmarkPath) {
+        error = "Multiple books map to the same destination bookmark file";
+        return false;
+      }
+      if (BookmarkUtil::getBookmarkPath(planned.oldPath) == oldBookmarkPath) {
+        error = "Multiple books share a source bookmark file; refusing an unsafe move";
+        return false;
+      }
+    }
+  }
+
+  const bool moveCache = oldCacheExists && oldCachePath != newCachePath;
+  const bool moveBookmarks = oldBookmarkExists && oldBookmarkPath != newBookmarkPath;
+  if (!moveCache && !moveBookmarks) return true;
+  if (plan.books.size() >= MAX_TRACKED_BOOKS_PER_PATH_MOVE) {
+    error = "Too many cached/bookmarked books to relocate safely in one operation";
+    return false;
+  }
+  plan.books.push_back({oldPath, newPath, moveCache, moveBookmarks, false, false});
+  return true;
+}
+
+bool collectDirectoryBookMoves(const std::string& oldDir, const std::string& newDir, const uint8_t depth,
+                               PathMovePlan& plan, std::string& error) {
+  if (depth > MAX_DIRECTORY_MOVE_DEPTH) {
+    error = "Folder nesting is too deep to scan safely";
+    return false;
+  }
+  HalFile directory = Storage.open(oldDir.c_str());
+  if (!directory || !directory.isDirectory()) {
+    error = "Could not scan the selected folder";
+    return false;
+  }
+
+  for (HalFile entry = directory.openNextFile(); entry; entry = directory.openNextFile()) {
+    if (++plan.visitedEntries > MAX_DIRECTORY_MOVE_ENTRIES) {
+      entry.close();
+      directory.close();
+      error = "Folder contains too many entries to relocate safely";
+      return false;
+    }
+
+    char name[256] = {};
+    const size_t nameLength = entry.getName(name, sizeof(name));
+    const bool isDirectory = entry.isDirectory();
+    entry.close();
+    if (nameLength == 0 || nameLength >= sizeof(name) ||
+        !FsHelpers::isSafePathComponent(std::string_view(name, nameLength))) {
+      directory.close();
+      error = "Folder contains an invalid or overlong item name";
+      return false;
+    }
+
+    const std::string oldPath = oldDir == "/" ? "/" + std::string(name) : oldDir + "/" + name;
+    const std::string suffix = oldPath.substr(oldDir.size());
+    const std::string newPath = newDir == "/" ? suffix : newDir + suffix;
+    bool ok = true;
+    if (isDirectory) {
+      ok = collectDirectoryBookMoves(oldPath, newPath, static_cast<uint8_t>(depth + 1), plan, error);
+    } else {
+      ok = addBookPathMove(oldPath, newPath, plan, error);
+    }
+    if (!ok) {
+      directory.close();
+      return false;
+    }
+    yield();
+    resetTaskWatchdogIfSubscribed();
+  }
+  directory.close();
+  return true;
+}
+
+bool preparePathMove(const String& oldPath, const String& newPath, const bool isDirectory, PathMovePlan& plan,
+                     std::string& error) {
+  plan = {};
+  if (isDirectory) {
+    return collectDirectoryBookMoves(oldPath.c_str(), newPath.c_str(), 0, plan, error);
+  }
+  return addBookPathMove(oldPath.c_str(), newPath.c_str(), plan, error);
+}
+
+void rollbackPathArtifacts(PathMovePlan& plan) {
+  for (auto it = plan.books.rbegin(); it != plan.books.rend(); ++it) {
+    if (it->bookmarksMoved) {
+      const std::string from = BookmarkUtil::getBookmarkPath(it->newPath);
+      const std::string to = BookmarkUtil::getBookmarkPath(it->oldPath);
+      if (!Storage.rename(from.c_str(), to.c_str())) {
+        LOG_ERR("WEB", "Could not roll back bookmark migration: %s -> %s", from.c_str(), to.c_str());
+      }
+      it->bookmarksMoved = false;
+    }
+    if (it->cacheMoved) {
+      const std::string from = getBookCachePath(it->newPath);
+      const std::string to = getBookCachePath(it->oldPath);
+      if (!Storage.rename(from.c_str(), to.c_str())) {
+        LOG_ERR("WEB", "Could not roll back cache migration: %s -> %s", from.c_str(), to.c_str());
+      }
+      it->cacheMoved = false;
+    }
+  }
+}
+
+bool applyPathArtifacts(PathMovePlan& plan, std::string& error) {
+  for (auto& book : plan.books) {
+    if (book.moveCache) {
+      const std::string from = getBookCachePath(book.oldPath);
+      const std::string to = getBookCachePath(book.newPath);
+      if (!Storage.rename(from.c_str(), to.c_str())) {
+        error = "Could not migrate a book cache; no files were moved";
+        rollbackPathArtifacts(plan);
+        return false;
+      }
+      book.cacheMoved = true;
+    }
+    if (book.moveBookmarks) {
+      const std::string from = BookmarkUtil::getBookmarkPath(book.oldPath);
+      const std::string to = BookmarkUtil::getBookmarkPath(book.newPath);
+      if (!Storage.rename(from.c_str(), to.c_str())) {
+        error = "Could not migrate a bookmark file; no files were moved";
+        rollbackPathArtifacts(plan);
+        return false;
+      }
+      book.bookmarksMoved = true;
+    }
+  }
+  return true;
+}
+
+bool updatePathReferences(const String& oldPath, const String& newPath) {
+  const std::string oldPrefix = oldPath.c_str();
+  const std::string newPrefix = newPath.c_str();
+  bool saved = true;
+  if (!RECENT_BOOKS.updatePathPrefix(oldPrefix, newPrefix)) {
+    LOG_ERR("WEB", "Failed to persist recent-book paths after relocating %s", oldPrefix.c_str());
+    saved = false;
+  }
+  if (!READING_STATS.updateBookPathPrefix(oldPrefix, newPrefix)) {
+    LOG_ERR("WEB", "Failed to persist reading-stat paths after relocating %s", oldPrefix.c_str());
+    saved = false;
+  }
+  const String openPath = APP_STATE.openEpubPath.c_str();
+  if (!openPath.isEmpty() && isPathAtOrBelow(openPath, oldPath)) {
+    APP_STATE.openEpubPath = newPrefix + std::string(openPath.c_str()).substr(oldPrefix.size());
+    if (!APP_STATE.saveToFile()) {
+      LOG_ERR("WEB", "Failed to persist resume path after relocating %s", oldPrefix.c_str());
+      saved = false;
+    }
+  }
+  return saved;
 }
 
 const char* firmwareFlashResultMessage(firmware_flash::Result result) {
@@ -894,6 +1125,10 @@ void CrossPointWebServer::handleRename() const {
     server->send(400, "text/plain", "Invalid path");
     return;
   }
+  if (isProtectedPath(itemPath)) {
+    server->send(403, "text/plain", "Cannot rename protected items or items inside protected folders");
+    return;
+  }
   if (newName.isEmpty()) {
     server->send(400, "text/plain", "New name cannot be empty");
     return;
@@ -908,10 +1143,6 @@ void CrossPointWebServer::handleRename() const {
   }
 
   const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-  if (isProtectedItemName(itemName)) {
-    server->send(403, "text/plain", "Cannot rename protected item");
-    return;
-  }
   if (newName == itemName) {
     server->send(200, "text/plain", "Name unchanged");
     return;
@@ -922,14 +1153,15 @@ void CrossPointWebServer::handleRename() const {
     return;
   }
 
-  HalFile file = Storage.open(itemPath.c_str());
-  if (!file) {
+  HalFile item = Storage.open(itemPath.c_str());
+  if (!item) {
     server->send(500, "text/plain", "Failed to open file");
     return;
   }
-  if (file.isDirectory()) {
-    file.close();
-    server->send(400, "text/plain", "Only files can be renamed");
+  const bool isDirectory = item.isDirectory();
+  item.close();
+  if (containsOpenReaderBook(itemPath)) {
+    server->send(409, "text/plain", "Close the currently open book before moving or renaming its file or folder");
     return;
   }
 
@@ -943,20 +1175,35 @@ void CrossPointWebServer::handleRename() const {
   }
   newPath += newName;
 
+  if (isProtectedPath(newPath)) {
+    server->send(403, "text/plain", "Cannot rename to a protected path");
+    return;
+  }
   if (Storage.exists(newPath.c_str())) {
-    file.close();
     server->send(409, "text/plain", "Target already exists");
     return;
   }
 
-  clearBookCache(itemPath.c_str());
-  const bool success = file.rename(newPath.c_str());
-  file.close();
+  PathMovePlan plan;
+  std::string error;
+  if (!preparePathMove(itemPath, newPath, isDirectory, plan, error)) {
+    server->send(409, "text/plain", error.c_str());
+    return;
+  }
+  if (!applyPathArtifacts(plan, error)) {
+    server->send(500, "text/plain", error.c_str());
+    return;
+  }
+
+  const bool success = Storage.rename(itemPath.c_str(), newPath.c_str());
 
   if (success) {
+    const bool metadataSaved = updatePathReferences(itemPath, newPath);
     LOG_DBG("WEB", "Renamed file: %s -> %s", itemPath.c_str(), newPath.c_str());
-    server->send(200, "text/plain", "Renamed successfully");
+    server->send(200, "text/plain", metadataSaved ? "Renamed successfully" :
+                                                    "Renamed; some history metadata could not be saved");
   } else {
+    rollbackPathArtifacts(plan);
     LOG_ERR("WEB", "Failed to rename file: %s -> %s", itemPath.c_str(), newPath.c_str());
     server->send(500, "text/plain", "Failed to rename file");
   }
@@ -979,38 +1226,36 @@ void CrossPointWebServer::handleMove() const {
     server->send(400, "text/plain", "Invalid destination");
     return;
   }
-
-  const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-  if (isProtectedItemName(itemName)) {
-    server->send(403, "text/plain", "Cannot move protected item");
+  if (isProtectedPath(itemPath) || isProtectedPath(destPath)) {
+    server->send(403, "text/plain", "Cannot move protected items or use a protected destination");
     return;
   }
-  if (destPath != "/") {
-    const String destName = destPath.substring(destPath.lastIndexOf('/') + 1);
-    if (isProtectedItemName(destName)) {
-      server->send(403, "text/plain", "Cannot move into protected folder");
-      return;
-    }
-  }
+
+  const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
 
   if (!Storage.exists(itemPath.c_str())) {
     server->send(404, "text/plain", "Item not found");
     return;
   }
 
-  HalFile file = Storage.open(itemPath.c_str());
-  if (!file) {
+  HalFile item = Storage.open(itemPath.c_str());
+  if (!item) {
     server->send(500, "text/plain", "Failed to open file");
     return;
   }
-  if (file.isDirectory()) {
-    file.close();
-    server->send(400, "text/plain", "Only files can be moved");
+  const bool isDirectory = item.isDirectory();
+  item.close();
+  if (containsOpenReaderBook(itemPath)) {
+    server->send(409, "text/plain", "Close the currently open book before moving or renaming its file or folder");
+    return;
+  }
+
+  if (isDirectory && isPathAtOrBelow(destPath, itemPath)) {
+    server->send(400, "text/plain", "Cannot move a folder into itself or one of its subfolders");
     return;
   }
 
   if (!Storage.exists(destPath.c_str())) {
-    file.close();
     server->send(404, "text/plain", "Destination not found");
     return;
   }
@@ -1019,7 +1264,6 @@ void CrossPointWebServer::handleMove() const {
     if (destDir) {
       destDir.close();
     }
-    file.close();
     server->send(400, "text/plain", "Destination is not a folder");
     return;
   }
@@ -1031,25 +1275,35 @@ void CrossPointWebServer::handleMove() const {
   }
   newPath += itemName;
 
-  if (newPath == itemPath) {
-    file.close();
+  if (newPath.equalsIgnoreCase(itemPath)) {
     server->send(200, "text/plain", "Already in destination");
     return;
   }
   if (Storage.exists(newPath.c_str())) {
-    file.close();
     server->send(409, "text/plain", "Target already exists");
     return;
   }
 
-  clearBookCache(itemPath.c_str());
-  const bool success = file.rename(newPath.c_str());
-  file.close();
+  PathMovePlan plan;
+  std::string error;
+  if (!preparePathMove(itemPath, newPath, isDirectory, plan, error)) {
+    server->send(409, "text/plain", error.c_str());
+    return;
+  }
+  if (!applyPathArtifacts(plan, error)) {
+    server->send(500, "text/plain", error.c_str());
+    return;
+  }
+
+  const bool success = Storage.rename(itemPath.c_str(), newPath.c_str());
 
   if (success) {
+    const bool metadataSaved = updatePathReferences(itemPath, newPath);
     LOG_DBG("WEB", "Moved file: %s -> %s", itemPath.c_str(), newPath.c_str());
-    server->send(200, "text/plain", "Moved successfully");
+    server->send(200, "text/plain", metadataSaved ? "Moved successfully" :
+                                                    "Moved; some history metadata could not be saved");
   } else {
+    rollbackPathArtifacts(plan);
     LOG_ERR("WEB", "Failed to move file: %s -> %s", itemPath.c_str(), newPath.c_str());
     server->send(500, "text/plain", "Failed to move file");
   }
