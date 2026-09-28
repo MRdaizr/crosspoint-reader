@@ -90,7 +90,7 @@ void EpubReaderChapterSelectionActivity::buildScreen(UiScreen& screen) {
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;
   props.labelText = screen.theme().smallText;
-  props.labelText.maxLines = 2;
+  props.labelText.maxLines = 1;
   syncListViewport(screen, props);
 
   const int first = std::clamp(nav.top, 0, static_cast<int>(rowLabels.size()));
