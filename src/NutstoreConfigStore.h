@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 
 struct NutstoreConfig {
@@ -15,7 +16,13 @@ struct NutstoreConfig {
 
 class NutstoreConfigStore {
  public:
+  static constexpr size_t MAX_LOCAL_PATH_BYTES = 128;
+
   static NutstoreConfigStore& getInstance() { return instance; }
+
+  // Normalize an absolute SD-card path and reject paths that could escape or
+  // overwrite CrossPoint's private/system storage.
+  static bool normalizeLocalPath(const std::string& path, std::string& normalized);
 
   bool loadFromFile();
   bool saveToFile() const;

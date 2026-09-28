@@ -15,7 +15,7 @@
 #include "NutstoreWebDavClient.h"
 
 namespace {
-constexpr const char* REMOTE_MANIFEST_PATH = "/Nutstore/.nutstore-manifest.tmp";
+constexpr const char* REMOTE_MANIFEST_PATH = "/.crosspoint/nutstore-manifest.tmp";
 
 std::string lower(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
@@ -28,16 +28,37 @@ std::string joinPath(const std::string& a, const std::string& b) {
   return a + "/" + b;
 }
 
-bool isProtectedLocalRoot(const std::string& path) {
-  return path == "/Nutstore";
+bool isProtectedLocalRoot(const std::string& path, const std::string& root) {
+  return path == root;
 }
 
-bool localPathForRelative(const std::string& rel, std::string& out) {
-  if (rel.empty() || rel[0] == '/' || rel.find("..") != std::string::npos) return false;
-  out = joinPath("/Nutstore", rel);
+bool localPathForRelative(const std::string& root, const std::string& rel, std::string& out) {
+  if (root.empty() || root[0] != '/' || root == "/" || rel.empty() || rel[0] == '/' || rel.find('\\') != std::string::npos)
+    return false;
+
+  size_t segmentStart = 0;
+  for (size_t i = 0; i <= rel.size(); ++i) {
+    if (i != rel.size() && rel[i] != '/') continue;
+    if (i == segmentStart) return false;
+    const size_t segmentLength = i - segmentStart;
+    if (rel.compare(segmentStart, segmentLength, ".") == 0 ||
+        rel.compare(segmentStart, segmentLength, "..") == 0 || rel[i - 1] == '.' || rel[i - 1] == ' ') {
+      return false;
+    }
+    for (size_t j = segmentStart; j < i; ++j) {
+      const unsigned char ch = static_cast<unsigned char>(rel[j]);
+      if (ch < 0x20 || ch == 0x7f || ch == ':' || ch == '<' || ch == '>' || ch == '"' || ch == '|' || ch == '?' ||
+          ch == '*') {
+        return false;
+      }
+    }
+    segmentStart = i + 1;
+  }
+
+  out = joinPath(root, rel);
   std::string normalized = FsHelpers::normalisePath(out.c_str());
   if (!normalized.empty() && normalized.front() != '/') normalized.insert(normalized.begin(), '/');
-  if (normalized.rfind("/Nutstore/", 0) != 0 && normalized != "/Nutstore") return false;
+  if (normalized.rfind(root + "/", 0) != 0) return false;
   out = normalized;
   return true;
 }
@@ -168,7 +189,7 @@ bool deleteLocalFilesMissingRemote(const std::string& dir, const std::string& ro
     status.currentFile = relativePath;
     if (NutstoreSync::isAllowedReadingFile(relativePath) && !manifestContains(manifest, relativePath)) {
       std::string protectedPath;
-      if (localPathForRelative(relativePath, protectedPath) && Storage.remove(protectedPath.c_str())) {
+      if (localPathForRelative(root, relativePath, protectedPath) && Storage.remove(protectedPath.c_str())) {
         ++status.deleted;
       }
     }
@@ -178,8 +199,8 @@ bool deleteLocalFilesMissingRemote(const std::string& dir, const std::string& ro
   return true;
 }
 
-void removeEmptyDirs(const std::string& dir) {
-  if (isProtectedLocalRoot(dir)) return;
+void removeEmptyDirs(const std::string& dir, const std::string& root) {
+  if (isProtectedLocalRoot(dir, root)) return;
   HalFile d = Storage.open(dir.c_str());
   if (!d || !d.isDirectory()) return;
   bool empty = true;
@@ -188,7 +209,7 @@ void removeEmptyDirs(const std::string& dir) {
     f.getName(name, sizeof(name));
     std::string child = joinPath(dir, name);
     if (f.isDirectory()) {
-      removeEmptyDirs(child);
+      removeEmptyDirs(child, root);
       if (Storage.exists(child.c_str())) empty = false;
     } else {
       empty = false;
@@ -248,11 +269,24 @@ bool NutstoreSync::run(const NutstoreConfig& config, NutstoreSyncStatus& status,
     return false;
   }
 
+  std::string localRoot;
+  if (!NutstoreConfigStore::normalizeLocalPath(config.localPath, localRoot)) {
+    status.phase = NutstoreSyncPhase::FAILED;
+    status.message = "Nutstore local path is invalid";
+    notify(status, callback);
+    return false;
+  }
+
   status.message = "Syncing clock for HTTPS...";
   notify(status, callback);
   ensureSystemTime();
 
-  Storage.mkdir("/Nutstore");
+  if (!Storage.ensureDirectoryExists(localRoot.c_str())) {
+    status.phase = NutstoreSyncPhase::FAILED;
+    status.message = "Could not create Nutstore local directory";
+    notify(status, callback);
+    return false;
+  }
   Storage.remove(REMOTE_MANIFEST_PATH);
 
   NutstoreWebDavClient client(config.baseUrl, config.username, config.password);
@@ -321,7 +355,7 @@ bool NutstoreSync::run(const NutstoreConfig& config, NutstoreSyncStatus& status,
       return false;
     }
     std::string localPath;
-    if (!localPathForRelative(entry.relativePath, localPath)) {
+    if (!localPathForRelative(localRoot, entry.relativePath, localPath)) {
       LOG_ERR("NUT", "Skipping unsafe local path: %s", entry.relativePath.c_str());
       status.skipped++;
       status.processed++;
@@ -366,10 +400,10 @@ bool NutstoreSync::run(const NutstoreConfig& config, NutstoreSyncStatus& status,
     status.phase = NutstoreSyncPhase::DELETING;
     status.message = "Deleting local files missing from Nutstore...";
     status.processed = 0;
-    status.total = countLocalFiles("/Nutstore");
+    status.total = countLocalFiles(localRoot);
     notify(status, callback);
 
-    if (!deleteLocalFilesMissingRemote("/Nutstore", "/Nutstore", manifest, status, callback, cancelFlag)) {
+    if (!deleteLocalFilesMissingRemote(localRoot, localRoot, manifest, status, callback, cancelFlag)) {
       manifest.close();
       Storage.remove(REMOTE_MANIFEST_PATH);
       status.phase = NutstoreSyncPhase::CANCELLED;
@@ -377,7 +411,7 @@ bool NutstoreSync::run(const NutstoreConfig& config, NutstoreSyncStatus& status,
       notify(status, callback);
       return false;
     }
-    removeEmptyDirs("/Nutstore");
+    removeEmptyDirs(localRoot, localRoot);
   }
 
   manifest.close();

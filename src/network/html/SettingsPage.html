@@ -113,6 +113,11 @@
     .setting-control input[type="number"] {
       width: 80px;
     }
+    .nutstore-path-hint {
+      margin: -2px 0 12px;
+      color: var(--label-color);
+      font-size: 0.85em;
+    }
     /* Toggle switch */
     .toggle-switch {
       display: inline-block;
@@ -621,7 +626,8 @@
         '<div class="setting-row"><span class="setting-name">Remote Path</span>' +
           '<span class="setting-control"><input type="text" id="nut-remotePath" value="' + escapeHtml(cfg.remotePath || '/') + '"></span></div>' +
         '<div class="setting-row"><span class="setting-name">Local Path</span>' +
-          '<span class="setting-control"><input type="text" value="/Nutstore" disabled></span></div>' +
+          '<span class="setting-control"><input type="text" id="nut-localPath" maxlength="128" value="' + escapeHtml(cfg.localPath || '/Nutstore') + '" placeholder="/Nutstore" aria-label="Local SD-card path"></span></div>' +
+        '<p class="nutstore-path-hint">Absolute SD-card path. Mirror sync may delete supported book files here if they are missing remotely.</p>' +
         '<div class="opds-actions">' +
           '<button class="btn-small btn-save-server" onclick="saveNutstoreConfig()">Save Nutstore Config</button>' +
           '<button class="btn-small btn-add" onclick="syncNutstore()">Sync Now</button>' +
@@ -639,17 +645,20 @@
       baseUrl: document.getElementById('nut-baseUrl').value,
       username: document.getElementById('nut-username').value,
       password: document.getElementById('nut-password').value,
-      remotePath: document.getElementById('nut-remotePath').value
+      remotePath: document.getElementById('nut-remotePath').value,
+      localPath: document.getElementById('nut-localPath').value.trim()
     };
     const res = await fetch('/api/nutstore/config', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body)
     });
+    const result = await res.json().catch(() => ({}));
     if (!res.ok) {
-      showMessage('Failed to save Nutstore config', true);
+      showMessage(result.error || 'Failed to save Nutstore config', true);
       return;
     }
+    document.getElementById('nut-localPath').value = result.localPath || body.localPath;
     document.getElementById('nut-password').value = '';
     showMessage('Nutstore config saved.', false);
   }

@@ -1358,7 +1358,7 @@ void CrossPointWebServer::handleGetNutstoreConfig() const {
   doc["username"] = cfg.username;
   doc["password"] = "";
   doc["remotePath"] = cfg.remotePath;
-  doc["localPath"] = "/Nutstore";
+  doc["localPath"] = cfg.localPath;
   doc["recursive"] = true;
   doc["mirrorDelete"] = true;
 
@@ -1380,6 +1380,22 @@ void CrossPointWebServer::handlePostNutstoreConfig() {
     return;
   }
 
+  const bool hasLocalPath = !doc["localPath"].isNull();
+  std::string localPath;
+  if (hasLocalPath) {
+    if (!doc["localPath"].is<const char*>()) {
+      server->send(400, "application/json", "{\"error\":\"Local Path must be a string\"}");
+      return;
+    }
+    String requestedLocalPath = doc["localPath"].as<String>();
+    requestedLocalPath.trim();
+    if (!NutstoreConfigStore::normalizeLocalPath(requestedLocalPath.c_str(), localPath)) {
+      server->send(400, "application/json",
+                   "{\"error\":\"Local Path must be a safe absolute SD-card directory (max 128 bytes)\"}");
+      return;
+    }
+  }
+
   NUTSTORE_CONFIG.loadFromFile();
   auto& cfg = NUTSTORE_CONFIG.mutableConfig();
   cfg.enabled = doc["enabled"] | cfg.enabled;
@@ -1388,7 +1404,7 @@ void CrossPointWebServer::handlePostNutstoreConfig() {
   const std::string password = doc["password"] | std::string("");
   if (!password.empty()) cfg.password = password;
   cfg.remotePath = doc["remotePath"] | cfg.remotePath;
-  cfg.localPath = "/Nutstore";
+  if (hasLocalPath) cfg.localPath = localPath;
   cfg.recursive = true;
   cfg.mirrorDelete = true;
 
@@ -1396,7 +1412,12 @@ void CrossPointWebServer::handlePostNutstoreConfig() {
     server->send(500, "application/json", "{\"error\":\"Failed to save Nutstore config\"}");
     return;
   }
-  server->send(200, "application/json", "{\"ok\":true}");
+  JsonDocument response;
+  response["ok"] = true;
+  response["localPath"] = cfg.localPath;
+  String json;
+  serializeJson(response, json);
+  server->send(200, "application/json", json);
 }
 
 void CrossPointWebServer::handlePostNutstoreSync() {
