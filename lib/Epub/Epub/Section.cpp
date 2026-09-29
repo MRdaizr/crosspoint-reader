@@ -44,7 +44,8 @@ namespace {
 // v43: Equal-cost line breaks prefer longer lines, changing cached CJK layout.
 // v44: Ordered lists number their items, list-style-type: none suppresses markers,
 //      and <ul>/<ol> containers contribute margins/padding to child insets.
-constexpr uint8_t SECTION_FILE_VERSION = 44;
+// v45: Internal EPUB links preserve CSS superscript/subscript positioning.
+constexpr uint8_t SECTION_FILE_VERSION = 45;
 // A section being written is never readable. The version is stamped with the
 // final/partial value only after all page tables have been written.
 constexpr uint8_t SECTION_FILE_INCOMPLETE_VERSION = 0;

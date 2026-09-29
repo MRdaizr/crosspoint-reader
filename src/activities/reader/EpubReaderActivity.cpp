@@ -384,6 +384,17 @@ void EpubReaderActivity::onBookExited() {
   }
 }
 
+ChapterPosition EpubReaderActivity::chapterPosition() const {
+  if (section) return {section->currentPage, section->estimatedTotalPages()};
+  return {nextPageNumber, cachedChapterTotalPageCount};
+}
+
+int EpubReaderActivity::bookPercentFor(const ChapterPosition& position) const {
+  if (!epub || epub->getBookSize() == 0 || !position.hasTotal()) return 0;
+  const float fraction = epub->calculateProgress(currentSpineIndex, position.chapterFraction());
+  return static_cast<int>(std::clamp(fraction, 0.0f, 1.0f) * 100.0f + 0.5f);
+}
+
 void EpubReaderActivity::openReaderMenu() {
   if (!epub) {
     requestUpdate();
@@ -395,18 +406,12 @@ void EpubReaderActivity::openReaderMenu() {
     return;
   }
 
-  const int currentPage = section ? section->currentPage + 1 : 0;
-  const int totalPages = section ? section->estimatedTotalPages() : 0;
-  float bookProgress = 0.0f;
-  if (epub->getBookSize() > 0 && section && section->estimatedTotalPages() > 0) {
-    const float chapterProgress =
-        static_cast<float>(section->currentPage) / static_cast<float>(section->estimatedTotalPages());
-    bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
-  }
-  const int bookProgressPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
+  const ChapterPosition position = chapterPosition();
+  const int bookProgressPercent = bookPercentFor(position);
   startActivityForResult(std::make_unique<EpubReaderMenuActivity>(
-                             renderer, mappedInput, epub->getTitle(), currentPage, totalPages, bookProgressPercent,
-                             SETTINGS.orientation, !currentPageFootnotes.empty(), !cachedBookmarks.empty()),
+                             renderer, mappedInput, epub->getTitle(), position.displayPage(), position.totalPages,
+                             bookProgressPercent, SETTINGS.orientation, !currentPageFootnotes.empty(),
+                             !cachedBookmarks.empty()),
                          [this](const ActivityResult& result) {
                            // Always apply orientation change even if the menu was cancelled.
                            if (!std::holds_alternative<MenuResult>(result.data)) {
@@ -927,12 +932,7 @@ void EpubReaderActivity::onReaderMenuConfirm(EpubReaderMenuActivity::MenuAction 
       break;
     }
     case EpubReaderMenuActivity::MenuAction::GO_TO_PERCENT: {
-      float bookProgress = 0.0f;
-      if (epub && epub->getBookSize() > 0 && section && section->pageCount > 0) {
-        const float chapterProgress = static_cast<float>(section->currentPage) / static_cast<float>(section->pageCount);
-        bookProgress = epub->calculateProgress(currentSpineIndex, chapterProgress) * 100.0f;
-      }
-      const int initialPercent = clampPercent(static_cast<int>(bookProgress + 0.5f));
+      const int initialPercent = bookPercentFor(chapterPosition());
       startActivityForResult(
           std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
           [this](const ActivityResult& result) {

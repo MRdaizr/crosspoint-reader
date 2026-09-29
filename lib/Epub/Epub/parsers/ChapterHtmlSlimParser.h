@@ -160,6 +160,7 @@ class ChapterHtmlSlimParser {
   void makePages();
   static void applyDirectionToEntry(StyleStackEntry& entry, const CssStyle& css);
   static void applyTextDecorationToEntry(StyleStackEntry& entry, const CssStyle& css);
+  static void applyVerticalAlignToEntry(StyleStackEntry& entry, const CssStyle& css);
   void pushTableTextStyleEntry(const CssStyle& cssStyle);
   static EpdFontFamily::Style fontStyleForTextDecoration(CssTextDecoration decoration);
   void emitHorizontalRule(const BlockStyle& blockStyle);
