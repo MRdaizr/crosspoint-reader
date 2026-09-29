@@ -56,7 +56,7 @@ constexpr uint32_t MIN_MAX_ALLOC_FOR_TLS = 36000;
 constexpr size_t MAX_ENUM_DIRS = 200;
 constexpr int MAX_INCOMPLETE_RETRIES = 1;
 constexpr int INCOMPLETE_RETRY_DELAY_MS = 250;
-constexpr const char* DAV_STAGE_PATH = "/Nutstore/.nutstore-propfind-stage.tmp";
+constexpr const char* DAV_STAGE_PATH = "/.crosspoint/nutstore-propfind-stage.tmp";
 
 std::string trimTrailingSlash(std::string s) {
   while (s.size() > 1 && s.back() == '/') s.pop_back();
