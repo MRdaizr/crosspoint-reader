@@ -14,6 +14,8 @@ CrossPoint is open-source e-reader firmware - community-built, fully hackable, f
 
 - **Various formats**: native handling for `.epub`, `.xtc/.xtch`, `.txt`, and `.bmp`.
 
+- **Flashcards**: review CSV decks from `/flashcards` or the hidden `/.flashcards` folder.
+
 - **Screenshots.**
 
 - **Custom fonts**: install your favorite fonts on the SD card.

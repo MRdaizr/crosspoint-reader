@@ -13,6 +13,7 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/BookCacheUtils.h"
+#include "util/FlashcardDeckUtils.h"
 
 namespace {
 StrId titleFor(ClearCacheType type) {
@@ -179,15 +180,18 @@ void ClearCacheActivity::clearCache() {
       if (Storage.removeDir("/.crosspoint/flashcards")) ++clearedCount;
       else ++failedCount;
     }
-    auto decks = Storage.open("/flashcards");
-    if (decks && decks.isDirectory()) {
+    for (size_t rootIndex = 0; rootIndex < FlashcardDeckUtils::ROOT_COUNT; ++rootIndex) {
+      const char* rootPath = FlashcardDeckUtils::ROOTS[rootIndex];
+      auto decks = Storage.open(rootPath);
+      if (!decks || !decks.isDirectory()) continue;
+
       char name[160];
       for (auto file = decks.openNextFile(); file; file = decks.openNextFile()) {
         file.getName(name, sizeof(name));
         const std::string filename(name);
         file.close();
         if (filename.size() > 4 && filename.rfind(".idx") == filename.size() - 4) {
-          const std::string path = std::string("/flashcards/") + filename;
+          const std::string path = std::string(rootPath) + "/" + filename;
           if (Storage.remove(path.c_str())) ++clearedCount;
           else ++failedCount;
         }

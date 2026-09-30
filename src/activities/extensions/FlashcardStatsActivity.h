@@ -17,6 +17,7 @@ class FlashcardStatsActivity final : public Activity, private UiAppHost {
  private:
   struct DeckSummary {
     std::string name;
+    std::string path;
     uint32_t cardCount = 0;
     uint32_t learnedCount = 0;
     uint32_t dueCount = 0;

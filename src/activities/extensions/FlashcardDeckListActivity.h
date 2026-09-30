@@ -8,7 +8,12 @@
 
 class FlashcardDeckListActivity final : public UiListActivity {
   static constexpr size_t NAME_BUFFER_SIZE = 256;
-  std::vector<std::string> decks;
+  struct DeckEntry {
+    std::string name;
+    std::string path;
+    std::string label;
+  };
+  std::vector<DeckEntry> decks;
   std::vector<freeink::ui::ListItem> rowItems;
   std::unique_ptr<char[]> fileNameBuffer;
   void loadDecks();

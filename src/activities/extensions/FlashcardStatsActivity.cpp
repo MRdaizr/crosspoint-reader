@@ -13,13 +13,13 @@
 #include "MappedInputManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/FlashcardDeckUtils.h"
 #include "util/TimeUtils.h"
 
 namespace {
 namespace fui = freeink::ui;
 
 constexpr fui::ActionId ACTION_FUI_ROW = 1;
-constexpr char FLASHCARDS_DIR[] = "/flashcards";
 
 struct CsvColumns {
   int word = -1;
@@ -195,8 +195,11 @@ void FlashcardStatsActivity::refreshData() {
   totals = {};
   dailyEntries = FLASHCARD_STATS.getRecentDailyEntries();
 
-  auto root = Storage.open(FLASHCARDS_DIR);
-  if (root && root.isDirectory()) {
+  for (size_t rootIndex = 0; rootIndex < FlashcardDeckUtils::ROOT_COUNT; ++rootIndex) {
+    const char* rootPath = FlashcardDeckUtils::ROOTS[rootIndex];
+    auto root = Storage.open(rootPath);
+    if (!root || !root.isDirectory()) continue;
+
     char name[160];
     for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
       file.getName(name, sizeof(name));
@@ -206,8 +209,9 @@ void FlashcardStatsActivity::refreshData() {
       if (!isDeck) continue;
 
       DeckSummary summary;
+      const std::string path = std::string(rootPath) + "/" + filename;
       summary.name = filename;
-      const std::string path = std::string(FLASHCARDS_DIR) + "/" + filename;
+      summary.path = path;
       summary.cardCount = countCards(path);
 
       FlashcardScheduler scheduler;
@@ -242,7 +246,21 @@ void FlashcardStatsActivity::refreshData() {
     }
     root.close();
   }
-  std::sort(decks.begin(), decks.end(), [](const auto& left, const auto& right) { return left.name < right.name; });
+  std::sort(decks.begin(), decks.end(), [](const auto& left, const auto& right) {
+    if (left.name != right.name) return left.name < right.name;
+    return left.path < right.path;
+  });
+  for (size_t begin = 0; begin < decks.size();) {
+    size_t end = begin + 1;
+    while (end < decks.size() && decks[end].name == decks[begin].name) ++end;
+    if (end - begin > 1) {
+      for (size_t i = begin; i < end; ++i) {
+        const char* rootLabel = decks[i].path.rfind("/.flashcards/", 0) == 0 ? " [/.flashcards]" : " [/flashcards]";
+        decks[i].name += rootLabel;
+      }
+    }
+    begin = end;
+  }
   selectedIndex = std::clamp(selectedIndex, 0, std::max(0, static_cast<int>(decks.size()) - 1));
 }
 

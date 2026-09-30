@@ -13,31 +13,47 @@
 #include "components/UiAppHelpers.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-
-namespace {
-constexpr const char* FLASHCARDS_DIR = "/flashcards";
-}
+#include "util/FlashcardDeckUtils.h"
 
 void FlashcardDeckListActivity::loadDecks() {
   decks.clear();
-  Storage.mkdir(FLASHCARDS_DIR);
-
-  auto root = Storage.open(FLASHCARDS_DIR);
-  if (!root || !root.isDirectory() || !fileNameBuffer) {
+  Storage.mkdir(FlashcardDeckUtils::ROOTS[0]);
+  if (!fileNameBuffer) {
     rowItems.clear();
     return;
   }
 
-  root.rewindDirectory();
-  for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
-    file.getName(fileNameBuffer.get(), NAME_BUFFER_SIZE);
-    std::string_view filename{fileNameBuffer.get()};
-    if (!file.isDirectory() && FsHelpers::checkFileExtension(filename, ".csv")) {
-      decks.emplace_back(filename);
+  for (size_t rootIndex = 0; rootIndex < FlashcardDeckUtils::ROOT_COUNT; ++rootIndex) {
+    const char* rootPath = FlashcardDeckUtils::ROOTS[rootIndex];
+    auto root = Storage.open(rootPath);
+    if (!root || !root.isDirectory()) continue;
+
+    root.rewindDirectory();
+    for (auto file = root.openNextFile(); file; file = root.openNextFile()) {
+      file.getName(fileNameBuffer.get(), NAME_BUFFER_SIZE);
+      std::string_view filename{fileNameBuffer.get()};
+      if (file.isDirectory() || !FsHelpers::checkFileExtension(filename, ".csv")) continue;
+
+      DeckEntry deck;
+      deck.name = filename;
+      deck.path = std::string(rootPath) + "/" + deck.name;
+      deck.label = deck.name;
+      decks.push_back(std::move(deck));
+    }
+    root.close();
+  }
+
+  std::sort(decks.begin(), decks.end(), [](const DeckEntry& left, const DeckEntry& right) {
+    if (left.name != right.name) return left.name < right.name;
+    return left.path < right.path;
+  });
+  for (size_t i = 0; i < decks.size(); ++i) {
+    const bool duplicateName = (i > 0 && decks[i - 1].name == decks[i].name) ||
+                               (i + 1 < decks.size() && decks[i + 1].name == decks[i].name);
+    if (duplicateName) {
+      decks[i].label += decks[i].path.rfind("/.flashcards/", 0) == 0 ? " [/.flashcards]" : " [/flashcards]";
     }
   }
-  root.close();
-  std::sort(decks.begin(), decks.end());
   rebuildRowItems();
 }
 
@@ -46,7 +62,7 @@ void FlashcardDeckListActivity::rebuildRowItems() {
   rowItems.reserve(decks.size());
   for (size_t i = 0; i < decks.size(); ++i) {
     freeink::ui::ListItem item;
-    item.label = decks[i].c_str();
+    item.label = decks[i].label.c_str();
     item.icon = GUI.showsFuiMenuIcon(FuiMenuIconSlot::FlashcardDeckRows) ? listIconFor(UIIcon::File)
                                                                           : freeink::ui::BitmapRef{};
     item.actionValue = static_cast<int16_t>(i);
@@ -69,7 +85,7 @@ void FlashcardDeckListActivity::onExit() {
 
 void FlashcardDeckListActivity::activateIndex(const int index) {
     if (index < 0 || index >= static_cast<int>(decks.size())) return;
-    std::string path = std::string(FLASHCARDS_DIR) + "/" + decks[index];
+    std::string path = decks[index].path;
     startActivityForResult(std::make_unique<FlashcardReviewActivity>(renderer, mappedInput, std::move(path)), nullptr);
 }
 
