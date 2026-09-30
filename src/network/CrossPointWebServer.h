@@ -86,6 +86,7 @@ class CrossPointWebServer {
   WsUploadStatus getWsUploadStatus() const;
   FirmwareUpdateStatus getFirmwareUpdateStatus() const { return firmwareStatus; }
   void setFirmwareProgressCallback(std::function<void()> cb) { firmwareProgressCallback = std::move(cb); }
+  void setUploadCancelCheck(std::function<bool()> check) { uploadCancelCheck = std::move(check); }
 
   // Get the port number
   uint16_t getPort() const { return port; }
@@ -99,6 +100,8 @@ class CrossPointWebServer {
   uint16_t wsPort = 81;  // WebSocket port
   NetworkUDP udp;
   bool udpActive = false;
+  std::function<bool()> uploadCancelCheck;
+  bool dropUploadIfCancelled() const;
 
   // WebSocket upload state
   void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length);

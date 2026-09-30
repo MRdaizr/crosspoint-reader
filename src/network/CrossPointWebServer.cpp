@@ -494,6 +494,14 @@ void CrossPointWebServer::begin() {
   LOG_DBG("WEB", "[MEM] Free heap after server.begin(): %d bytes", ESP.getFreeHeap());
 }
 
+bool CrossPointWebServer::dropUploadIfCancelled() const {
+  if (!server || !uploadCancelCheck || !uploadCancelCheck()) return false;
+  // Closing the client makes the next body read fail so WebServer reports
+  // UPLOAD_FILE_ABORTED and the upload handler removes the partial file.
+  server->client().stop();
+  return true;
+}
+
 void CrossPointWebServer::abortWsUpload(const char* tag) {
   // Explicit close() required: file-scope global persists beyond function scope
   wsUploadFile.close();
@@ -972,6 +980,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
 
     LOG_DBG("WEB", "[UPLOAD] File created successfully: %s", filePath.c_str());
   } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (dropUploadIfCancelled()) return;
     if (state.file && state.error.isEmpty()) {
       // Buffer incoming data and flush when buffer is full
       // This reduces SD card write operations and improves throughput
@@ -1009,6 +1018,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
       }
     }
   } else if (upload.status == UPLOAD_FILE_END) {
+    if (!server->client().connected()) return;
     if (state.file) {
       // Flush any remaining buffered data
       if (!flushUploadBuffer(state)) {
@@ -1519,6 +1529,8 @@ void CrossPointWebServer::handleGetSettings() const {
       seenFirst = true;
     }
     server->sendContent(output);
+    yield();                          // Let WiFi and other tasks run during slow responses.
+    resetTaskWatchdogIfSubscribed();  // sendContent() can block on the network client.
   }
 
   server->sendContent("]");
@@ -1868,6 +1880,8 @@ void CrossPointWebServer::handleGetOpdsServers() const {
 
     if (i > 0) server->sendContent(",");
     server->sendContent(output);
+    yield();                          // Let WiFi and other tasks run during slow responses.
+    resetTaskWatchdogIfSubscribed();  // sendContent() can block on the network client.
   }
 
   server->sendContent("]");
@@ -1983,6 +1997,8 @@ void CrossPointWebServer::handleGetWifiNetworks() const {
 
     if (i > 0) server->sendContent(",");
     server->sendContent(output);
+    yield();                          // Let WiFi and other tasks run during slow responses.
+    resetTaskWatchdogIfSubscribed();  // sendContent() can block on the network client.
   }
 
   server->sendContent("]");

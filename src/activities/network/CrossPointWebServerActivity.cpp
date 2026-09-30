@@ -4,6 +4,7 @@
 #include <ESPmDNS.h>
 #include <FontCacheManager.h>
 #include <GfxRenderer.h>
+#include <HalGPIO.h>
 #include <I18n.h>
 #include <WiFi.h>
 #include <Memory.h>
@@ -80,6 +81,7 @@ void CrossPointWebServerActivity::onEnter() {
   connectedIP.clear();
   connectedSSID.clear();
   lastHandleClientTime = 0;
+  leaveRequested = false;
   requestUpdate();
 
   // Launch network mode selection subactivity
@@ -305,6 +307,18 @@ void CrossPointWebServerActivity::startWebServer() {
 
   // Create the web server instance
   webServer.reset(new CrossPointWebServer());
+  // HTTP uploads keep handleClient() busy until the request body finishes.
+  // Sample input on received chunks so Back remains available on slow links.
+  webServer->setUploadCancelCheck([this] {
+    mappedInput.update();
+    if (gpio.rawInputActive()) {
+      delay(6);
+      mappedInput.update();
+    }
+    leaveRequested = leaveRequested || mappedInput.isPressed(MappedInputManager::Button::Back) ||
+                     mappedInput.wasPressed(MappedInputManager::Button::Back) || mappedInput.wasHomeGesture();
+    return leaveRequested;
+  });
   webServer->setFirmwareProgressCallback([this] { requestUpdate(true); });
   webServer->begin();
 
@@ -394,6 +408,10 @@ void CrossPointWebServerActivity::loop() {
       constexpr int MAX_ITERATIONS = 500;
       for (int i = 0; i < MAX_ITERATIONS && webServer->isRunning(); i++) {
         webServer->handleClient();
+        if (leaveRequested) {
+          onGoHome();
+          return;
+        }
         // Reset watchdog every 32 iterations
         if ((i & 0x1F) == 0x1F) {
           resetTaskWatchdogIfSubscribed();
