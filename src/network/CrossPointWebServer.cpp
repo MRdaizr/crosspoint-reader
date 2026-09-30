@@ -586,7 +586,13 @@ void CrossPointWebServer::handleClient() {
     lastDebugPrint = millis();
   }
 
+  const unsigned long requestStart = millis();
   server->handleClient();
+  const unsigned long requestDuration = millis() - requestStart;
+  if (requestDuration > 250) {
+    LOG_DBG("WEB", "[HTTP] Request returned: method=%d uri=%s duration=%lu ms free=%d", static_cast<int>(server->method()),
+            server->uri().c_str(), requestDuration, ESP.getFreeHeap());
+  }
 
   // Handle WebSocket events
   if (wsServer) {
@@ -657,8 +663,13 @@ CrossPointWebServer::WsUploadStatus CrossPointWebServer::getWsUploadStatus() con
 }
 
 static void sendHtmlContent(WebServer* server, const char* data, size_t len) {
+  const unsigned long sendStart = millis();
+  const String uri = server->uri();
+  LOG_DBG("WEB", "[HTTP] %s HTML tx begin: bytes=%zu free=%d", uri.c_str(), len, ESP.getFreeHeap());
   server->sendHeader("Content-Encoding", "gzip");
   server->send_P(200, "text/html", data, len);
+  LOG_DBG("WEB", "[HTTP] %s HTML tx complete: elapsed=%lu ms connected=%d free=%d", uri.c_str(),
+          millis() - sendStart, server->client().connected(), ESP.getFreeHeap());
 }
 
 void CrossPointWebServer::handleRoot() const {
@@ -766,11 +777,14 @@ void CrossPointWebServer::handleTodosPage() const {
 }
 
 void CrossPointWebServer::handleFileListData() const {
+  const unsigned long requestStart = millis();
   // Get current path from query string (default to root)
   String currentPath = "/";
   if (server->hasArg("path")) {
     currentPath = normalizeWebPath(server->arg("path"));
   }
+
+  LOG_DBG("WEB", "[HTTP] /api/files begin: path=%s free=%d", currentPath.c_str(), ESP.getFreeHeap());
 
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
   server->send(200, "application/json", "");
@@ -778,9 +792,10 @@ void CrossPointWebServer::handleFileListData() const {
   char output[512];
   constexpr size_t outputSize = sizeof(output);
   bool seenFirst = false;
+  size_t entryCount = 0;
   JsonDocument doc;
 
-  scanFiles(currentPath.c_str(), [this, &output, &doc, seenFirst](const FileInfo& info) mutable {
+  scanFiles(currentPath.c_str(), [this, &output, &doc, &seenFirst, &entryCount, requestStart](const FileInfo& info) mutable {
     doc.clear();
     doc["name"] = info.name;
     doc["size"] = info.size;
@@ -794,17 +809,30 @@ void CrossPointWebServer::handleFileListData() const {
       return;
     }
 
+    ++entryCount;
+    const unsigned long sendStart = millis();
+    if ((entryCount & 0x0F) == 1) {
+      LOG_DBG("WEB", "[HTTP] /api/files sending entry=%zu name=%s bytes=%zu elapsed=%lu ms", entryCount,
+              info.name.c_str(), written, millis() - requestStart);
+    }
     if (seenFirst) {
       server->sendContent(",");
     } else {
       seenFirst = true;
     }
     server->sendContent(output);
+    const unsigned long sendDuration = millis() - sendStart;
+    if (sendDuration > 100) {
+      LOG_DBG("WEB", "[HTTP] /api/files slow send: entry=%zu duration=%lu ms connected=%d free=%d", entryCount,
+              sendDuration, server->client().connected(), ESP.getFreeHeap());
+    }
   });
+  LOG_DBG("WEB", "[HTTP] /api/files tail tx begin: entries=%zu elapsed=%lu ms", entryCount, millis() - requestStart);
   server->sendContent("]");
   // End of streamed response, empty chunk to signal client
   server->sendContent("");
-  LOG_DBG("WEB", "Served file listing page for path: %s", currentPath.c_str());
+  LOG_DBG("WEB", "[HTTP] /api/files complete: path=%s entries=%zu elapsed=%lu ms free=%d", currentPath.c_str(),
+          entryCount, millis() - requestStart, ESP.getFreeHeap());
 }
 
 void CrossPointWebServer::handleDownload() const {
@@ -1442,21 +1470,30 @@ void CrossPointWebServer::handleSettingsPage() const {
 }
 
 void CrossPointWebServer::handleGetSettings() const {
+  const unsigned long requestStart = millis();
+  LOG_DBG("WEB", "[HTTP] /api/settings begin: free=%d", ESP.getFreeHeap());
+
   // Pass the SD font registry so the fontFamily setting's enumStringValues
   // includes SD-resident families — otherwise the web API only exposes the
   // built-in fonts plus any SD-card families.
   const auto& settings = getSettingsList(&sdFontSystem.registry());
+  LOG_DBG("WEB", "[HTTP] /api/settings data ready: count=%zu elapsed=%lu ms free=%d", settings.size(),
+          millis() - requestStart, ESP.getFreeHeap());
 
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+  LOG_DBG("WEB", "[HTTP] /api/settings headers tx begin: elapsed=%lu ms", millis() - requestStart);
   server->send(200, "application/json", "");
   server->sendContent("[");
 
   char output[512];
   constexpr size_t outputSize = sizeof(output);
   bool seenFirst = false;
+  size_t itemIndex = 0;
+  size_t itemCount = 0;
   JsonDocument doc;
 
   for (const auto& s : settings) {
+    ++itemIndex;
     if (!s.key) continue;  // Skip ACTION-only entries
 
     doc.clear();
@@ -1523,19 +1560,30 @@ void CrossPointWebServer::handleGetSettings() const {
       continue;
     }
 
+    const unsigned long sendStart = millis();
+    LOG_DBG("WEB", "[HTTP] /api/settings tx begin: item=%zu key=%s bytes=%zu", itemIndex, s.key, written);
     if (seenFirst) {
       server->sendContent(",");
     } else {
       seenFirst = true;
     }
     server->sendContent(output);
+    ++itemCount;
+    const unsigned long sendDuration = millis() - sendStart;
+    if (sendDuration > 100) {
+      LOG_DBG("WEB", "[HTTP] /api/settings slow send: item=%zu key=%s duration=%lu ms connected=%d free=%d",
+              itemIndex, s.key, sendDuration, server->client().connected(), ESP.getFreeHeap());
+    }
     yield();                          // Let WiFi and other tasks run during slow responses.
     resetTaskWatchdogIfSubscribed();  // sendContent() can block on the network client.
   }
 
+  LOG_DBG("WEB", "[HTTP] /api/settings tail tx begin: items=%zu elapsed=%lu ms", itemCount,
+          millis() - requestStart);
   server->sendContent("]");
   server->sendContent("");
-  LOG_DBG("WEB", "Served settings API");
+  LOG_DBG("WEB", "[HTTP] /api/settings complete: items=%zu elapsed=%lu ms free=%d", itemCount,
+          millis() - requestStart, ESP.getFreeHeap());
 }
 
 void CrossPointWebServer::handlePostSettings() {
@@ -1616,6 +1664,8 @@ void CrossPointWebServer::handlePostSettings() {
 }
 
 void CrossPointWebServer::handleGetNutstoreConfig() const {
+  const unsigned long requestStart = millis();
+  LOG_DBG("WEB", "[HTTP] /api/nutstore/config begin: free=%d", ESP.getFreeHeap());
   NUTSTORE_CONFIG.loadFromFile();
   const auto& cfg = NUTSTORE_CONFIG.get();
   JsonDocument doc;
@@ -1630,7 +1680,11 @@ void CrossPointWebServer::handleGetNutstoreConfig() const {
 
   String json;
   serializeJson(doc, json);
+  LOG_DBG("WEB", "[HTTP] /api/nutstore/config tx begin: bytes=%zu elapsed=%lu ms", json.length(),
+          millis() - requestStart);
   server->send(200, "application/json", json);
+  LOG_DBG("WEB", "[HTTP] /api/nutstore/config complete: elapsed=%lu ms free=%d", millis() - requestStart,
+          ESP.getFreeHeap());
 }
 
 void CrossPointWebServer::handlePostNutstoreConfig() {
@@ -1855,10 +1909,15 @@ void CrossPointWebServer::handleDeleteTodo() {
 // ---- OPDS Server API ----
 
 void CrossPointWebServer::handleGetOpdsServers() const {
+  const unsigned long requestStart = millis();
+  LOG_DBG("WEB", "[HTTP] /api/opds begin: free=%d", ESP.getFreeHeap());
   const auto& servers = OPDS_STORE.getServers();
+  LOG_DBG("WEB", "[HTTP] /api/opds data ready: count=%zu elapsed=%lu ms free=%d", servers.size(),
+          millis() - requestStart, ESP.getFreeHeap());
 
   // Stream JSON array incrementally to avoid allocating the full response in memory
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+  LOG_DBG("WEB", "[HTTP] /api/opds headers tx begin: elapsed=%lu ms", millis() - requestStart);
   server->send(200, "application/json", "");
   server->sendContent("[");
 
@@ -1878,15 +1937,24 @@ void CrossPointWebServer::handleGetOpdsServers() const {
     const size_t written = serializeJson(doc, output, outputSize);
     if (written >= outputSize) continue;
 
+    const unsigned long sendStart = millis();
+    LOG_DBG("WEB", "[HTTP] /api/opds tx begin: item=%zu bytes=%zu", i, written);
     if (i > 0) server->sendContent(",");
     server->sendContent(output);
+    const unsigned long sendDuration = millis() - sendStart;
+    if (sendDuration > 100) {
+      LOG_DBG("WEB", "[HTTP] /api/opds slow send: item=%zu duration=%lu ms connected=%d free=%d", i, sendDuration,
+              server->client().connected(), ESP.getFreeHeap());
+    }
     yield();                          // Let WiFi and other tasks run during slow responses.
     resetTaskWatchdogIfSubscribed();  // sendContent() can block on the network client.
   }
 
+  LOG_DBG("WEB", "[HTTP] /api/opds tail tx begin: elapsed=%lu ms", millis() - requestStart);
   server->sendContent("]");
   server->sendContent("");
-  LOG_DBG("WEB", "Served OPDS servers API (%zu servers)", servers.size());
+  LOG_DBG("WEB", "[HTTP] /api/opds complete: count=%zu elapsed=%lu ms free=%d", servers.size(),
+          millis() - requestStart, ESP.getFreeHeap());
 }
 
 void CrossPointWebServer::handlePostOpdsServer() {
@@ -1973,10 +2041,15 @@ void CrossPointWebServer::handleDeleteOpdsServer() {
 // ---- Wi-Fi Credentials API ----
 
 void CrossPointWebServer::handleGetWifiNetworks() const {
+  const unsigned long requestStart = millis();
+  LOG_DBG("WEB", "[HTTP] /api/wifi begin: free=%d", ESP.getFreeHeap());
   const auto summaries = WIFI_STORE.getCredentialSummaries();
+  LOG_DBG("WEB", "[HTTP] /api/wifi data ready: count=%zu elapsed=%lu ms free=%d", summaries.size(),
+          millis() - requestStart, ESP.getFreeHeap());
 
   // Stream JSON array incrementally to avoid allocating the full response in memory
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
+  LOG_DBG("WEB", "[HTTP] /api/wifi headers tx begin: elapsed=%lu ms", millis() - requestStart);
   server->send(200, "application/json", "");
   server->sendContent("[");
 
@@ -1995,15 +2068,24 @@ void CrossPointWebServer::handleGetWifiNetworks() const {
     const size_t written = serializeJson(doc, output, outputSize);
     if (written >= outputSize) continue;
 
+    const unsigned long sendStart = millis();
+    LOG_DBG("WEB", "[HTTP] /api/wifi tx begin: item=%zu bytes=%zu", i, written);
     if (i > 0) server->sendContent(",");
     server->sendContent(output);
+    const unsigned long sendDuration = millis() - sendStart;
+    if (sendDuration > 100) {
+      LOG_DBG("WEB", "[HTTP] /api/wifi slow send: item=%zu duration=%lu ms connected=%d free=%d", i, sendDuration,
+              server->client().connected(), ESP.getFreeHeap());
+    }
     yield();                          // Let WiFi and other tasks run during slow responses.
     resetTaskWatchdogIfSubscribed();  // sendContent() can block on the network client.
   }
 
+  LOG_DBG("WEB", "[HTTP] /api/wifi tail tx begin: elapsed=%lu ms", millis() - requestStart);
   server->sendContent("]");
   server->sendContent("");
-  LOG_DBG("WEB", "Served Wi-Fi credentials API (%zu network(s))", summaries.size());
+  LOG_DBG("WEB", "[HTTP] /api/wifi complete: count=%zu elapsed=%lu ms free=%d", summaries.size(),
+          millis() - requestStart, ESP.getFreeHeap());
 }
 
 void CrossPointWebServer::handlePostWifiNetwork() {
