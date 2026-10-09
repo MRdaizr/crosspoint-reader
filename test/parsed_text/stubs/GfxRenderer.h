@@ -56,5 +56,7 @@ class GfxRenderer {
   int getSpaceAdvance(int, uint32_t, uint32_t, EpdFontFamily::Style) const { return 4; }
   bool isSdCardFont(int) const { return false; }
   void ensureSdCardFontReady(int, const std::deque<std::string>&, bool, uint8_t) const {}
+  using TextGetter = const char* (*)(const void*, uint32_t);
+  void ensureSdCardFontReady(int, TextGetter, const void*, uint32_t, bool, uint8_t) const {}
   void ensureSdCardFontReady(int, const char*, uint8_t) const {}
 };

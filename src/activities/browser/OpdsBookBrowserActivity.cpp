@@ -51,8 +51,8 @@ void OpdsBookBrowserActivity::activateSelected() {
 
 void OpdsBookBrowserActivity::onRowEvent(const freeink::ui::ActionEvent& event, void* user) {
   auto* self = static_cast<OpdsBookBrowserActivity*>(user);
-  if (self->state != BrowserState::BROWSING || event.value < 0 ||
-      event.value >= static_cast<int>(self->entries.size())) return;
+  if (self->state != BrowserState::BROWSING || event.value < 0 || event.value >= static_cast<int>(self->entries.size()))
+    return;
   self->selectorIndex = event.value;
   self->listNav.selected = event.value;
   self->app.clearTapFlash();
@@ -61,8 +61,10 @@ void OpdsBookBrowserActivity::onRowEvent(const freeink::ui::ActionEvent& event, 
 
 void OpdsBookBrowserActivity::rootScreen(UiScreen& screen, void* user) {
   auto* self = static_cast<OpdsBookBrowserActivity*>(user);
-  if (self->state == BrowserState::BROWSING) self->buildBrowsingScreen(screen);
-  else self->buildStatusScreen(screen);
+  if (self->state == BrowserState::BROWSING)
+    self->buildBrowsingScreen(screen);
+  else
+    self->buildStatusScreen(screen);
 }
 
 void OpdsBookBrowserActivity::onExit() {
@@ -119,12 +121,21 @@ void OpdsBookBrowserActivity::loop() {
   if (state == BrowserState::DOWNLOADING) return;
 
   if (state == BrowserState::BROWSING) {
+    // Search eligibility belongs to the pressed row, before press navigation
+    // can move the selection away from the search entry.
+    if (mappedInput.wasPressed(MappedInputManager::Button::Left)) {
+      leftSearchPending = !searchTemplate.empty() && selectorIndex == 0;
+    }
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       activateSelected();
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
       navigateBack();
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Left)) {
-      if (!searchTemplate.empty() && selectorIndex == 0) launchSearch();
+      if (leftSearchPending) {
+        leftSearchPending = false;
+        launchSearch();
+        return;
+      }
     }
 
     const auto route = routeTouch(mappedInput);
@@ -137,13 +148,14 @@ void OpdsBookBrowserActivity::loop() {
         if (listNav.scrollBy(delta, static_cast<int>(entries.size()))) requestUpdate();
         return;
       }
-      buttonNavigator.onNextRelease([this] {
+      buttonNavigator.onNextPress([this] {
         selectorIndex = ButtonNavigator::nextIndex(selectorIndex, entries.size());
         listNav.selected = selectorIndex;
         listNav.follow(static_cast<int>(entries.size()));
         requestUpdate();
       });
-      buttonNavigator.onPreviousRelease([this] {
+      buttonNavigator.onPreviousPress([this] {
+        if (leftSearchPending) return;
         selectorIndex = ButtonNavigator::previousIndex(selectorIndex, entries.size());
         listNav.selected = selectorIndex;
         listNav.follow(static_cast<int>(entries.size()));
@@ -156,6 +168,7 @@ void OpdsBookBrowserActivity::loop() {
         requestUpdate();
       });
       buttonNavigator.onPreviousContinuous([this] {
+        leftSearchPending = false;
         selectorIndex = ButtonNavigator::previousPageIndex(selectorIndex, entries.size(), listNav.pageRows());
         listNav.selected = selectorIndex;
         listNav.follow(static_cast<int>(entries.size()));
@@ -196,16 +209,22 @@ bool OpdsBookBrowserActivity::preventAutoSleep() {
 
 void OpdsBookBrowserActivity::buildBrowsingScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight), 0,
-                                      static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  screen.setContentMargin(
+      fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight), 0,
+                  static_cast<int16_t>(metrics.buttonHintsHeight), 0});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   if (rowItems.empty()) {
     screen.centeredText(tr(STR_NO_ENTRIES), screen.theme().bodyText);
     return;
   }
   fui::ListProps props;
-  props.items = rowItems.data(); props.count = static_cast<uint16_t>(rowItems.size()); props.action = ACTION_ROW;
-  props.inputMask = fui::InputTouch; props.valueInset = 8; props.subtitleText = screen.theme().smallText; props.subtitleText.maxLines = 1;
+  props.items = rowItems.data();
+  props.count = static_cast<uint16_t>(rowItems.size());
+  props.action = ACTION_ROW;
+  props.inputMask = fui::InputTouch;
+  props.valueInset = 8;
+  props.subtitleText = screen.theme().smallText;
+  props.subtitleText.maxLines = 1;
   const int16_t rowHeight = static_cast<int16_t>(UITheme::getInstance().getMetrics().listWithSubtitleRowHeight);
   props.rowHeight = rowHeight;
   listNav.selected = selectorIndex;
@@ -217,7 +236,8 @@ void OpdsBookBrowserActivity::buildStatusScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
   screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight), 0,
                                       static_cast<int16_t>(metrics.buttonHintsHeight), 0});
-  screen.centeredText(state == BrowserState::ERROR ? errorMessage.c_str() : statusMessage.c_str(), screen.theme().bodyText);
+  screen.centeredText(state == BrowserState::ERROR ? errorMessage.c_str() : statusMessage.c_str(),
+                      screen.theme().bodyText);
 }
 
 void OpdsBookBrowserActivity::render(RenderLock&&) {
@@ -233,8 +253,9 @@ void OpdsBookBrowserActivity::render(RenderLock&&) {
     renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2 - 40, tr(STR_DOWNLOADING));
     const auto text = renderer.truncatedText(UI_10_FONT_ID, statusMessage.c_str(), renderer.getScreenWidth() - 40);
     renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2 - 10, text.c_str());
-    if (downloadTotal > 0) GUI.drawProgressBar(renderer, Rect{50, renderer.getScreenHeight() / 2 + 20,
-                                                               renderer.getScreenWidth() - 100, 20}, downloadProgress, downloadTotal);
+    if (downloadTotal > 0)
+      GUI.drawProgressBar(renderer, Rect{50, renderer.getScreenHeight() / 2 + 20, renderer.getScreenWidth() - 100, 20},
+                          downloadProgress, downloadTotal);
   }
 
   const bool hasSelectedEntry = selectorIndex >= 0 && selectorIndex < static_cast<int>(entries.size());
@@ -354,8 +375,7 @@ void OpdsBookBrowserActivity::downloadBook(const OpdsEntry& book) {
   filename.reserve(96);
   if (haveFolder) filename += folder;
   filename += '/';
-  filename += opdsBookFilename(book.author, book.title,
-                                static_cast<OpdsFilenameFormat>(SETTINGS.opdsFilenameFormat));
+  filename += opdsBookFilename(book.author, book.title, static_cast<OpdsFilenameFormat>(SETTINGS.opdsFilenameFormat));
   LOG_DBG("OPDS", "Downloading: %s -> %s", downloadUrl.c_str(), filename.c_str());
 
   const auto result = HttpDownloader::downloadToFile(

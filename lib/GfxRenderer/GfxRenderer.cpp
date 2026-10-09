@@ -1,16 +1,16 @@
 #include "GfxRenderer.h"
 
 #include <BidiUtils.h>
+#include <BuildScratch.h>
 #include <FontDecompressor.h>
 #include <HalGPIO.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <SdCardFont.h>
 #include <Utf8.h>
 
 #include <algorithm>
 
-#include <BuildScratch.h>
-#include <Memory.h>
 #include "FontCacheManager.h"
 
 namespace {
@@ -67,14 +67,12 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
     // Prewarmed SD glyphs use a chunked, non-contiguous bitmap arena. Resolve
     // the virtual offset instead of indexing fontData->bitmap.
     if (!sdFont->isBitmapResident(fontData, glyph)) {
-      LOG_ERR("GFX", "SD glyph bitmap is not resident (offset=%u length=%u)", glyph->dataOffset,
-              glyph->dataLength);
+      LOG_ERR("GFX", "SD glyph bitmap is not resident (offset=%u length=%u)", glyph->dataOffset, glyph->dataLength);
       return nullptr;
     }
     const uint8_t* bitmap = sdFont->miniGlyphBitmap(fontData->glyphMissCtx, glyph->dataOffset);
     if (!bitmap && glyph->dataLength > 0) {
-      LOG_ERR("GFX", "SD glyph bitmap is not resident (offset=%u length=%u)", glyph->dataOffset,
-              glyph->dataLength);
+      LOG_ERR("GFX", "SD glyph bitmap is not resident (offset=%u length=%u)", glyph->dataOffset, glyph->dataLength);
     }
     return bitmap;
   }
@@ -106,6 +104,14 @@ void GfxRenderer::ensureSdCardFontReady(int fontId, const std::deque<std::string
   }
 }
 
+void GfxRenderer::ensureSdCardFontReady(int fontId, TextGetter getter, const void* ctx, uint32_t textCount,
+                                        bool includeHyphen, uint8_t styleMask) const {
+  auto it = sdCardFonts_.find(fontId);
+  if (it == sdCardFonts_.end()) return;
+  const int missed = it->second->buildAdvanceTable(getter, ctx, textCount, includeHyphen, styleMask);
+  if (missed > 0) LOG_DBG("GFX", "ensureSdCardFontReady: %d glyph(s) not found", missed);
+}
+
 void GfxRenderer::begin() {
   frameBuffer = display.getFrameBuffer();
   if (!frameBuffer) {
@@ -135,8 +141,8 @@ bool isCjkFallbackCodepoint(const uint32_t cp) {
   // Keep the phonetic extensions and the remaining CJK compatibility range in
   // the fallback decision too; these are common in Japanese UI strings but are
   // not line-break opportunities in every layout context.
-  return utf8IsCjkBreakable(cp) || (cp >= 0x31F0 && cp <= 0x31FF) ||
-         (cp >= 0x2E80 && cp <= 0x2FFF) || (cp >= 0x2F800 && cp <= 0x2FA1F);
+  return utf8IsCjkBreakable(cp) || (cp >= 0x31F0 && cp <= 0x31FF) || (cp >= 0x2E80 && cp <= 0x2FFF) ||
+         (cp >= 0x2F800 && cp <= 0x2FA1F);
 }
 
 bool isPhoneticFallbackCodepoint(const uint32_t cp) {
@@ -150,8 +156,7 @@ bool isPhoneticFallbackCodepoint(const uint32_t cp) {
 
 }  // namespace
 
-int GfxRenderer::resolveTextFontId(const int fontId, const char* text,
-                                   const EpdFontFamily::Style style) const {
+int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const EpdFontFamily::Style style) const {
   if (text == nullptr || *text == '\0' || fallbackFontMap_.empty()) return fontId;
 
   const auto fallbackIt = fallbackFontMap_.find(fontId);
@@ -180,8 +185,8 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text,
   return fontId;
 }
 
-void GfxRenderer::ensureSdGlyphsResident(const int fontId, const char* text,
-                                         const EpdFontFamily::Style style, const bool metadataOnly) const {
+void GfxRenderer::ensureSdGlyphsResident(const int fontId, const char* text, const EpdFontFamily::Style style,
+                                         const bool metadataOnly) const {
   if (text == nullptr || *text == '\0') return;
 
   const auto sdIt = sdCardFonts_.find(fontId);
@@ -219,8 +224,7 @@ void GfxRenderer::prewarmFallbackText(const int fontId, const TextGetter getter,
   }
 }
 
-void GfxRenderer::prewarmFallbackText(const int fontId, const char* text,
-                                      const EpdFontFamily::Style style) const {
+void GfxRenderer::prewarmFallbackText(const int fontId, const char* text, const EpdFontFamily::Style style) const {
   if (text == nullptr || *text == '\0') return;
   const int resolvedFontId = resolveTextFontId(fontId, text, style);
   if (resolvedFontId != fontId) ensureSdGlyphsResident(resolvedFontId, text, style, false);
@@ -1379,8 +1383,7 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
     scale = static_cast<float>(maxWidth) / static_cast<float>(bitmap.getWidth());
     isScaled = true;
   }
-  if (maxHeight > 0 &&
-      (bitmap.getHeight() > maxHeight || (allowUpscale && bitmap.getHeight() < maxHeight))) {
+  if (maxHeight > 0 && (bitmap.getHeight() > maxHeight || (allowUpscale && bitmap.getHeight() < maxHeight))) {
     const float heightScale = static_cast<float>(maxHeight) / static_cast<float>(bitmap.getHeight());
     scale = isScaled ? std::min(scale, heightScale) : heightScale;
     isScaled = true;
@@ -1409,9 +1412,8 @@ void GfxRenderer::drawBitmap1Bit(const Bitmap& bitmap, const int x, const int y,
     const int bmpYOffset = bitmap.isTopDown() ? bmpY : bitmap.getHeight() - 1 - bmpY;
     const int scaledY = isScaled ? static_cast<int>(std::floor(bmpYOffset * scale)) : bmpYOffset;
     const int screenY = y + scaledY;
-    const int blockHeight = upscaling
-                                ? std::max(1, static_cast<int>(std::floor((bmpYOffset + 1) * scale)) - scaledY)
-                                : 1;
+    const int blockHeight =
+        upscaling ? std::max(1, static_cast<int>(std::floor((bmpYOffset + 1) * scale)) - scaledY) : 1;
     if (screenY >= getScreenHeight()) {
       continue;  // Continue reading to keep row counter in sync
     }
@@ -1608,8 +1610,8 @@ void GfxRenderer::displayBuffer(const HalDisplay::RefreshMode refreshMode) const
 }
 
 void GfxRenderer::displayWindow(const int x, const int y, const int width, const int height) const {
-  if (x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > getScreenWidth() ||
-      y + height > getScreenHeight() || (x % 8) != 0 || (width % 8) != 0) {
+  if (x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > getScreenWidth() || y + height > getScreenHeight() ||
+      (x % 8) != 0 || (width % 8) != 0) {
     LOG_ERR("GFX", "Invalid display window: x=%d y=%d w=%d h=%d", x, y, width, height);
     return;
   }
@@ -1870,7 +1872,7 @@ bool GfxRenderer::copyBufferToRegion(int lx, int ly, int lw, int lh, const uint8
 }
 
 size_t GfxRenderer::readFramebufferRegion(const int x, const int y, const int w, const int h, uint8_t* dst,
-                                           const size_t dstCapacity) const {
+                                          const size_t dstCapacity) const {
   if (!dst || w <= 0 || h <= 0) return 0;
   const size_t bytes = getRegionByteSize(x, y, w, h);
   if (bytes == 0 || bytes > dstCapacity || !copyRegionToBuffer(x, y, w, h, dst, dstCapacity)) return 0;

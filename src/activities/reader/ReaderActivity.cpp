@@ -1,5 +1,6 @@
 #include "ReaderActivity.h"
 
+#include <FontCacheManager.h>
 #include <FsHelpers.h>
 #include <HalStorage.h>
 #include <Memory.h>
@@ -139,6 +140,9 @@ void ReaderActivity::onExit() {
   // Derived hooks must release parser/cache resources while the Activity
   // context is still valid (for example EPUB image extraction and stats).
   onBookExited();
+  // Metrics, mini bitmaps and ligatures are rebuildable. Do not leave them
+  // pinning the heap after the derived reader has released its section.
+  if (auto* fcm = renderer.getFontCacheManager()) fcm->releaseSdFontCaches();
   endOfBookOptions.reset();
   endOfBookOptionsReady.store(false, std::memory_order_release);
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);

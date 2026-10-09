@@ -1,5 +1,7 @@
 #include "ButtonNavigator.h"
 
+#include <algorithm>
+
 const MappedInputManager* ButtonNavigator::mappedInput = nullptr;
 
 void ButtonNavigator::onNext(const Callback& callback) {
@@ -17,17 +19,29 @@ void ButtonNavigator::onPressAndContinuous(const Buttons& buttons, const Callbac
   onContinuous(buttons, callback);
 }
 
-void ButtonNavigator::onNextPress(const Callback& callback) { onPress(getNextButtons(), callback); }
+void ButtonNavigator::onNextPress(const Callback& callback) {
+  onPress({MappedInputManager::Button::NavNext}, callback);
+}
 
-void ButtonNavigator::onPreviousPress(const Callback& callback) { onPress(getPreviousButtons(), callback); }
+void ButtonNavigator::onPreviousPress(const Callback& callback) {
+  onPress({MappedInputManager::Button::NavPrevious}, callback);
+}
 
-void ButtonNavigator::onNextRelease(const Callback& callback) { onRelease(getNextButtons(), callback); }
+void ButtonNavigator::onNextRelease(const Callback& callback) {
+  onRelease({MappedInputManager::Button::NavNext}, callback);
+}
 
-void ButtonNavigator::onPreviousRelease(const Callback& callback) { onRelease(getPreviousButtons(), callback); }
+void ButtonNavigator::onPreviousRelease(const Callback& callback) {
+  onRelease({MappedInputManager::Button::NavPrevious}, callback);
+}
 
-void ButtonNavigator::onNextContinuous(const Callback& callback) { onContinuous(getNextButtons(), callback); }
+void ButtonNavigator::onNextContinuous(const Callback& callback) {
+  onContinuous({MappedInputManager::Button::NavNext}, callback);
+}
 
-void ButtonNavigator::onPreviousContinuous(const Callback& callback) { onContinuous(getPreviousButtons(), callback); }
+void ButtonNavigator::onPreviousContinuous(const Callback& callback) {
+  onContinuous({MappedInputManager::Button::NavPrevious}, callback);
+}
 
 void ButtonNavigator::onPress(const Buttons& buttons, const Callback& callback) {
   const bool wasPressed = std::any_of(buttons.begin(), buttons.end(), [](const MappedInputManager::Button button) {
@@ -54,6 +68,13 @@ void ButtonNavigator::onRelease(const Buttons& buttons, const Callback& callback
 }
 
 void ButtonNavigator::onContinuous(const Buttons& buttons, const Callback& callback) {
+  const bool edge = std::any_of(buttons.begin(), buttons.end(), [](const MappedInputManager::Button button) {
+    return mappedInput != nullptr && (mappedInput->wasPressed(button) || mappedInput->wasReleased(button));
+  });
+  if (edge) {
+    lastContinuousNavTime = 0;
+    return;  // A press already stepped; a release must not repeat.
+  }
   const bool isPressed = std::any_of(buttons.begin(), buttons.end(), [this](const MappedInputManager::Button button) {
     return mappedInput != nullptr && mappedInput->isPressed(button) && shouldNavigateContinuously();
   });

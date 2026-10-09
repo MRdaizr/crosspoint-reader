@@ -204,3 +204,43 @@ TEST(SdCardFontTest, LigatureRequestsServedFromAKernFreeMiniGetLigatures) {
   ASSERT_EQ(0, font.prewarm("EF", 1, false, true, false));
   EXPECT_EQ(static_cast<uint32_t>('A'), font.getEpdFont()->getLigature('E', 'F'));
 }
+
+TEST(SdCardFontTest, LaterPagesReadOnlyTheKernClassBlocksTheyUse) {
+  makeKerningFont(300);  // five 64-entry blocks per class table
+  SdCardFont font;
+  ASSERT_TRUE(font.load("fixture"));
+  sdFontTestReads = 0;
+  ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+  const size_t firstReads = sdFontTestReads;
+  font.releaseResidentCaches();
+  sdFontTestReads = 0;
+  ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+  EXPECT_EQ(firstReads - 8, sdFontTestReads);
+  EXPECT_EQ(-3, font.getEpdFont()->getKerning('A', 'B'));
+  EXPECT_EQ(-5, font.getEpdFont()->getKerning('C', 'D'));
+}
+
+TEST(SdCardFontTest, MissingBlockIndexFallsBackToFullScan) {
+  makeKerningFont(300);
+  SdCardFont font;
+  failNextArraySize = 24;  // (5+1) block boundaries per table, two uint16_t tables
+  ASSERT_TRUE(font.load("fixture"));
+  EXPECT_EQ(0U, failNextArraySize);
+  ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+  font.releaseResidentCaches();
+  ASSERT_EQ(0, font.prewarm("ABCDEF", 1, false, true, false));
+  EXPECT_EQ(-3, font.getEpdFont()->getKerning('A', 'B'));
+  EXPECT_EQ(-5, font.getEpdFont()->getKerning('C', 'D'));
+}
+
+TEST(SdCardFontTest, CallbackAdvanceScanIncludesSpaceAndHyphen) {
+  makeKerningFont();
+  SdCardFont font;
+  ASSERT_TRUE(font.load("fixture"));
+  const char* words[] = {"AB", "CD"};
+  EXPECT_GE(font.buildAdvanceTable([](const void* ctx, uint32_t i) { return static_cast<const char* const*>(ctx)[i]; },
+                                   words, 2, true, 1),
+            0);
+  EXPECT_NE(0, font.getAdvance('A', 0));
+  EXPECT_NE(0, font.getAdvance('D', 0));
+}

@@ -19,7 +19,10 @@ class OpdsBookBrowserActivity final : public Activity, private UiAppHost {
   enum class BrowserState { CHECK_WIFI, WIFI_SELECTION, LOADING, BROWSING, DOWNLOADING, ERROR, SEARCH_INPUT };
 
   explicit OpdsBookBrowserActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, OpdsServer server)
-      : Activity("OpdsBookBrowser", renderer, mappedInput), UiAppHost(renderer), buttonNavigator(), server(std::move(server)) {}
+      : Activity("OpdsBookBrowser", renderer, mappedInput),
+        UiAppHost(renderer),
+        buttonNavigator(),
+        server(std::move(server)) {}
 
   void onEnter() override;
   void onExit() override;
@@ -45,6 +48,7 @@ class OpdsBookBrowserActivity final : public Activity, private UiAppHost {
   bool consumeConfirm = false;
   bool consumeBack = false;  // Added missing member
   int selectorIndex = 0;
+  bool leftSearchPending = false;
   std::string errorMessage;
   std::string statusMessage;
   size_t downloadProgress = 0;

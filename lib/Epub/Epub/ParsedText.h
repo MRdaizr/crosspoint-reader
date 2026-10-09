@@ -9,16 +9,18 @@
 #include <string>
 #include <vector>
 
+#include "WordStore.h"
 #include "blocks/BlockStyle.h"
 #include "blocks/TextBlock.h"
 
 class GfxRenderer;
 
 class ParsedText {
-  // deque avoids a large contiguous allocation when a CJK paragraph expands
-  // into hundreds of tokens. The parallel metadata vectors remain contiguous
-  // because they are passed to layout/render code as indexed arrays.
-  std::deque<std::string> words;
+  // Small handles preserve indexed layout while text shares 2KB arenas.
+  WordStore wordStore;
+  std::deque<WordStore::StoredWord> words;
+  std::string_view wordAt(size_t index) const { return wordStore.view(words[index]); }
+  bool appendStoredWord(std::string_view text);
   std::vector<EpdFontFamily::Style> wordStyles;
   std::vector<bool> wordContinues;      // true = word attaches to previous with no break
   std::vector<bool> wordNoSpaceBefore;  // true = may break before token, but no synthetic space when joined

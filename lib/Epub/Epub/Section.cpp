@@ -13,6 +13,7 @@
 
 #include "Epub/css/CssParser.h"
 #include "Page.h"
+#include "VisibleOffsetLut.h"
 #include "hyphenation/Hyphenator.h"
 #include "parsers/ChapterHtmlSlimParser.h"
 
@@ -1572,28 +1573,9 @@ std::optional<uint16_t> Section::getPageForVisibleTextOffset(const uint32_t offs
     return std::nullopt;
   }
 
-  f.seek(visibleLutOffset);
-  uint16_t result = 0;
-  for (uint16_t i = 0; i < cachedPageCount; ++i) {
-    uint32_t pageOffset = 0;
-    serialization::readPod(f, pageOffset);
-    if (preferFirstAtOffset && pageOffset == offset) {
-      f.close();
-      return i;
-    }
-    if (pageOffset > offset) break;
-    result = i;
+  if (!f.seek(visibleLutOffset)) {
+    LOG_ERR("SCT", "Failed to seek visible offset LUT");
+    return std::nullopt;
   }
-  if (partial_ && offset > 0) {
-    // A partial cache is authoritative only through its last visible offset.
-    f.seek(visibleLutOffset + static_cast<uint32_t>(cachedPageCount - 1) * sizeof(uint32_t));
-    uint32_t lastOffset = 0;
-    serialization::readPod(f, lastOffset);
-    if (offset > lastOffset) {
-      f.close();
-      return std::nullopt;
-    }
-  }
-  f.close();
-  return result;
+  return pageForVisibleOffset(f, cachedPageCount, offset, preferFirstAtOffset, partial_);
 }

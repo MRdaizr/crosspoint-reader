@@ -1,0 +1,17 @@
+# Exercise the production reopen/update methods without pulling in EPUB and SD
+# parsers used by the other persistence methods in the same translation unit.
+set(RECENT_SOURCE "${REPO_ROOT}/src/RecentBooksStore.cpp")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${RECENT_SOURCE}")
+file(READ "${RECENT_SOURCE}" RECENT_SOURCE_TEXT)
+string(FIND "${RECENT_SOURCE_TEXT}" "void RecentBooksStore::addBook(" RECENT_START)
+string(FIND "${RECENT_SOURCE_TEXT}" "bool RecentBooksStore::removeByPath(" RECENT_END)
+if(RECENT_START LESS 0 OR RECENT_END LESS RECENT_START)
+  message(FATAL_ERROR "RecentBooksStore reopen method boundaries changed")
+endif()
+math(EXPR RECENT_LENGTH "${RECENT_END} - ${RECENT_START}")
+string(SUBSTRING "${RECENT_SOURCE_TEXT}" ${RECENT_START} ${RECENT_LENGTH} RECENT_BOOK_METHODS)
+configure_file(RecentBookReopenTest.cpp.in RecentBookReopenTest.cpp @ONLY)
+add_executable(RecentBookReopenTest "${CMAKE_CURRENT_BINARY_DIR}/RecentBookReopenTest.cpp")
+target_include_directories(RecentBookReopenTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/stubs ${REPO_ROOT}/src)
+target_link_libraries(RecentBookReopenTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(RecentBookReopenTest)
