@@ -103,13 +103,18 @@ if (parsedSize != fileSize) {
 
 ## `section.bin`
 
-### Version 41
+Version 46 preserves paragraph continuity across soft flushes: first-line
+indentation and top spacing apply once, while bottom spacing applies only when
+the paragraph ends. Both complete and partial caches from earlier versions are
+automatically rebuilt; progress and bookmarks are retained.
+
+### Version 46
 
 Each file in `sections/*.bin` stores one laid-out spine section. The header is
 also the cache-busting key: if any layout-affecting setting differs from the
 current reader settings, the section is discarded and rebuilt.
 
-Version 41 includes:
+Version 46 includes:
 
 - cache-busting fields for paragraph alignment, hyphenation, embedded CSS,
   image rendering mode, and Focus Reading
@@ -137,15 +142,15 @@ Version 41 includes:
 An in-progress build writes version `0` until all page records and lookup tables
 are complete. If the reader is closed after at least one complete page, it may
 commit a readable partial cache using the derived sentinel
-`0xFE - (41 - 28) = 0xF1`. A partial cache contains only its known page prefix,
+`0xFE - (46 - 28) = 0xEC`. A partial cache contains only its known page prefix,
 all lookup tables for that prefix, and two trailing `uint32_t` values
 (`bytesConsumed`, `totalBytes`) after the visible-text LUT. It is displayed
-immediately on the next open and rebuilt in the background. Version `0`, `0xF1`
+immediately on the next open and rebuilt in the background. Version `0`, `0xEC`
 from another section format, truncated tables, and old versions are rejected
 and rebuilt; no old page payload is reinterpreted.
 
 The section cache is intentionally invalidated when these semantics change. A
-section written with Version 40 or any earlier version (and partial caches from
+section written with Version 45 or any earlier version (and partial caches from
 an older section format) are rejected and rebuilt;
 no attempt is made to reinterpret its serialized page payload.
 
@@ -157,7 +162,7 @@ helpers expose only pages/anchors already flushed to the incremental cache;
 callers keep unresolved content targets pending instead of falling back to an
 obsolete page number. A streamed chapter HTML file is retained after a
 successful layout and reused when a later build changes only the render spec.
-These APIs do not alter the serialized Version 41 header.
+These APIs do not alter the serialized Version 46 header.
 
 Bookmark and KOReader progress records continue to store the visible-text
 offset. KOReader's optional CrossPoint rich position (page/paragraph hints and

@@ -227,6 +227,7 @@ class SdCardFont {
     uint8_t miniUnderuseRuns = 0;
     bool miniMetadataOnly = false;
     bool miniHysteresisPending = false;
+    bool miniKernBuilt = false;
 
     // Per-page mini kern matrix (built by buildMiniKernMatrix on each full
     // prewarm). miniKernLeftClasses/miniKernRightClasses map ONLY the codepoints

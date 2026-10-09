@@ -13,6 +13,8 @@ target_include_directories(AirPageImageStoreTest BEFORE PRIVATE
   ${REPO_ROOT}/src/activities/network/airpage
   ${REPO_ROOT}/lib/Epub
   ${REPO_ROOT}/lib/GfxRenderer
+  ${REPO_ROOT}/lib/Memory
+  ${REPO_ROOT}/lib/Logging
 )
 
 target_compile_definitions(AirPageImageStoreTest PRIVATE

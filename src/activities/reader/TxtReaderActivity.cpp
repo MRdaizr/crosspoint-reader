@@ -13,20 +13,20 @@
 #include <cstring>
 #include <iterator>
 
+#include "AchievementsStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
-#include "AchievementsStore.h"
 #include "EpubReaderPercentSelectionActivity.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
-#include "RecentBooksStore.h"
 #include "ReadingStatsStore.h"
+#include "RecentBooksStore.h"
 #include "TxtReaderMenuActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "util/ScreenshotUtil.h"
 #include "util/AchievementPopupUtils.h"
+#include "util/ScreenshotUtil.h"
 
 namespace {
 // Most pages in a CJK TXT are below 1 KiB. Start there and only expand when a
@@ -38,8 +38,8 @@ constexpr size_t MAX_LAYOUT_CHUNK_SIZE = 4 * 1024;
 constexpr size_t PAGE_LAYOUT_CACHE_SIZE = 3;
 constexpr int APPROXIMATE_PAGE_KEY_BASE = -1000000;
 // Cache file magic and version
-constexpr uint32_t CACHE_MAGIC = 0x54585449;  // "TXTI"
-constexpr uint8_t CACHE_VERSION = 5;          // Increment when page offset calculation changes
+constexpr uint32_t CACHE_MAGIC = 0x54585449;          // "TXTI"
+constexpr uint8_t CACHE_VERSION = 5;                  // Increment when page offset calculation changes
 constexpr uint32_t PARTIAL_CACHE_MAGIC = 0x54584249;  // "TXBI"
 constexpr uint32_t PROGRESS_MAGIC = 0x54585052;       // "TXPR"
 constexpr unsigned long INDEX_BUILD_TICK_MS = 80UL;
@@ -101,9 +101,7 @@ bool TxtReaderActivity::loadBook() {
   return true;
 }
 
-void TxtReaderActivity::onBookEntered() {
-  txt->setupCacheDir();
-}
+void TxtReaderActivity::onBookEntered() { txt->setupCacheDir(); }
 
 void TxtReaderActivity::onBookExited() {
   pendingPageTurn.store(0, std::memory_order_release);
@@ -132,6 +130,7 @@ bool TxtReaderActivity::pageTurn(const bool isForward) {
 }
 
 void TxtReaderActivity::loop() {
+  rememberBookOnceRendered();
   READING_STATS.noteActivity();
   const bool atEndOfBook = isAtEndOfBook();
   clearEndOfBookOptionsIfNeeded(atEndOfBook);
@@ -148,20 +147,20 @@ void TxtReaderActivity::loop() {
     const int page = displayedPage();
     const int pageCount = displayedTotalPages();
     const int progressPercent = pageCount > 0 ? static_cast<int>((page + 1) * 100.0f / pageCount + 0.5f) : 0;
-    startActivityForResult(std::make_unique<TxtReaderMenuActivity>(
-                               renderer, mappedInput, txt ? txt->getTitle() : "", page + 1, pageCount,
-                               progressPercent, SETTINGS.orientation),
-                           [this](const ActivityResult& result) {
-                             if (!std::holds_alternative<TxtMenuResult>(result.data)) {
-                               LOG_ERR("TRD", "TXT reader menu returned an unexpected result");
-                               return;
-                             }
-                             const auto& menu = std::get<TxtMenuResult>(result.data);
-                             applyOrientation(menu.orientation);
-                             if (!result.isCancelled) {
-                               onReaderMenuConfirm(static_cast<TxtReaderMenuActivity::MenuAction>(menu.action));
-                             }
-                           });
+    startActivityForResult(
+        std::make_unique<TxtReaderMenuActivity>(renderer, mappedInput, txt ? txt->getTitle() : "", page + 1, pageCount,
+                                                progressPercent, SETTINGS.orientation),
+        [this](const ActivityResult& result) {
+          if (!std::holds_alternative<TxtMenuResult>(result.data)) {
+            LOG_ERR("TRD", "TXT reader menu returned an unexpected result");
+            return;
+          }
+          const auto& menu = std::get<TxtMenuResult>(result.data);
+          applyOrientation(menu.orientation);
+          if (!result.isCancelled) {
+            onReaderMenuConfirm(static_cast<TxtReaderMenuActivity::MenuAction>(menu.action));
+          }
+        });
     return;
   }
 
@@ -217,8 +216,7 @@ void TxtReaderActivity::jumpToPercent(int percent) {
 void TxtReaderActivity::applyPercentJump(const int percent) {
   if (!pageIndexComplete) {
     beginApproximatePosition(percent);
-    LOG_DBG("TRS", "Approximate percent jump: %d%% offset=%u", percent,
-            static_cast<unsigned>(displayedOffset()));
+    LOG_DBG("TRS", "Approximate percent jump: %d%% offset=%u", percent, static_cast<unsigned>(displayedOffset()));
     requestUpdate();
     return;
   }
@@ -252,9 +250,7 @@ int TxtReaderActivity::displayedPage() const {
   return approximatePosition ? approximateBasePage + approximateLocalPage : currentPage;
 }
 
-int TxtReaderActivity::displayedTotalPages() const {
-  return approximatePosition ? approximateTotalPages : totalPages;
-}
+int TxtReaderActivity::displayedTotalPages() const { return approximatePosition ? approximateTotalPages : totalPages; }
 
 size_t TxtReaderActivity::displayedOffset() const {
   if (approximatePosition && approximateLocalPage >= 0 &&
@@ -294,14 +290,14 @@ void TxtReaderActivity::beginApproximatePosition(const int percent, size_t offse
   const size_t indexedOffset = pageOffsets.empty() ? 0 : pageOffsets.back();
   const size_t indexedPages = pageOffsets.size();
   if (indexedOffset > 0 && indexedPages > 0) {
-    approximateTotalPages = static_cast<int>(std::max<size_t>(
-        totalPages, (fileSize * indexedPages + indexedOffset / 2) / indexedOffset));
+    approximateTotalPages =
+        static_cast<int>(std::max<size_t>(totalPages, (fileSize * indexedPages + indexedOffset / 2) / indexedOffset));
   } else {
     approximateTotalPages = std::max(1, totalPages);
   }
-  approximateBasePage = std::clamp(static_cast<int>(fileSize == 0 ? 0 :
-                                                        (offset * static_cast<size_t>(approximateTotalPages)) / fileSize),
-                                   0, std::max(0, approximateTotalPages - 1));
+  approximateBasePage =
+      std::clamp(static_cast<int>(fileSize == 0 ? 0 : (offset * static_cast<size_t>(approximateTotalPages)) / fileSize),
+                 0, std::max(0, approximateTotalPages - 1));
   approximatePosition = true;
   approximatePageOffsets.assign(1, offset);
   approximateLocalPage = 0;
@@ -343,14 +339,15 @@ void TxtReaderActivity::onReaderMenuConfirm(TxtReaderMenuActivity::MenuAction ac
       const int page = displayedPage();
       const int pageCount = displayedTotalPages();
       const int initialPercent = pageCount > 0 ? static_cast<int>((page + 1) * 100.0f / pageCount + 0.5f) : 0;
-      startActivityForResult(std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
-                             [this](const ActivityResult& result) {
-                               if (!result.isCancelled && std::holds_alternative<PercentResult>(result.data)) {
-                                 jumpToPercent(std::get<PercentResult>(result.data).percent);
-                               } else if (!result.isCancelled) {
-                                 LOG_ERR("TRD", "Percent picker returned an unexpected result");
-                               }
-                             });
+      startActivityForResult(
+          std::make_unique<EpubReaderPercentSelectionActivity>(renderer, mappedInput, initialPercent),
+          [this](const ActivityResult& result) {
+            if (!result.isCancelled && std::holds_alternative<PercentResult>(result.data)) {
+              jumpToPercent(std::get<PercentResult>(result.data).percent);
+            } else if (!result.isCancelled) {
+              LOG_ERR("TRD", "Percent picker returned an unexpected result");
+            }
+          });
       break;
     }
     case TxtReaderMenuActivity::MenuAction::ROTATE_SCREEN:
@@ -641,8 +638,9 @@ void TxtReaderActivity::scheduleBackgroundWork() {
   if (!initialized || pendingPageTurn.load(std::memory_order_acquire) != 0) return;
 
   const int nextPage = nextDisplayPageKey();
-  const bool canPrepareNext = preparedPage != nextPage &&
-                              (approximatePosition || nextPage < static_cast<int>(pageOffsets.size()) || !pageIndexComplete);
+  const bool canPrepareNext =
+      preparedPage != nextPage &&
+      (approximatePosition || nextPage < static_cast<int>(pageOffsets.size()) || !pageIndexComplete);
   if (canPrepareNext && nextPagePrepareStage == NextPagePrepareStage::NONE && !nextPagePrepareRequested) {
     nextPagePrepareRequested = true;
     requestUpdate();
@@ -662,7 +660,8 @@ const TxtReaderActivity::PageLayout* TxtReaderActivity::findPageLayout(const int
   return nullptr;
 }
 
-void TxtReaderActivity::cachePageLayout(const int page, const size_t nextOffset, const std::vector<std::string>& lines) {
+void TxtReaderActivity::cachePageLayout(const int page, const size_t nextOffset,
+                                        const std::vector<std::string>& lines) {
   for (auto& cached : pageLayoutCache) {
     if (cached.page == page) {
       cached.nextOffset = nextOffset;
@@ -676,7 +675,7 @@ void TxtReaderActivity::cachePageLayout(const int page, const size_t nextOffset,
     int greatestDistance = -1;
     for (size_t i = 0; i < pageLayoutCache.size(); ++i) {
       const int distance = pageLayoutCache[i].page > currentPage ? pageLayoutCache[i].page - currentPage
-                                                                   : currentPage - pageLayoutCache[i].page;
+                                                                 : currentPage - pageLayoutCache[i].page;
       if (distance > greatestDistance) {
         greatestDistance = distance;
         evict = i;
@@ -691,8 +690,10 @@ void TxtReaderActivity::clearPageLayouts() { pageLayoutCache.clear(); }
 void TxtReaderActivity::updateIndexProgress(const bool requestRefresh) {
   const size_t fileSize = txt ? txt->getFileSize() : 0;
   const size_t indexedOffset = pageIndexComplete ? fileSize : (pageOffsets.empty() ? 0 : pageOffsets.back());
-  const uint8_t rawProgress = fileSize == 0 ? 100 : static_cast<uint8_t>(std::min<size_t>(100, indexedOffset * 100 / fileSize));
-  const uint8_t progress = rawProgress >= 100 ? 100 : static_cast<uint8_t>((rawProgress / INDEX_PROGRESS_STEP) * INDEX_PROGRESS_STEP);
+  const uint8_t rawProgress =
+      fileSize == 0 ? 100 : static_cast<uint8_t>(std::min<size_t>(100, indexedOffset * 100 / fileSize));
+  const uint8_t progress =
+      rawProgress >= 100 ? 100 : static_cast<uint8_t>((rawProgress / INDEX_PROGRESS_STEP) * INDEX_PROGRESS_STEP);
   indexProgressPercent = progress;
 
   if (!requestRefresh ||
@@ -732,115 +733,115 @@ bool TxtReaderActivity::loadPageAtOffset(size_t offset, std::vector<std::string>
   const size_t maxChunkSize = std::min(MAX_LAYOUT_CHUNK_SIZE, fileSize - offset);
   while (true) {
     outLines.clear();
-  auto* buffer = static_cast<uint8_t*>(malloc(chunkSize + 1));
-  if (!buffer) {
-    LOG_ERR("TRS", "Failed to allocate %zu bytes", chunkSize);
-    return false;
-  }
-
-  if (!txt->readContent(buffer, offset, chunkSize)) {
-    free(buffer);
-    return false;
-  }
-  buffer[chunkSize] = '\0';
-
-  // Prime the SD card font's advance table with this chunk's codepoints.
-  // Without this, every getTextAdvanceX() call in the wrap loop below triggers
-  // on-demand glyph loads through the 8-slot overflow ring buffer, which
-  // thrashes for any text with more than 8 unique chars (i.e. all English),
-  // floods the heap with short-lived bitmap allocations, and eventually
-  // corrupts FreeRTOS state. The advance table persists across calls per
-  // font, so the cost amortizes to ~ASCII-size after the first chunk.
-  if (renderer.isSdCardFont(cachedFontId)) {
-    renderer.ensureSdCardFontReady(cachedFontId, reinterpret_cast<const char*>(buffer), /*styleMask=*/0x01);
-  }
-
-  // Parse lines from buffer
-  size_t pos = 0;
-
-  while (pos < chunkSize && static_cast<int>(outLines.size()) < linesPerPage) {
-    // Find end of line
-    size_t lineEnd = pos;
-    while (lineEnd < chunkSize && buffer[lineEnd] != '\n') {
-      lineEnd++;
+    auto* buffer = static_cast<uint8_t*>(malloc(chunkSize + 1));
+    if (!buffer) {
+      LOG_ERR("TRS", "Failed to allocate %zu bytes", chunkSize);
+      return false;
     }
 
-    // Check if we have a complete line
-    bool lineComplete = (lineEnd < chunkSize) || (offset + lineEnd >= fileSize);
+    if (!txt->readContent(buffer, offset, chunkSize)) {
+      free(buffer);
+      return false;
+    }
+    buffer[chunkSize] = '\0';
 
-    if (!lineComplete && static_cast<int>(outLines.size()) > 0) {
-      // Incomplete line and we already have some lines, stop here
-      break;
+    // Prime the SD card font's advance table with this chunk's codepoints.
+    // Without this, every getTextAdvanceX() call in the wrap loop below triggers
+    // on-demand glyph loads through the 8-slot overflow ring buffer, which
+    // thrashes for any text with more than 8 unique chars (i.e. all English),
+    // floods the heap with short-lived bitmap allocations, and eventually
+    // corrupts FreeRTOS state. The advance table persists across calls per
+    // font, so the cost amortizes to ~ASCII-size after the first chunk.
+    if (renderer.isSdCardFont(cachedFontId)) {
+      renderer.ensureSdCardFontReady(cachedFontId, reinterpret_cast<const char*>(buffer), /*styleMask=*/0x01);
     }
 
-    // Calculate the actual length of line content in the buffer (excluding newline)
-    size_t lineContentLen = lineEnd - pos;
+    // Parse lines from buffer
+    size_t pos = 0;
 
-    // Check for carriage return
-    bool hasCR = (lineContentLen > 0 && buffer[pos + lineContentLen - 1] == '\r');
-    size_t displayLen = hasCR ? lineContentLen - 1 : lineContentLen;
+    while (pos < chunkSize && static_cast<int>(outLines.size()) < linesPerPage) {
+      // Find end of line
+      size_t lineEnd = pos;
+      while (lineEnd < chunkSize && buffer[lineEnd] != '\n') {
+        lineEnd++;
+      }
 
-    // Extract line content for display (without CR/LF)
-    std::string line(reinterpret_cast<char*>(buffer + pos), displayLen);
+      // Check if we have a complete line
+      bool lineComplete = (lineEnd < chunkSize) || (offset + lineEnd >= fileSize);
 
-    // Track position within this source line (in bytes from pos)
-    size_t lineBytePos = 0;
+      if (!lineComplete && static_cast<int>(outLines.size()) > 0) {
+        // Incomplete line and we already have some lines, stop here
+        break;
+      }
 
-    // Emit at least one visual line for each source line (including blank lines),
-    // then continue with wrapping when needed.
-    do {
+      // Calculate the actual length of line content in the buffer (excluding newline)
+      size_t lineContentLen = lineEnd - pos;
+
+      // Check for carriage return
+      bool hasCR = (lineContentLen > 0 && buffer[pos + lineContentLen - 1] == '\r');
+      size_t displayLen = hasCR ? lineContentLen - 1 : lineContentLen;
+
+      // Extract line content for display (without CR/LF)
+      std::string line(reinterpret_cast<char*>(buffer + pos), displayLen);
+
+      // Track position within this source line (in bytes from pos)
+      size_t lineBytePos = 0;
+
+      // Emit at least one visual line for each source line (including blank lines),
+      // then continue with wrapping when needed.
+      do {
+        if (line.empty()) {
+          outLines.emplace_back();
+          break;
+        }
+
+        // This scans only until the first visual-line boundary. Avoid measuring
+        // the whole remaining paragraph before every wrapped line.
+        const size_t breakPos = fittingPrefix(renderer, cachedFontId, line, viewportWidth);
+        if (breakPos >= line.size()) {
+          outLines.push_back(line);
+          lineBytePos = displayLen;  // Consumed entire display content
+          line.clear();
+          break;
+        }
+
+        outLines.push_back(line.substr(0, breakPos));
+
+        // Skip space at break point
+        size_t skipChars = breakPos;
+        if (breakPos < line.length() && line[breakPos] == ' ') {
+          skipChars++;
+        }
+        lineBytePos += skipChars;
+        line = line.substr(skipChars);
+      } while (!line.empty() && static_cast<int>(outLines.size()) < linesPerPage);
+
+      // Determine how much of the source buffer we consumed
       if (line.empty()) {
-        outLines.emplace_back();
+        // Fully consumed this source line, move past the newline
+        pos = lineEnd + ((lineEnd < chunkSize && buffer[lineEnd] == '\n') ? 1 : 0);
+      } else {
+        // Partially consumed - page is full mid-line
+        // Move pos to where we stopped in the line (NOT past the line)
+        pos = pos + lineBytePos;
         break;
       }
-
-      // This scans only until the first visual-line boundary. Avoid measuring
-      // the whole remaining paragraph before every wrapped line.
-      const size_t breakPos = fittingPrefix(renderer, cachedFontId, line, viewportWidth);
-      if (breakPos >= line.size()) {
-        outLines.push_back(line);
-        lineBytePos = displayLen;  // Consumed entire display content
-        line.clear();
-        break;
-      }
-
-      outLines.push_back(line.substr(0, breakPos));
-
-      // Skip space at break point
-      size_t skipChars = breakPos;
-      if (breakPos < line.length() && line[breakPos] == ' ') {
-        skipChars++;
-      }
-      lineBytePos += skipChars;
-      line = line.substr(skipChars);
-    } while (!line.empty() && static_cast<int>(outLines.size()) < linesPerPage);
-
-    // Determine how much of the source buffer we consumed
-    if (line.empty()) {
-      // Fully consumed this source line, move past the newline
-      pos = lineEnd + ((lineEnd < chunkSize && buffer[lineEnd] == '\n') ? 1 : 0);
-    } else {
-      // Partially consumed - page is full mid-line
-      // Move pos to where we stopped in the line (NOT past the line)
-      pos = pos + lineBytePos;
-      break;
     }
-  }
 
-  // Ensure we make progress even if calculations go wrong
-  if (pos == 0 && !outLines.empty()) {
-    // Fallback: at minimum, consume something to avoid infinite loop
-    pos = 1;
-  }
+    // Ensure we make progress even if calculations go wrong
+    if (pos == 0 && !outLines.empty()) {
+      // Fallback: at minimum, consume something to avoid infinite loop
+      pos = 1;
+    }
 
-  nextOffset = offset + pos;
+    nextOffset = offset + pos;
 
-  // Make sure we don't go past the file
-  if (nextOffset > fileSize) {
-    nextOffset = fileSize;
-  }
+    // Make sure we don't go past the file
+    if (nextOffset > fileSize) {
+      nextOffset = fileSize;
+    }
 
-  free(buffer);
+    free(buffer);
 
     // Do not make a page break simply because the initial read ended in the
     // middle of a source line. Retry with a little more text only when this
@@ -1022,6 +1023,7 @@ void TxtReaderActivity::renderPage(const bool fontPrewarmed) {
     if (SETTINGS.textAntiAliasing) {
       ReaderUtils::renderAntiAliased(renderer, [&renderLines]() { renderLines(); });
     }
+    markPageRendered();
   };
 
   if (fontPrewarmed) {
@@ -1049,9 +1051,8 @@ void TxtReaderActivity::renderStatusBar() const {
   const int page = displayedPage();
   const int pageCount = displayedTotalPages();
   const size_t fileSize = txt ? txt->getFileSize() : 0;
-  const float progress = approximatePosition && fileSize > 0
-                             ? displayedOffset() * 100.0f / fileSize
-                             : (pageCount > 0 ? (page + 1) * 100.0f / pageCount : 0);
+  const float progress = approximatePosition && fileSize > 0 ? displayedOffset() * 100.0f / fileSize
+                                                             : (pageCount > 0 ? (page + 1) * 100.0f / pageCount : 0);
   std::string title;
   if (SETTINGS.statusBarTitle != CrossPointSettings::STATUS_BAR_TITLE::HIDE_TITLE) {
     title = txt->getTitle();

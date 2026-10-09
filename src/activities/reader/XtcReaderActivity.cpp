@@ -15,14 +15,14 @@
 
 #include <algorithm>
 
+#include "AchievementsStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
-#include "AchievementsStore.h"
 #include "MappedInputManager.h"
 #include "ProgressFile.h"
 #include "ReaderUtils.h"
-#include "RecentBooksStore.h"
 #include "ReadingStatsStore.h"
+#include "RecentBooksStore.h"
 #include "XtcReaderChapterSelectionActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -45,7 +45,6 @@ void XtcReaderActivity::onBookEntered() {
 
   // Load saved progress
   loadProgress();
-
 }
 
 void XtcReaderActivity::onBookExited() {
@@ -57,9 +56,7 @@ void XtcReaderActivity::onBookExited() {
   xtc.reset();
 }
 
-bool XtcReaderActivity::pageTurn(const bool isForward) {
-  return skipPages(isForward ? 1 : -1);
-}
+bool XtcReaderActivity::pageTurn(const bool isForward) { return skipPages(isForward ? 1 : -1); }
 
 bool XtcReaderActivity::skipPages(const int amount) {
   if (!xtc || xtc->getPageCount() == 0 || amount == 0) return false;
@@ -73,6 +70,7 @@ bool XtcReaderActivity::skipPages(const int amount) {
 }
 
 void XtcReaderActivity::loop() {
+  rememberBookOnceRendered();
   READING_STATS.noteActivity();
   const bool atEndOfBook = xtc && xtc->getPageCount() > 0 && currentPage >= xtc->getPageCount();
   clearEndOfBookOptionsIfNeeded(atEndOfBook);
@@ -350,6 +348,7 @@ void XtcReaderActivity::renderPage() {
     free(pageBuffer);
 
     LOG_DBG("XTR", "Rendered page %lu/%lu (2-bit grayscale)", currentPage + 1, xtc->getPageCount());
+    markPageRendered();
     return;
   } else {
     // 1-bit mode: 8 pixels per byte, MSB first
@@ -381,6 +380,7 @@ void XtcReaderActivity::renderPage() {
   }
 
   ReaderUtils::displayWithRefreshCycle(renderer, pagesUntilFullRefresh);
+  markPageRendered();
 
   LOG_DBG("XTR", "Rendered page %lu/%lu (%u-bit)", currentPage + 1, xtc->getPageCount(), bitDepth);
 }

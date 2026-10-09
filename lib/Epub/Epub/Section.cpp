@@ -45,7 +45,8 @@ namespace {
 // v44: Ordered lists number their items, list-style-type: none suppresses markers,
 //      and <ul>/<ol> containers contribute margins/padding to child insets.
 // v45: Internal EPUB links preserve CSS superscript/subscript positioning.
-constexpr uint8_t SECTION_FILE_VERSION = 45;
+// v46: Long paragraphs retain first-line and spacing state across soft flushes.
+constexpr uint8_t SECTION_FILE_VERSION = 46;
 // A section being written is never readable. The version is stamped with the
 // final/partial value only after all page tables have been written.
 constexpr uint8_t SECTION_FILE_INCOMPLETE_VERSION = 0;

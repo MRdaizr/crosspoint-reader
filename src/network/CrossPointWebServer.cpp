@@ -16,21 +16,22 @@
 #include "FirmwareFlasher.h"
 #include "NutstoreConfigStore.h"
 #include "OpdsServerStore.h"
-#include "RecentBooksStore.h"
+#include "ProtectedPaths.h"
 #include "ReadingStatsStore.h"
+#include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "SettingsList.h"
 #include "TodoStore.h"
-#include "activities/ActivityManager.h"
-#include "network/NutstoreSync.h"
 #include "WebDAVHandler.h"
 #include "WifiCredentialStore.h"
+#include "activities/ActivityManager.h"
 #include "html/FilesPageHtml.generated.h"
 #include "html/FirmwarePageHtml.generated.h"
 #include "html/HomePageHtml.generated.h"
 #include "html/SettingsPageHtml.generated.h"
 #include "html/TodoPageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
+#include "network/NutstoreSync.h"
 #include "util/BookCacheUtils.h"
 #include "util/BookmarkUtil.h"
 #include "util/TaskWatchdog.h"
@@ -95,6 +96,7 @@ bool isProtectedItemName(const String& name) {
 }
 
 bool isProtectedPath(const String& path) {
+  if (protectedpaths::isSensitivePath(path.c_str())) return true;
   size_t start = 1;
   for (size_t i = 1; i <= path.length(); ++i) {
     if (i != path.length() && path.charAt(i) != '/') continue;
@@ -449,8 +451,8 @@ void CrossPointWebServer::begin() {
 
   // Firmware update endpoints
   server->on("/firmware", HTTP_GET, [this] { handleFirmwarePage(); });
-  server->on("/api/firmware/upload", HTTP_POST, [this] { handleFirmwareUpload(); },
-             [this] { handleFirmwareUploadData(); });
+  server->on(
+      "/api/firmware/upload", HTTP_POST, [this] { handleFirmwareUpload(); }, [this] { handleFirmwareUploadData(); });
 
   // OPDS server endpoints
   server->on("/api/opds", HTTP_GET, [this] { handleGetOpdsServers(); });
@@ -590,8 +592,8 @@ void CrossPointWebServer::handleClient() {
   server->handleClient();
   const unsigned long requestDuration = millis() - requestStart;
   if (requestDuration > 250) {
-    LOG_DBG("WEB", "[HTTP] Request returned: method=%d uri=%s duration=%lu ms free=%d", static_cast<int>(server->method()),
-            server->uri().c_str(), requestDuration, ESP.getFreeHeap());
+    LOG_DBG("WEB", "[HTTP] Request returned: method=%d uri=%s duration=%lu ms free=%d",
+            static_cast<int>(server->method()), server->uri().c_str(), requestDuration, ESP.getFreeHeap());
   }
 
   // Handle WebSocket events
@@ -668,8 +670,8 @@ static void sendHtmlContent(WebServer* server, const char* data, size_t len) {
   LOG_DBG("WEB", "[HTTP] %s HTML tx begin: bytes=%zu free=%d", uri.c_str(), len, ESP.getFreeHeap());
   server->sendHeader("Content-Encoding", "gzip");
   server->send_P(200, "text/html", data, len);
-  LOG_DBG("WEB", "[HTTP] %s HTML tx complete: elapsed=%lu ms connected=%d free=%d", uri.c_str(),
-          millis() - sendStart, server->client().connected(), ESP.getFreeHeap());
+  LOG_DBG("WEB", "[HTTP] %s HTML tx complete: elapsed=%lu ms connected=%d free=%d", uri.c_str(), millis() - sendStart,
+          server->client().connected(), ESP.getFreeHeap());
 }
 
 void CrossPointWebServer::handleRoot() const {
@@ -758,7 +760,7 @@ void CrossPointWebServer::scanFiles(const char* path, const std::function<void(F
     }
 
     file.close();
-    yield();               // Yield to allow WiFi and other tasks to process during long scans
+    yield();                          // Yield to allow WiFi and other tasks to process during long scans
     resetTaskWatchdogIfSubscribed();  // Reset watchdog to prevent timeout on large directories
     file = root.openNextFile();
   }
@@ -784,6 +786,11 @@ void CrossPointWebServer::handleFileListData() const {
     currentPath = normalizeWebPath(server->arg("path"));
   }
 
+  if (isProtectedPath(currentPath)) {
+    server->send(403, "text/plain", "Cannot access protected path");
+    return;
+  }
+
   LOG_DBG("WEB", "[HTTP] /api/files begin: path=%s free=%d", currentPath.c_str(), ESP.getFreeHeap());
 
   server->setContentLength(CONTENT_LENGTH_UNKNOWN);
@@ -795,38 +802,39 @@ void CrossPointWebServer::handleFileListData() const {
   size_t entryCount = 0;
   JsonDocument doc;
 
-  scanFiles(currentPath.c_str(), [this, &output, &doc, &seenFirst, &entryCount, requestStart](const FileInfo& info) mutable {
-    doc.clear();
-    doc["name"] = info.name;
-    doc["size"] = info.size;
-    doc["isDirectory"] = info.isDirectory;
-    doc["isEpub"] = info.isEpub;
+  scanFiles(currentPath.c_str(),
+            [this, &output, &doc, &seenFirst, &entryCount, requestStart](const FileInfo& info) mutable {
+              doc.clear();
+              doc["name"] = info.name;
+              doc["size"] = info.size;
+              doc["isDirectory"] = info.isDirectory;
+              doc["isEpub"] = info.isEpub;
 
-    const size_t written = serializeJson(doc, output, outputSize);
-    if (written >= outputSize) {
-      // JSON output truncated; skip this entry to avoid sending malformed JSON
-      LOG_DBG("WEB", "Skipping file entry with oversized JSON for name: %s", info.name.c_str());
-      return;
-    }
+              const size_t written = serializeJson(doc, output, outputSize);
+              if (written >= outputSize) {
+                // JSON output truncated; skip this entry to avoid sending malformed JSON
+                LOG_DBG("WEB", "Skipping file entry with oversized JSON for name: %s", info.name.c_str());
+                return;
+              }
 
-    ++entryCount;
-    const unsigned long sendStart = millis();
-    if ((entryCount & 0x0F) == 1) {
-      LOG_DBG("WEB", "[HTTP] /api/files sending entry=%zu name=%s bytes=%zu elapsed=%lu ms", entryCount,
-              info.name.c_str(), written, millis() - requestStart);
-    }
-    if (seenFirst) {
-      server->sendContent(",");
-    } else {
-      seenFirst = true;
-    }
-    server->sendContent(output);
-    const unsigned long sendDuration = millis() - sendStart;
-    if (sendDuration > 100) {
-      LOG_DBG("WEB", "[HTTP] /api/files slow send: entry=%zu duration=%lu ms connected=%d free=%d", entryCount,
-              sendDuration, server->client().connected(), ESP.getFreeHeap());
-    }
-  });
+              ++entryCount;
+              const unsigned long sendStart = millis();
+              if ((entryCount & 0x0F) == 1) {
+                LOG_DBG("WEB", "[HTTP] /api/files sending entry=%zu name=%s bytes=%zu elapsed=%lu ms", entryCount,
+                        info.name.c_str(), written, millis() - requestStart);
+              }
+              if (seenFirst) {
+                server->sendContent(",");
+              } else {
+                seenFirst = true;
+              }
+              server->sendContent(output);
+              const unsigned long sendDuration = millis() - sendStart;
+              if (sendDuration > 100) {
+                LOG_DBG("WEB", "[HTTP] /api/files slow send: entry=%zu duration=%lu ms connected=%d free=%d",
+                        entryCount, sendDuration, server->client().connected(), ESP.getFreeHeap());
+              }
+            });
   LOG_DBG("WEB", "[HTTP] /api/files tail tx begin: entries=%zu elapsed=%lu ms", entryCount, millis() - requestStart);
   server->sendContent("]");
   // End of streamed response, empty chunk to signal client
@@ -848,7 +856,7 @@ void CrossPointWebServer::handleDownload() const {
   }
 
   const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
-  if (itemName.startsWith(".")) {
+  if (isProtectedPath(itemPath)) {
     server->send(403, "text/plain", "Cannot access system files");
     return;
   }
@@ -988,6 +996,11 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     String filePath = state.path;
     if (!filePath.endsWith("/")) filePath += "/";
     filePath += state.fileName;
+
+    if (isProtectedPath(filePath)) {
+      state.error = "Cannot upload to protected path";
+      return;
+    }
 
     // Check if file already exists - SD operations can be slow
     resetTaskWatchdogIfSubscribed();
@@ -1131,6 +1144,11 @@ void CrossPointWebServer::handleCreateFolder() const {
   if (!folderPath.endsWith("/")) folderPath += "/";
   folderPath += folderName;
 
+  if (isProtectedPath(folderPath)) {
+    server->send(403, "text/plain", "Cannot create protected item");
+    return;
+  }
+
   LOG_DBG("WEB", "Creating folder: %s", folderPath.c_str());
 
   // Check if already exists
@@ -1238,8 +1256,8 @@ void CrossPointWebServer::handleRename() const {
   if (success) {
     const bool metadataSaved = updatePathReferences(itemPath, newPath);
     LOG_DBG("WEB", "Renamed file: %s -> %s", itemPath.c_str(), newPath.c_str());
-    server->send(200, "text/plain", metadataSaved ? "Renamed successfully" :
-                                                    "Renamed; some history metadata could not be saved");
+    server->send(200, "text/plain",
+                 metadataSaved ? "Renamed successfully" : "Renamed; some history metadata could not be saved");
   } else {
     rollbackPathArtifacts(plan);
     LOG_ERR("WEB", "Failed to rename file: %s -> %s", itemPath.c_str(), newPath.c_str());
@@ -1338,8 +1356,8 @@ void CrossPointWebServer::handleMove() const {
   if (success) {
     const bool metadataSaved = updatePathReferences(itemPath, newPath);
     LOG_DBG("WEB", "Moved file: %s -> %s", itemPath.c_str(), newPath.c_str());
-    server->send(200, "text/plain", metadataSaved ? "Moved successfully" :
-                                                    "Moved; some history metadata could not be saved");
+    server->send(200, "text/plain",
+                 metadataSaved ? "Moved successfully" : "Moved; some history metadata could not be saved");
   } else {
     rollbackPathArtifacts(plan);
     LOG_ERR("WEB", "Failed to move file: %s -> %s", itemPath.c_str(), newPath.c_str());
@@ -1402,7 +1420,7 @@ void CrossPointWebServer::handleDelete() const {
     const String itemName = itemPath.substring(itemPath.lastIndexOf('/') + 1);
 
     // Hidden/system files are protected
-    if (itemName.startsWith(".")) {
+    if (isProtectedPath(itemPath)) {
       failedItems += itemPath + " (hidden/system file); ";
       allSuccess = false;
       continue;
@@ -1571,19 +1589,18 @@ void CrossPointWebServer::handleGetSettings() const {
     ++itemCount;
     const unsigned long sendDuration = millis() - sendStart;
     if (sendDuration > 100) {
-      LOG_DBG("WEB", "[HTTP] /api/settings slow send: item=%zu key=%s duration=%lu ms connected=%d free=%d",
-              itemIndex, s.key, sendDuration, server->client().connected(), ESP.getFreeHeap());
+      LOG_DBG("WEB", "[HTTP] /api/settings slow send: item=%zu key=%s duration=%lu ms connected=%d free=%d", itemIndex,
+              s.key, sendDuration, server->client().connected(), ESP.getFreeHeap());
     }
     yield();                          // Let WiFi and other tasks run during slow responses.
     resetTaskWatchdogIfSubscribed();  // sendContent() can block on the network client.
   }
 
-  LOG_DBG("WEB", "[HTTP] /api/settings tail tx begin: items=%zu elapsed=%lu ms", itemCount,
-          millis() - requestStart);
+  LOG_DBG("WEB", "[HTTP] /api/settings tail tx begin: items=%zu elapsed=%lu ms", itemCount, millis() - requestStart);
   server->sendContent("]");
   server->sendContent("");
-  LOG_DBG("WEB", "[HTTP] /api/settings complete: items=%zu elapsed=%lu ms free=%d", itemCount,
-          millis() - requestStart, ESP.getFreeHeap());
+  LOG_DBG("WEB", "[HTTP] /api/settings complete: items=%zu elapsed=%lu ms free=%d", itemCount, millis() - requestStart,
+          ESP.getFreeHeap());
 }
 
 void CrossPointWebServer::handlePostSettings() {
@@ -1744,11 +1761,7 @@ void CrossPointWebServer::handlePostNutstoreSync() {
   NUTSTORE_CONFIG.loadFromFile();
   bool cancel = false;
   const bool ok = NutstoreSync::run(
-      NUTSTORE_CONFIG.get(), nutstoreStatus,
-      [this](const NutstoreSyncStatus& s) {
-        nutstoreStatus = s;
-      },
-      &cancel);
+      NUTSTORE_CONFIG.get(), nutstoreStatus, [this](const NutstoreSyncStatus& s) { nutstoreStatus = s; }, &cancel);
 
   JsonDocument doc;
   doc["ok"] = ok;
@@ -1953,8 +1966,8 @@ void CrossPointWebServer::handleGetOpdsServers() const {
   LOG_DBG("WEB", "[HTTP] /api/opds tail tx begin: elapsed=%lu ms", millis() - requestStart);
   server->sendContent("]");
   server->sendContent("");
-  LOG_DBG("WEB", "[HTTP] /api/opds complete: count=%zu elapsed=%lu ms free=%d", servers.size(),
-          millis() - requestStart, ESP.getFreeHeap());
+  LOG_DBG("WEB", "[HTTP] /api/opds complete: count=%zu elapsed=%lu ms free=%d", servers.size(), millis() - requestStart,
+          ESP.getFreeHeap());
 }
 
 void CrossPointWebServer::handlePostOpdsServer() {
@@ -2272,6 +2285,13 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
           String filePath = wsUploadPath;
           if (!filePath.endsWith("/")) filePath += "/";
           filePath += wsUploadFileName;
+
+          if (isProtectedPath(filePath)) {
+            wsServer->sendTXT(num, "ERROR:Cannot upload to protected path");
+            wsUploadInProgress = false;
+            wsUploadClientNum = 255;
+            return;
+          }
 
           LOG_DBG("WS", "Starting upload: %s (%d bytes) to %s", wsUploadFileName.c_str(), wsUploadSize,
                   filePath.c_str());

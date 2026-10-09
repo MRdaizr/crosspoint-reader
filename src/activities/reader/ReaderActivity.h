@@ -1,14 +1,16 @@
 #pragma once
+#include <Epub/ReaderRenderSpec.h>
+
 #include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 
+#include "CrossPointSettings.h"
 #include "activities/Activity.h"
 #include "activities/reader/EndOfBookOptions.h"
-#include "CrossPointSettings.h"
-#include <Epub/ReaderRenderSpec.h>
+#include "activities/reader/ReaderResumeGate.h"
 
 class Epub;
 class Xtc;
@@ -22,7 +24,8 @@ class ReaderActivity : public Activity {
  protected:
   ReaderActivity(const char* name, GfxRenderer& renderer, MappedInputManager& mappedInput, std::string bookPath,
                  bool allowFastInitialRefresh = false)
-      : Activity(name, renderer, mappedInput), bookPath(std::move(bookPath)),
+      : Activity(name, renderer, mappedInput),
+        bookPath(std::move(bookPath)),
         allowFastInitialRefresh_(allowFastInitialRefresh) {
     if (allowFastInitialRefresh_) {
       const int refreshFrequency = SETTINGS.getRefreshFrequency();
@@ -42,6 +45,9 @@ class ReaderActivity : public Activity {
   bool allowFastInitialRefresh_ = false;
   std::unique_ptr<EndOfBookOptions> endOfBookOptions;
   std::atomic<bool> endOfBookOptionsReady{false};
+  ReaderResumeGate resumeGate;
+  void markPageRendered() { resumeGate.markPageRendered(); }
+  void rememberBookOnceRendered();
 
   // Format hooks.  Keeping these in the base class makes lifecycle and page
   // navigation code independent of the concrete reader's storage format.

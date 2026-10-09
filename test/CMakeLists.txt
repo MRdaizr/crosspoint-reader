@@ -36,7 +36,7 @@ target_include_directories(crosspoint_test_common INTERFACE
   ${REPO_ROOT}/lib
 )
 if(MSVC)
-  target_compile_options(crosspoint_test_common INTERFACE /W4 /permissive-)
+  target_compile_options(crosspoint_test_common INTERFACE /W4 /permissive- /utf-8)
 else()
   target_compile_options(crosspoint_test_common INTERFACE
     -Wall
@@ -66,3 +66,8 @@ add_subdirectory(font_cache_manager)
 add_subdirectory(css_parser)
 add_subdirectory(inflate_stream)
 add_subdirectory(chapter_position)
+add_subdirectory(protected_paths)
+add_subdirectory(reader_resume_gate)
+add_subdirectory(koreader_xpath_resolver)
+add_subdirectory(sd_card_font)
+add_subdirectory(parsed_text)

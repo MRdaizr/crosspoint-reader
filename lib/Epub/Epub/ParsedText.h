@@ -39,6 +39,7 @@ class ParsedText {
   bool focusReadingEnabled;
   bool isNaturalAlign;
   bool hasRtlWord;
+  bool firstLineConsumed = false;
   std::vector<std::string> reorderedWordsScratch;
   std::vector<EpdFontFamily::Style> reorderedStylesScratch;
   std::vector<uint16_t> reorderedWidthsScratch;
@@ -64,8 +65,7 @@ class ParsedText {
                    const std::vector<bool>& continuesVec, const std::vector<bool>& noSpaceBeforeVec,
                    const std::vector<size_t>& lineBreakIndices,
                    const std::function<void(std::unique_ptr<TextBlock>, uint32_t)>& processLine,
-                   const GfxRenderer& renderer,
-                   int fontId);
+                   const GfxRenderer& renderer, int fontId);
   std::vector<uint16_t> calculateWordWidths(const GfxRenderer& renderer, int fontId);
 
  public:
@@ -86,9 +86,7 @@ class ParsedText {
   EpdFontFamily::Style getWordStyleAt(size_t index) const {
     return index < wordStyles.size() ? wordStyles[index] : EpdFontFamily::REGULAR;
   }
-  std::string getRubyTextAt(size_t index) const {
-    return index < rubyTexts.size() ? rubyTexts[index] : std::string();
-  }
+  std::string getRubyTextAt(size_t index) const { return index < rubyTexts.size() ? rubyTexts[index] : std::string(); }
   void ensureRubyCapacity();
   void setBlockStyle(const BlockStyle& blockStyle) { this->blockStyle = blockStyle; }
   BlockStyle& getBlockStyle() { return blockStyle; }

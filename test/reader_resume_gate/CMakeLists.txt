@@ -1,0 +1,4 @@
+add_executable(ReaderResumeGateTest ReaderResumeGateTest.cpp)
+target_include_directories(ReaderResumeGateTest PRIVATE ${REPO_ROOT}/src)
+target_link_libraries(ReaderResumeGateTest PRIVATE crosspoint_test_common GTest::gtest_main)
+gtest_discover_tests(ReaderResumeGateTest)

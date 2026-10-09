@@ -152,6 +152,7 @@ void SdCardFont::freeStyleMiniKern(PerStyle& s) {
   s.miniKernLeftCapacity = 0;
   s.miniKernRightCapacity = 0;
   s.miniKernMatrixCapacity = 0;
+  s.miniKernBuilt = false;
 }
 
 void SdCardFont::freeStyleAll(PerStyle& s) {
@@ -273,6 +274,13 @@ bool SdCardFont::loadStyleKernLigatureData(PerStyle& s) {
       freeStyleKernLigatureData(s);
       return false;
     }
+    // Malformed class IDs must not index outside a matrix row.
+    for (uint16_t i = 0; i < s.header.kernLeftEntryCount; ++i) {
+      if (s.kernLeftClasses[i].classId > s.header.kernLeftClassCount) s.kernLeftClasses[i].classId = 0;
+    }
+    for (uint16_t i = 0; i < s.header.kernRightEntryCount; ++i) {
+      if (s.kernRightClasses[i].classId > s.header.kernRightClassCount) s.kernRightClasses[i].classId = 0;
+    }
   }
 
   if (hasLig) {
@@ -359,16 +367,16 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
   uint8_t rightRenumber[256] = {};
   uint8_t newToOldLeft[256] = {};
   uint8_t newToOldRight[256] = {};
-  uint8_t numLeft = 0, numRight = 0;
+  uint16_t numLeft = 0, numRight = 0;
   for (int i = 1; i < 256; i++) {
     if (usedLeft[i]) {
       numLeft++;
-      leftRenumber[i] = numLeft;
+      leftRenumber[i] = static_cast<uint8_t>(numLeft);
       newToOldLeft[numLeft] = static_cast<uint8_t>(i);
     }
     if (usedRight[i]) {
       numRight++;
-      rightRenumber[i] = numRight;
+      rightRenumber[i] = static_cast<uint8_t>(numRight);
       newToOldRight[numRight] = static_cast<uint8_t>(i);
     }
   }
@@ -435,7 +443,7 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
     return false;
   }
 
-  for (uint8_t newL = 1; newL <= numLeft; newL++) {
+  for (uint16_t newL = 1; newL <= numLeft; newL++) {
     const uint8_t oldL = newToOldLeft[newL];
     const uint32_t rowFileOff = s.kernMatrixFileOffset + (oldL - 1u) * s.header.kernRightClassCount;
     if (!file.seekSet(rowFileOff)) {
@@ -450,15 +458,15 @@ bool SdCardFont::buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, ui
       return false;
     }
     int8_t* miniRow = s.miniKernMatrix + (newL - 1u) * numRight;
-    for (uint8_t newR = 1; newR <= numRight; newR++) {
+    for (uint16_t newR = 1; newR <= numRight; newR++) {
       miniRow[newR - 1] = rowBuf[newToOldRight[newR] - 1u];
     }
   }
 
   s.miniKernLeftEntryCount = lIdx;
   s.miniKernRightEntryCount = rIdx;
-  s.miniKernLeftClassCount = numLeft;
-  s.miniKernRightClassCount = numRight;
+  s.miniKernLeftClassCount = static_cast<uint8_t>(numLeft);
+  s.miniKernRightClassCount = static_cast<uint8_t>(numRight);
 
   LOG_DBG("SDCF", "Built mini kern: %u×%u matrix (%u bytes, full was %u×%u = %u bytes)", numLeft, numRight, matrixBytes,
           s.header.kernLeftClassCount, s.header.kernRightClassCount,
@@ -666,9 +674,11 @@ bool SdCardFont::load(const char* path) {
       for (uint8_t k = 0; k < i && shareCandidates != 0; ++k) {
         if ((shareCandidates & (1u << k)) == 0) continue;
         const auto& owner = styles_[k];
-        const uint32_t ownerFirst = owner.intervalsAreBmp16 ? owner.bmpIntervals[j].first : owner.fullIntervals[j].first;
+        const uint32_t ownerFirst =
+            owner.intervalsAreBmp16 ? owner.bmpIntervals[j].first : owner.fullIntervals[j].first;
         const uint32_t ownerLast = owner.intervalsAreBmp16 ? owner.bmpIntervals[j].last : owner.fullIntervals[j].last;
-        const uint32_t ownerOffset = owner.intervalsAreBmp16 ? owner.bmpIntervals[j].offset : owner.fullIntervals[j].offset;
+        const uint32_t ownerOffset =
+            owner.intervalsAreBmp16 ? owner.bmpIntervals[j].offset : owner.fullIntervals[j].offset;
         if (ownerFirst != iv.first || ownerLast != iv.last || ownerOffset != iv.offset) {
           shareCandidates &= static_cast<uint8_t>(~(1u << k));
         }
@@ -690,8 +700,7 @@ bool SdCardFont::load(const char* path) {
       s.intervalsShared = true;
       LOG_DBG("SDCF", "Style %u: sharing style %u's %u-interval table (%u B not allocated)", i, k,
               s.header.intervalCount,
-              s.header.intervalCount *
-                  (canUseBmp16 ? 6u : static_cast<uint32_t>(sizeof(EpdUnicodeInterval))));
+              s.header.intervalCount * (canUseBmp16 ? 6u : static_cast<uint32_t>(sizeof(EpdUnicodeInterval))));
       break;
     }
 
@@ -922,8 +931,8 @@ int SdCardFont::prewarm(TextGetter getter, const void* ctx, uint32_t textCount, 
       if (fit == 0 || fit >= cpCount) fit = cpCount / 2;
 
       while (fit > 0 && maxAlloc >= MINI_BM_CHUNK_SIZE) {
-        LOG_DBG("SDCF", "Bitmap retry: %u -> %u glyphs (%u B/glyph, free=%u maxAlloc=%u)", cpCount, fit,
-                bytesPerGlyph, freeHeap, maxAlloc);
+        LOG_DBG("SDCF", "Bitmap retry: %u -> %u glyphs (%u B/glyph, free=%u maxAlloc=%u)", cpCount, fit, bytesPerGlyph,
+                freeHeap, maxAlloc);
         const int retryMissed = prewarmStyle(si, codepoints.get(), fit, metadataOnly, loadKernLig);
         if (retryMissed != PREWARM_BITMAP_ARENA_TOO_LARGE) {
           missedForStyle = retryMissed + static_cast<int>(cpCount - fit);
@@ -975,9 +984,27 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       }
     }
     if (covered) {
-      if (!metadataOnly && loadKernLig && s.miniKernLeftClassCount == 0 && s.header.kernLeftEntryCount > 0 &&
-          loadStyleKernLigatureData(s) && buildMiniKernMatrix(s, codepoints, cpCount)) {
-        applyKernLigaturePointers(s, s.miniData);
+      if (!metadataOnly && loadKernLig && !s.miniKernBuilt) {
+        // Build for every resident glyph, not just this subset request, so
+        // subsequent subset hits cannot reuse an incomplete kern matrix.
+        auto resident = makeUniqueNoThrow<uint32_t[]>(s.miniGlyphCount);
+        uint32_t residentCount = 0;
+        if (resident) {
+          for (uint32_t iv = 0; iv < s.miniIntervalCount; ++iv) {
+            for (uint32_t cp = s.miniIntervals[iv].first;
+                 cp <= s.miniIntervals[iv].last && residentCount < s.miniGlyphCount; ++cp) {
+              resident[residentCount++] = cp;
+            }
+          }
+        } else {
+          LOG_ERR("SDCF", "OOM: resident kern codepoints (%u) for style %u", s.miniGlyphCount, styleIdx);
+        }
+        if (loadStyleKernLigatureData(s)) {
+          const bool built =
+              buildMiniKernMatrix(s, resident ? resident.get() : codepoints, resident ? residentCount : cpCount);
+          s.miniKernBuilt = built && resident != nullptr;
+          applyKernLigaturePointers(s, s.miniData);
+        }
       }
       return missedInMini;
     }
@@ -1133,8 +1160,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
       }
       totalBitmapSize += s.miniGlyphs[i].dataLength;
     }
-    s.measuredBitmapBytesPerGlyph =
-        static_cast<uint32_t>((totalBitmapSize + validCount - 1) / validCount);
+    s.measuredBitmapBytesPerGlyph = static_cast<uint32_t>((totalBitmapSize + validCount - 1) / validCount);
 
     // Read bitmap data sorted by file offset. The virtual `span` offset is
     // decoded into a chunk and an in-chunk offset by miniGlyphBitmap().
@@ -1232,15 +1258,16 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   // per-page mini kern matrix restricted to class pairs reachable from this
   // page's codepoints. Skip during metadata-only prewarm — layout only needs
   // advanceX and the mini kern would be thrown away before rendering.
-  bool kernLigOk = false;
+  bool tablesOk = false;
+  bool kernOk = false;
   if (!metadataOnly && loadKernLig) {
-    if (loadStyleKernLigatureData(s)) {
-      kernLigOk = buildMiniKernMatrix(s, codepoints, cpCount);
-    }
+    tablesOk = loadStyleKernLigatureData(s);
+    if (tablesOk) kernOk = buildMiniKernMatrix(s, codepoints, cpCount);
   }
 
   // Populate miniData and swap
   s.miniMetadataOnly = metadataOnly;
+  s.miniKernBuilt = kernOk;
   s.miniHysteresisPending = !metadataOnly;
   memset(&s.miniData, 0, sizeof(s.miniData));
   // SD mini bitmaps are chunked and therefore have no single base pointer.
@@ -1253,7 +1280,7 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
   s.miniData.ascender = s.header.ascender;
   s.miniData.descender = s.header.descender;
   s.miniData.is2Bit = s.header.is2Bit;
-  if (kernLigOk) {
+  if (tablesOk) {
     applyKernLigaturePointers(s, s.miniData);
   }
   s.miniData.glyphMissHandler = &SdCardFont::onGlyphMiss;

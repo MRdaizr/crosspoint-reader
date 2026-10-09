@@ -9,8 +9,8 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "EpubReaderActivity.h"
-#include "RecentBooksStore.h"
 #include "ReadingStatsStore.h"
+#include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "Txt.h"
 #include "TxtReaderActivity.h"
@@ -84,17 +84,21 @@ std::unique_ptr<Txt> ReaderActivity::loadTxt(const std::string& path) {
 }
 
 bool ReaderActivity::handleBackNavigation(const char* filePath) {
-  return ReaderUtils::handleBackNavigation(
-      mappedInput, activityManager, filePath,
-      {this, [](void* ctx) { static_cast<ReaderActivity*>(ctx)->onGoHome(); }});
+  return ReaderUtils::handleBackNavigation(mappedInput, activityManager, filePath,
+                                           {this, [](void* ctx) { static_cast<ReaderActivity*>(ctx)->onGoHome(); }});
 }
 
-void ReaderActivity::applyInitialOrientation() {
-  ReaderUtils::applyOrientation(renderer, SETTINGS.orientation);
-}
+void ReaderActivity::applyInitialOrientation() { ReaderUtils::applyOrientation(renderer, SETTINGS.orientation); }
 
 void ReaderActivity::onEnter() {
   Activity::onEnter();
+
+  // Do not repeatedly reopen a book that cannot load or build its first page.
+  // A successful format render publishes the replacement below.
+  if (!APP_STATE.openEpubPath.empty()) {
+    APP_STATE.openEpubPath.clear();
+    APP_STATE.saveToFile();
+  }
 
   if (bookPath.empty() || !Storage.exists(bookPath.c_str())) {
     LOG_ERR("READER", "Cannot enter reader for missing path: %s", bookPath.c_str());
@@ -116,17 +120,22 @@ void ReaderActivity::onEnter() {
   // initial progress percentage.
   onBookEntered();
 
-  // Metadata and persisted state are shared by all three readers.
-  APP_STATE.openEpubPath = bookPath;
-  APP_STATE.saveToFile();
   const std::string title = getBookTitle();
-  RECENT_BOOKS.addBook(bookPath, title, getBookAuthor(), getBookThumbBmpPath());
   READING_STATS.beginSession(bookPath, title, getBookAuthor(), getBookThumbBmpPath(), getInitialProgressPercent());
   requestUpdate();
 }
 
+void ReaderActivity::rememberBookOnceRendered() {
+  if (!resumeGate.takeRememberRequest()) return;
+  APP_STATE.openEpubPath = bookPath;
+  APP_STATE.saveToFile();
+  RECENT_BOOKS.addBook(bookPath, getBookTitle(), getBookAuthor(), getBookThumbBmpPath());
+}
+
 void ReaderActivity::onExit() {
   Activity::onExit();
+  // A quick sleep/back can arrive before loop() consumes the first render.
+  rememberBookOnceRendered();
   // Derived hooks must release parser/cache resources while the Activity
   // context is still valid (for example EPUB image extraction and stats).
   onBookExited();
@@ -200,8 +209,7 @@ bool ReaderActivity::handleEndOfBookMenu(const bool atEndOfBook, const bool supp
 bool ReaderActivity::handleEndOfBookPageTurn(const bool atEndOfBook, const bool prevTriggered,
                                              const bool nextTriggered) {
   if (!atEndOfBook) return false;
-  if (endOfBookOptionsReady.load(std::memory_order_acquire) && endOfBookOptions &&
-      endOfBookOptions->menuActive()) {
+  if (endOfBookOptionsReady.load(std::memory_order_acquire) && endOfBookOptions && endOfBookOptions->menuActive()) {
     return true;
   }
   if (nextTriggered) {
@@ -227,6 +235,7 @@ void ReaderActivity::renderEndOfBook(const MappedInputManager& input) {
   }
   onEndOfBookRendered();
   renderer.displayBuffer();
+  markPageRendered();
 }
 
 void ReaderActivity::render(RenderLock&&) {

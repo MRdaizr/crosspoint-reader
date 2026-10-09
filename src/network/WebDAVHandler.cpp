@@ -4,6 +4,7 @@
 #include <HalStorage.h>
 #include <Logging.h>
 
+#include "ProtectedPaths.h"
 #include "util/BookCacheUtils.h"
 #include "util/TaskWatchdog.h"
 
@@ -174,6 +175,11 @@ void WebDAVHandler::handlePropfind(WebServer& s) {
   String path = getRequestPath(s);
   int depth = getDepth(s);
 
+  if (isProtectedPath(path)) {
+    s.send(403, "text/plain", "Forbidden");
+    return;
+  }
+
   LOG_DBG("DAV", "PROPFIND %s depth=%d", path.c_str(), depth);
 
   // Check if path exists
@@ -324,12 +330,17 @@ void WebDAVHandler::handleGet(WebServer& s) {
   }
 
   String contentType = getMimeType(path);
-  s.setContentLength(file.size());
+  const size_t fileSize = file.size();
+  file.close();
+  s.setContentLength(fileSize);
   s.send(200, contentType.c_str(), "");
 
+  // HalFile is Print, not Stream: write(file) converts it to bool and sends
+  // one byte. Use the HAL's explicit buffered stream path instead.
   NetworkClient client = s.client();
-  client.write(file);
-  file.close();
+  if (!Storage.readFileToStream(path.c_str(), client)) {
+    LOG_ERR("DAV", "GET %s: failed to stream file", path.c_str());
+  }
 }
 
 // ── HEAD ─────────────────────────────────────────────────────────────────────
@@ -759,6 +770,7 @@ void WebDAVHandler::urlEncodePath(const String& path, String& out) const {
 }
 
 bool WebDAVHandler::isProtectedPath(const String& path) const {
+  if (protectedpaths::isSensitivePath(path.c_str())) return true;
   // Check every segment of the path, not just the last one.
   // This prevents access to e.g. /.hidden/somefile or /System Volume Information/foo
   int start = 0;
