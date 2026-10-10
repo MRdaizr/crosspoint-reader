@@ -3,13 +3,17 @@
 #include <optional>
 #include <string>
 
-// Optional document metadata sent alongside progress uploads.  The official
-// KOReader server ignores this extension; CrossPoint sync uses it for
-// diagnostics and book identification.
+// Optional document metadata sent alongside progress uploads.
 struct KOReaderMetadata {
   std::string filename;
   std::string title;
   std::string authors;
+  std::string isbn;
+  std::string asin;
+  std::string series;
+  std::optional<float> seriesIndex;
+  // Bounded flat JSON from <book>.meta.json; merged without overriding native fields.
+  std::string extraJson;
 };
 
 // Lossless CrossPoint position extension.  Page numbers are only hints when

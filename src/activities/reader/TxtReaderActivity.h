@@ -76,7 +76,7 @@ class TxtReaderActivity final : public ReaderActivity {
   void applyOrientation(uint8_t orientation);
   void jumpToPercent(int percent);
   void applyPercentJump(int percent);
-  void beginApproximatePosition(int percent, size_t offset = 0);
+  void beginApproximatePosition(int percent, size_t offset = 0, bool alignToLine = true);
   size_t alignApproximateOffset(size_t offset) const;
   bool ensureApproximatePage(int page);
   void reconcileApproximatePosition();

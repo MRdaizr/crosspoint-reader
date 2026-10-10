@@ -17,6 +17,7 @@ enum class SettingAction {
   CustomiseStatusBar,
   KOReaderSync,
   OPDSBrowser,
+  Plugins,
   Network,
   CacheDataManagement,
   SdFirmwareUpdate,
@@ -133,9 +134,8 @@ struct SettingInfo {
     return s;
   }
 
-  static SettingInfo DynamicEnumStrings(StrId nameId, std::vector<std::string> values,
-                                        std::function<uint8_t()> getter, std::function<void(uint8_t)> setter,
-                                        const char* key = nullptr,
+  static SettingInfo DynamicEnumStrings(StrId nameId, std::vector<std::string> values, std::function<uint8_t()> getter,
+                                        std::function<void(uint8_t)> setter, const char* key = nullptr,
                                         StrId category = StrId::STR_NONE_OPT) {
     SettingInfo s;
     s.nameId = nameId;

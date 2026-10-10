@@ -1,12 +1,13 @@
 #pragma once
 #include <Epub.h>
 #include <Epub/FootnoteEntry.h>
+#include <Epub/PageLink.h>
 #include <Epub/Section.h>
 
-#include <cstdint>
-#include <optional>
 #include <atomic>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "BookmarkEntry.h"
@@ -37,6 +38,8 @@ class EpubReaderActivity final : public ReaderActivity {
   int cachedChapterTotalPageCount = 0;
   char wereadBookId_[64] = {};
   std::optional<uint32_t> cachedVisibleTextOffset;
+  // Identity of the cached offset, independent of navigation's nextPageNumber.
+  int cachedVisibleTextPage = -1;
   // Offset of the page currently on screen. It remains stable across a
   // re-pagination so bookmarks and KOReader sync can rebase by content rather
   // than by the old page number.
@@ -110,6 +113,8 @@ class EpubReaderActivity final : public ReaderActivity {
 
   // Footnote support
   std::vector<FootnoteEntry> currentPageFootnotes;
+  PageLinks currentPageLinks;
+  int linkSpineIndex = -1, linkPageNumber = -1;
   struct SavedPosition {
     int spineIndex;
     int pageNumber;
@@ -166,6 +171,8 @@ class EpubReaderActivity final : public ReaderActivity {
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
   void restoreSavedPosition();
+  void openPageLinks();
+  bool handlePageLinkTap();
 
   bool usesToolbarMenu() const;
   void openOverlay(Overlay target);

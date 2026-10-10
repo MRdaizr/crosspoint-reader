@@ -16,6 +16,7 @@ struct BlockStyle {
   static constexpr float MAX_HORIZONTAL_INSET_EM = 2.0f;
 
   CssTextAlign alignment = CssTextAlign::Justify;
+  int8_t characterSpacing = 0;
 
   // Spacing (in pixels)
   int16_t marginTop = 0;

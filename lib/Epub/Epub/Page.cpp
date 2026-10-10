@@ -155,7 +155,12 @@ bool Page::serialize(HalFile& file) const {
     }
   }
 
-  return true;
+  const auto linkCount = static_cast<uint16_t>(links.size());
+  if (linkCount > MAX_LINKS_PER_PAGE || file.write(&linkCount, sizeof(linkCount)) != sizeof(linkCount)) return false;
+  for (const auto& link : links)
+    if (!link.serialize(file)) return false;
+  const uint8_t complete = linkGeometryComplete ? 1 : 0;
+  return file.write(&complete, sizeof(complete)) == sizeof(complete);
 }
 
 std::unique_ptr<Page> Page::deserialize(HalFile& file) {
@@ -174,7 +179,14 @@ std::unique_ptr<Page> Page::deserialize(HalFile& file) {
     LOG_ERR("PGE", "Deserialization failed: invalid page element count %u", count);
     return nullptr;
   }
+  // Every element needs at least a tag plus the seven-byte rule body. Reject
+  // hostile counts in short records before reserving the element pointer table.
+  if (file.available() < static_cast<int>(count) * 8 + 5) {
+    LOG_ERR("PGE", "Deserialization failed: truncated page record");
+    return nullptr;
+  }
 
+  page->elements.reserve(count);
   for (uint16_t i = 0; i < count; i++) {
     uint8_t tag = 0;
     if (file.read(&tag, sizeof(tag)) != sizeof(tag)) {
@@ -224,5 +236,28 @@ std::unique_ptr<Page> Page::deserialize(HalFile& file) {
     entry.href[sizeof(entry.href) - 1] = '\0';
   }
 
+  uint16_t linkCount = 0;
+  if (file.read(&linkCount, sizeof(linkCount)) != sizeof(linkCount) || linkCount > MAX_LINKS_PER_PAGE ||
+      !page->links.reserve(linkCount)) {
+    LOG_ERR("PGE", "Invalid link count/storage");
+    return nullptr;
+  }
+  for (uint16_t i = 0; i < linkCount; ++i) {
+    PageLink link;
+    if (!link.deserialize(file) || !page->links.append(std::move(link))) return nullptr;
+    const auto& added = page->links[i];
+    for (uint16_t j = 0; j < i; ++j) {
+      if (page->links[j].identity == added.identity && strcmp(page->links[j].href.get(), added.href.get()) != 0) {
+        LOG_ERR("PGE", "Inconsistent link identity");
+        return nullptr;
+      }
+    }
+  }
+  uint8_t complete = 0;
+  if (file.read(&complete, sizeof(complete)) != sizeof(complete) || complete > 1) {
+    LOG_ERR("PGE", "Invalid link completeness flag");
+    return nullptr;
+  }
+  page->linkGeometryComplete = complete != 0;
   return page;
 }

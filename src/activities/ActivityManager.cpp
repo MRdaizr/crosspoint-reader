@@ -2,24 +2,26 @@
 
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
-#include <HalPowerManager.h>
 #include <HalDisplay.h>
+#include <HalPowerManager.h>
 #include <Memory.h>
 
 #include <algorithm>
 
-#include "OpdsServerStore.h"
 #include "CrossPointSettings.h"
+#include "OpdsServerStore.h"
 #include "boot_sleep/BootActivity.h"
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
+#include "extensions/ExtensionsMenuActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
 #include "home/RecentBooksActivity.h"
-#include "extensions/ExtensionsMenuActivity.h"
+#include "library/LibraryListActivity.h"
 #include "network/CrossPointWebServerActivity.h"
 #include "reader/ReaderActivity.h"
+#include "reader/TxtReflowPrepareActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
 #include "util/BmpViewerActivity.h"
@@ -240,6 +242,15 @@ void ActivityManager::goToExtensions() {
   replaceActivity(std::make_unique<ExtensionsMenuActivity>(renderer, mappedInput));
 }
 
+void ActivityManager::goToLibrary() {
+  auto activity = makeUniqueNoThrow<LibraryListActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: library activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
+
 void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
   if (path.empty()) {
     LOG_ERR("ACT", "Cannot open an empty reader path");
@@ -249,7 +260,7 @@ void ActivityManager::goToReader(std::string path, const bool allowFastInitialRe
 
   // Images are handled by the dedicated viewer.  Keep this dispatch here so
   // the shared ReaderActivity factory only ever returns a text/book reader.
-  if (FsHelpers::hasBmpExtension(path) || FsHelpers::hasPngExtension(path)) {
+  if (FsHelpers::hasImageExtension(path)) {
     auto viewer = makeUniqueNoThrow<BmpViewerActivity>(renderer, mappedInput, std::move(path));
     if (!viewer) {
       LOG_ERR("ACT", "OOM: bitmap viewer activity");
@@ -259,9 +270,33 @@ void ActivityManager::goToReader(std::string path, const bool allowFastInitialRe
     return;
   }
 
+  if (FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path)) {
+    auto preparation =
+        makeUniqueNoThrow<TxtReflowPrepareActivity>(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
+    if (!preparation) {
+      LOG_ERR("ACT", "OOM: text preparation activity");
+      return;
+    }
+    replaceActivity(std::move(preparation));
+    return;
+  }
+
   auto reader = ReaderActivity::create(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
   if (!reader) {
     LOG_ERR("ACT", "Failed to create reader activity");
+    return;
+  }
+  replaceActivity(std::move(reader));
+}
+
+void ActivityManager::goToCompatibilityReader(std::string path, const bool allowFastInitialRefresh) {
+  if (!(FsHelpers::hasTxtExtension(path) || FsHelpers::hasMarkdownExtension(path))) {
+    goToReader(std::move(path), allowFastInitialRefresh);
+    return;
+  }
+  auto reader = ReaderActivity::create(renderer, mappedInput, std::move(path), allowFastInitialRefresh);
+  if (!reader) {
+    LOG_ERR("ACT", "OOM: compatibility reader activity");
     return;
   }
   replaceActivity(std::move(reader));
@@ -285,6 +320,8 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem, bool cleanInitialRefr
       initialMenuItem = HomeMenuItem::FILE_BROWSER;
     } else if (activityName == "RecentBooks") {
       initialMenuItem = HomeMenuItem::RECENTS;
+    } else if (activityName == "Library") {
+      initialMenuItem = HomeMenuItem::LIBRARY;
     } else if (activityName == "OpdsBookBrowser") {
       initialMenuItem = HomeMenuItem::OPDS_BROWSER;
     } else if (activityName == "CrossPointWebServer") {

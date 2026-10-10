@@ -46,6 +46,9 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
     NO_CREDENTIALS
   };
 
+  std::unique_ptr<Epub> mappingEpub;
+  // Non-owning alias for existing ProgressMapper/Section APIs. Those calls
+  // retain it only in their local scope; mappingEpub owns the activity lifetime.
   std::shared_ptr<Epub> epub;  // null until lazy-loaded after TLS in performSync()
   std::string epubPath;
   std::string localChapterName;
@@ -83,6 +86,7 @@ class KOReaderSyncActivity final : public Activity, private UiAppHost {
   void markAutoReturn();
   void completeAlreadySynced();
   void ensureEpubLoaded();
+  void releaseCachesForTls();
   void saveProgressAndReturn(int spineIndex, int page, std::optional<uint32_t> visibleTextOffset = std::nullopt);
   void returnToReader();
 

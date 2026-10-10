@@ -1,0 +1,8 @@
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  cmake_minimum_required(VERSION 3.16)
+  project(crosspoint_txt_progress_bridge_tests C CXX)
+endif()
+include(../txt_to_html/TestSupport.cmake)
+add_executable(TxtProgressBridgeTest TxtProgressBridgeTest.cpp)
+target_link_libraries(TxtProgressBridgeTest PRIVATE txt_test_runtime GTest::gtest_main)
+gtest_discover_tests(TxtProgressBridgeTest)

@@ -9,7 +9,7 @@
 
 class TxtReaderMenuActivity final : public UiListActivity {
  public:
-  enum class MenuAction { GO_TO_PERCENT, ROTATE_SCREEN, SCREENSHOT, GO_HOME };
+  enum class MenuAction { GO_TO_PERCENT, ROTATE_SCREEN, SCREENSHOT, GO_HOME, UNIFIED_READER };
 
   explicit TxtReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const std::string& title,
                                  int currentPage, int totalPages, int progressPercent, uint8_t currentOrientation);

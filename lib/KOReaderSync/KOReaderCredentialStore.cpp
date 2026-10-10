@@ -34,6 +34,7 @@ void KOReaderCredentialStore::toJson(JsonDocument& doc) const {
   doc["username"] = getUsername();
   doc["password_obf"] = obfuscation::obfuscateToBase64(getPassword());
   doc["serverUrl"] = getServerUrl();
+  doc["serverType"] = static_cast<uint8_t>(getServerType());
   doc["matchMethod"] = static_cast<uint8_t>(getMatchMethod());
   doc["sendMetadata"] = getSendMetadata();
   doc["syncBehavior"] = static_cast<uint8_t>(getSyncBehavior());
@@ -46,6 +47,18 @@ bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
 
   setCredentials(user, pass);
   setServerUrl(doc["serverUrl"] | "");
+
+  const JsonVariantConst type = doc["serverType"];
+  if (type.isNull()) {
+    setServerType(usesCrossPointSyncServer() ? KOReaderServerType::CROSSPOINT : KOReaderServerType::KOSYNC);
+    needsResave = true;
+  } else if (type.is<unsigned>() && type.as<unsigned>() <= static_cast<unsigned>(KOReaderServerType::OTHER)) {
+    setServerType(static_cast<KOReaderServerType>(type.as<unsigned>()));
+  } else {
+    LOG_DBG("KRS", "Invalid serverType in JSON, resetting to KOSYNC");
+    setServerType(KOReaderServerType::KOSYNC);
+    needsResave = true;
+  }
 
   const uint8_t method = doc["matchMethod"] | static_cast<uint8_t>(DocumentMatchMethod::FILENAME);
   if (method <= static_cast<uint8_t>(DocumentMatchMethod::BINARY)) {
@@ -129,11 +142,13 @@ bool KOReaderCredentialStore::loadFromBinaryFile() {
   if (file.available()) {
     uint8_t method;
     serialization::readPod(file, method);
-    matchMethod = static_cast<DocumentMatchMethod>(method);
+    matchMethod = method <= static_cast<uint8_t>(DocumentMatchMethod::BINARY) ? static_cast<DocumentMatchMethod>(method)
+                                                                              : DocumentMatchMethod::FILENAME;
   } else {
     matchMethod = DocumentMatchMethod::FILENAME;
   }
 
+  setServerType(usesCrossPointSyncServer() ? KOReaderServerType::CROSSPOINT : KOReaderServerType::KOSYNC);
   LOG_DBG("KRS", "Loaded KOReader credentials from binary for user: %s", username.c_str());
   return true;
 }
@@ -206,4 +221,9 @@ bool KOReaderCredentialStore::usesCrossPointSyncServer() const {
 void KOReaderCredentialStore::setMatchMethod(DocumentMatchMethod method) {
   matchMethod = method;
   LOG_DBG("KRS", "Set match method: %s", method == DocumentMatchMethod::FILENAME ? "Filename" : "Binary");
+}
+
+void KOReaderCredentialStore::setServerType(KOReaderServerType type) {
+  serverType =
+      static_cast<uint8_t>(type) <= static_cast<uint8_t>(KOReaderServerType::OTHER) ? type : KOReaderServerType::KOSYNC;
 }

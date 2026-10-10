@@ -16,6 +16,7 @@
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
+#include "util/PluginEvents.h"
 
 void WifiSelectionActivity::onEnter() {
   Activity::onEnter();
@@ -214,8 +215,8 @@ void WifiSelectionActivity::rebuildNetworkRowItems() {
   for (size_t i = 0; i < networks.size(); i++) {
     const auto& network = networks[i];
     if (!network.isHiddenPlaceholder) {
-      networkStatuses[i] = std::string(network.hasSavedPassword ? "+ " : "") +
-                           (network.isEncrypted ? "* " : "") + getSignalStrengthIndicator(network.rssi);
+      networkStatuses[i] = std::string(network.hasSavedPassword ? "+ " : "") + (network.isEncrypted ? "* " : "") +
+                           getSignalStrengthIndicator(network.rssi);
     }
     freeink::ui::ListItem item;
     item.label = network.isHiddenPlaceholder ? tr(STR_ADD_HIDDEN_NETWORK) : network.ssid.c_str();
@@ -224,9 +225,7 @@ void WifiSelectionActivity::rebuildNetworkRowItems() {
     item.icon = {};
     networkRowItems.push_back(item);
   }
-  listNav.selected = networks.empty()
-                         ? 0
-                         : static_cast<int>(std::min(selectedNetworkIndex, networks.size() - 1));
+  listNav.selected = networks.empty() ? 0 : static_cast<int>(std::min(selectedNetworkIndex, networks.size() - 1));
   listNav.top = 0;
   listNav.followOnBuild = true;
 }
@@ -239,7 +238,8 @@ void WifiSelectionActivity::listScreen(UiScreen& screen, void* user) {
 void WifiSelectionActivity::onRowEvent(const freeink::ui::ActionEvent& event, void* user) {
   auto* self = static_cast<WifiSelectionActivity*>(user);
   if (self->state != WifiSelectionState::NETWORK_LIST || event.value < 0 ||
-      event.value >= static_cast<int>(self->networks.size())) return;
+      event.value >= static_cast<int>(self->networks.size()))
+    return;
   self->app.clearTapFlash();
   self->selectedNetworkIndex = static_cast<size_t>(event.value);
   self->listNav.selected = event.value;
@@ -255,8 +255,9 @@ void WifiSelectionActivity::onRowEvent(const freeink::ui::ActionEvent& event, vo
 
 void WifiSelectionActivity::buildListScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  screen.setContentMargin(freeink::ui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight), 0,
-                                               static_cast<int16_t>(metrics.buttonHintsHeight + 34), 0});
+  screen.setContentMargin(
+      freeink::ui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight), 0,
+                          static_cast<int16_t>(metrics.buttonHintsHeight + 34), 0});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   if (networkRowItems.empty()) return;
   freeink::ui::ListProps props;
@@ -268,11 +269,11 @@ void WifiSelectionActivity::buildListScreen(UiScreen& screen) {
   props.labelText = screen.theme().bodyText;
   props.labelText.maxLines = 1;
   props.valueText = screen.theme().smallText;
-  const int16_t rowHeight = mappedInput.hasTouch() ? screen.theme().rowHeight
-                                                   : static_cast<int16_t>(metrics.listRowHeight);
+  const int16_t rowHeight =
+      mappedInput.hasTouch() ? screen.theme().rowHeight : static_cast<int16_t>(metrics.listRowHeight);
   props.rowHeight = rowHeight;
-  listNav.syncToProps(screen.body(), rowHeight, screen.theme().listRowGap,
-                      static_cast<int>(networkRowItems.size()), props);
+  listNav.syncToProps(screen.body(), rowHeight, screen.theme().listRowGap, static_cast<int>(networkRowItems.size()),
+                      props);
   screen.list(props);
 }
 
@@ -313,8 +314,8 @@ void WifiSelectionActivity::selectNetwork(const int index) {
 
 void WifiSelectionActivity::promptPasswordEntry() {
   state = WifiSelectionState::PASSWORD_ENTRY;
-  startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_ENTER_WIFI_PASSWORD),
-                                                                 "", 64, InputType::Password),
+  startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_ENTER_WIFI_PASSWORD), "",
+                                                                 64, InputType::Password),
                          [this](const ActivityResult& result) {
                            if (result.isCancelled) {
                              state = WifiSelectionState::NETWORK_LIST;
@@ -331,16 +332,16 @@ void WifiSelectionActivity::promptHiddenSsid() {
   enteredPassword.clear();
   autoConnecting = false;
   state = WifiSelectionState::HIDDEN_SSID_ENTRY;
-  startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_ENTER_WIFI_SSID), "", 32,
-                                                                 InputType::Text),
-                         [this](const ActivityResult& result) {
-                           if (result.isCancelled) {
-                             state = WifiSelectionState::NETWORK_LIST;
-                             return;
-                           }
-                           selectedSSID = std::get<KeyboardResult>(result.data).text;
-                           if (selectedSSID.empty()) state = WifiSelectionState::NETWORK_LIST;
-                         });
+  startActivityForResult(
+      std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, tr(STR_ENTER_WIFI_SSID), "", 32, InputType::Text),
+      [this](const ActivityResult& result) {
+        if (result.isCancelled) {
+          state = WifiSelectionState::NETWORK_LIST;
+          return;
+        }
+        selectedSSID = std::get<KeyboardResult>(result.data).text;
+        if (selectedSSID.empty()) state = WifiSelectionState::NETWORK_LIST;
+      });
 }
 
 bool WifiSelectionActivity::hasAttemptedAutoSsid(const std::string& ssid) const {
@@ -968,6 +969,9 @@ void WifiSelectionActivity::onComplete(const bool connected) {
   ActivityResult result;
   result.isCancelled = !connected;
   if (connected) {
+    // Use the connection already selected by the user. This does not request
+    // clock synchronization or turn Wi-Fi on by itself.
+    pluginevents::drain(nullptr, 4, millis() + 5000);
     result.data = WifiResult{true, selectedSSID, connectedIP};
   }
   setResult(std::move(result));

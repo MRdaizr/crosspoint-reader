@@ -32,7 +32,7 @@ void relayout(PreviewLayout& layout, const GfxRenderer& renderer, const int font
   style.alignment = toCssAlign(SETTINGS.paragraphAlignment);
   style.textAlignDefined = true;
   ParsedText parsed(SETTINGS.extraParagraphSpacing != 0, SETTINGS.hyphenationEnabled != 0,
-                    SETTINGS.focusReadingEnabled != 0, style);
+                    SETTINGS.focusReadingEnabled != 0, style, SETTINGS.paragraphIndentSpaces);
   const char* text = I18N.get(StrId::STR_FONT_PREVIEW_TEXT);
   std::string word;
   for (const char* p = text;; ++p) {
@@ -46,10 +46,10 @@ void relayout(PreviewLayout& layout, const GfxRenderer& renderer, const int font
       word.push_back(*p);
     }
   }
-  parsed.layoutAndExtractLines(renderer, fontId, static_cast<uint16_t>(textWidth),
-                               [&layout](std::unique_ptr<TextBlock> line, uint32_t) {
-                                 layout.lines.push_back(std::move(line));
-                               });
+  parsed.layoutAndExtractLines(
+      renderer, fontId, static_cast<uint16_t>(textWidth),
+      [&layout](std::unique_ptr<TextBlock> line, uint32_t) { layout.lines.push_back(std::move(line)); }, true,
+      SETTINGS.getCharacterSpacing(), SETTINGS.wordSpacing);
 }
 }  // namespace
 
@@ -83,6 +83,9 @@ void renderPreview(const GfxRenderer& renderer, PreviewLayout& layout, const int
                        .lineCompression = compression,
                        .alignment = SETTINGS.paragraphAlignment,
                        .extraParagraphSpacing = SETTINGS.extraParagraphSpacing != 0,
+                       .paragraphIndentSpaces = SETTINGS.paragraphIndentSpaces,
+                       .characterSpacing = SETTINGS.getCharacterSpacing(),
+                       .wordSpacingPercent = SETTINGS.wordSpacing,
                        .focusReading = SETTINGS.focusReadingEnabled != 0,
                        .hyphenation = SETTINGS.hyphenationEnabled != 0};
   if (!(key == layout.key)) {

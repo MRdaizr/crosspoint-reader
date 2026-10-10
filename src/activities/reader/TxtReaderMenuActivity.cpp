@@ -33,12 +33,11 @@ std::vector<TxtReaderMenuActivity::MenuItem> TxtReaderMenuActivity::buildMenuIte
   return {{MenuAction::GO_TO_PERCENT, StrId::STR_GO_TO_PERCENT},
           {MenuAction::ROTATE_SCREEN, StrId::STR_ORIENTATION},
           {MenuAction::SCREENSHOT, StrId::STR_SCREENSHOT_BUTTON},
+          {MenuAction::UNIFIED_READER, StrId::STR_TEXT_UNIFIED_READER},
           {MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON}};
 }
 
-void TxtReaderMenuActivity::onEnter() {
-  UiListActivity::onEnter();
-}
+void TxtReaderMenuActivity::onEnter() { UiListActivity::onEnter(); }
 
 void TxtReaderMenuActivity::onExit() { UiListActivity::onExit(); }
 
@@ -75,7 +74,8 @@ bool TxtReaderMenuActivity::handleButtons() {
 void TxtReaderMenuActivity::drawChrome() {
   const auto metrics = UITheme::getInstance().getMetrics();
   const Rect screen = UITheme::getInstance().getScreenSafeArea(renderer, true, false);
-  GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight}, title.c_str());
+  GUI.drawHeader(renderer, Rect{screen.x, screen.y + metrics.topPadding, screen.width, metrics.headerHeight},
+                 title.c_str());
   std::string progressLine;
   if (totalPages > 0) {
     progressLine = std::string(tr(STR_CHAPTER_PREFIX)) + std::to_string(currentPage) + "/" +
@@ -90,8 +90,9 @@ void TxtReaderMenuActivity::drawChrome() {
 
 void TxtReaderMenuActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight), 0,
-                                      static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  screen.setContentMargin(
+      fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight), 0,
+                  static_cast<int16_t>(metrics.buttonHintsHeight), 0});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   if (pendingOrientation < orientationLabels.size()) {
     rowItems[1].value = I18N.get(orientationLabels[pendingOrientation]);

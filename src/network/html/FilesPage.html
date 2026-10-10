@@ -106,6 +106,11 @@
       background-color: var(--accent-hover-color);
       color: white;
     }
+    .library-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 15px 0; }
+    .library-controls input { min-width: 0; flex: 1 1 180px; font-size: 16px; }
+    .library-controls select, .library-controls input, .library-controls button { padding: 9px; }
+    .library-row { padding: 12px 0; border-bottom: 1px solid var(--border-color); overflow-wrap: anywhere; }
+    .library-row p { margin: 4px 0; color: var(--label-color); font-size: 0.9em; }
     /* Action buttons */
     .action-buttons {
       display: flex;
@@ -1490,6 +1495,28 @@
   <a href="/settings">Settings</a>
   <a href="/firmware">Firmware</a>
 </div>
+
+<section class="card" id="library-browser">
+  <h2>📚 Library</h2>
+  <form id="library-search-form" class="library-controls">
+    <input id="library-query" type="search" aria-label="Search book title, author or path"
+           placeholder="Search title, author or path / 中文搜索" maxlength="128" autocomplete="off">
+    <label>Sort <select id="library-sort"><option value="recent">Recently added</option>
+      <option value="title">Title</option><option value="author">Author</option></select></label>
+    <label>Direction <select id="library-direction"><option value="desc">Descending</option>
+      <option value="asc">Ascending</option></select></label>
+    <button type="submit" id="library-search">Search</button>
+  </form>
+  <div class="library-controls">
+    <button type="button" id="library-previous" disabled>Previous</button>
+    <span id="library-page">16 per page</span>
+    <button type="button" id="library-next" disabled>Next</button>
+    <button type="button" id="library-rebuild">Rebuild index…</button>
+    <button type="button" id="library-cancel" disabled>Cancel request</button>
+  </div>
+  <p id="library-status" role="status" aria-live="polite"></p>
+  <div id="library-results"></div>
+</section>
 
 <div class="page-header">
   <div class="page-header-left">
@@ -5738,5 +5765,87 @@ function retryAllFailedUploads() {
   }
   hydrate();
 </script>
+<script id="library-browser-script">
+(function () {
+  const byId = id => document.getElementById(id);
+  const LIMIT = 16;
+  let offset = 0, total = 0, count = 0, controller = null, serial = 0, composing = false;
+  const query = byId('library-query'), sort = byId('library-sort'), direction = byId('library-direction');
+  const status = byId('library-status'), results = byId('library-results');
+  const previous = byId('library-previous'), next = byId('library-next');
+  const rebuild = byId('library-rebuild'), cancel = byId('library-cancel');
+  function controls(busy) {
+    previous.disabled = busy || offset === 0;
+    next.disabled = busy || offset + count >= total;
+    rebuild.disabled = busy; cancel.disabled = !busy;
+  }
+  async function json(response) {
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || ('HTTP ' + response.status));
+    return data;
+  }
+  function render(page) {
+    results.replaceChildren();
+    const fragment = document.createDocumentFragment();
+    for (const book of page.items || []) {
+      const row = document.createElement('div'); row.className = 'library-row';
+      const link = document.createElement('a'); link.className = 'file-link';
+      link.textContent = String(book.title || book.path || 'Book');
+      link.href = '/download?path=' + encodeURIComponent(String(book.path || ''));
+      link.target = '_blank'; link.rel = 'noopener noreferrer';
+      const author = document.createElement('p'); author.textContent = String(book.author || '');
+      const path = document.createElement('p'); path.textContent = String(book.path || '');
+      row.append(link, author, path); fragment.appendChild(row);
+    }
+    results.appendChild(fragment);
+    byId('library-page').textContent = total ? (offset + 1) + '–' + (offset + count) + ' / ' + total : '0 books';
+  }
+  async function request(rebuildIndex, nextOffset = offset) {
+    if (new TextEncoder().encode(query.value).length > 128) {
+      status.textContent = 'Search is limited to 128 UTF-8 bytes.'; return;
+    }
+    if (controller) controller.abort();
+    const requestId = ++serial; controller = new AbortController();
+    const signal = controller.signal;
+    controls(true); status.textContent = rebuildIndex ? 'Rebuilding index… Cancel stops this request.' : 'Loading library…';
+    try {
+      let prefix = '';
+      if (rebuildIndex) {
+        const built = await json(await fetch('/api/library/rebuild', {method:'POST', signal}));
+        prefix = 'Rebuilt ' + built.books + ' books. '; nextOffset = 0;
+      }
+      const params = new URLSearchParams({query:query.value, sort:sort.value, direction:direction.value,
+                                         offset:String(nextOffset), limit:String(LIMIT)});
+      const page = await json(await fetch('/api/library?' + params, {cache:'no-store', signal}));
+      if (requestId !== serial) return;
+      if (!Array.isArray(page.items) || page.items.length > LIMIT) throw new Error('Invalid library page');
+      offset = Number(page.offset) || 0; total = Number(page.total) || 0; count = page.items.length;
+      render(page);
+      status.textContent = prefix + (page.dirty ? 'Index is stale. Rebuild to include recent changes.' : 'Index is up to date.') +
+        (page.degraded ? ' Some cached display metadata is unavailable.' : '');
+    } catch (error) {
+      if (requestId === serial) status.textContent = error.name === 'AbortError' ?
+        'Request cancelled. The previous complete index is retained.' :
+        (error.message === 'library_unavailable' ? 'No library index yet. Select Rebuild index to create one.' : error.message);
+    } finally {
+      if (requestId === serial) { controller = null; controls(false); }
+    }
+  }
+  query.addEventListener('compositionstart', () => { composing = true; });
+  query.addEventListener('compositionend', () => { composing = false; });
+  byId('library-search-form').addEventListener('submit', event => {
+    event.preventDefault(); if (!composing) request(false, 0);
+  });
+  previous.addEventListener('click', () => request(false, Math.max(0, offset - LIMIT)));
+  next.addEventListener('click', () => request(false, offset + LIMIT));
+  rebuild.addEventListener('click', () => {
+    if (confirm('Rebuild the SD library index? This scans books and may take time. The previous index remains available if cancelled.')) request(true, 0);
+  });
+  cancel.addEventListener('click', () => { if (controller) controller.abort(); });
+  request(false, 0); // read-only GET, no automatic rebuild or status polling
+})();
+</script>
+<script src="/js/plugin-host.js"></script>
+<script>loadPlugins('files');</script>
 </body>
 </html>

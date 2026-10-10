@@ -7,6 +7,7 @@
 #include <I18n.h>
 #include <Logging.h>
 #include <Serialization.h>
+#include <TxtResumeOffset.h>
 #include <Utf8.h>
 
 #include <algorithm>
@@ -101,7 +102,10 @@ bool TxtReaderActivity::loadBook() {
   return true;
 }
 
-void TxtReaderActivity::onBookEntered() { txt->setupCacheDir(); }
+void TxtReaderActivity::onBookEntered() {
+  txt->setupCacheDir();
+  progressRecoveryFailed_ = !ProgressFile::recover(txt->getCachePath());
+}
 
 void TxtReaderActivity::onBookExited() {
   pendingPageTurn.store(0, std::memory_order_release);
@@ -130,6 +134,7 @@ bool TxtReaderActivity::pageTurn(const bool isForward) {
 }
 
 void TxtReaderActivity::loop() {
+  if (handleProgressRecoveryError()) return;
   rememberBookOnceRendered();
   READING_STATS.noteActivity();
   const bool atEndOfBook = isAtEndOfBook();
@@ -281,11 +286,24 @@ size_t TxtReaderActivity::alignApproximateOffset(size_t offset) const {
   return start + aligned;
 }
 
-void TxtReaderActivity::beginApproximatePosition(const int percent, size_t offset) {
+void TxtReaderActivity::beginApproximatePosition(const int percent, size_t offset, const bool alignToLine) {
   const size_t fileSize = txt ? txt->getFileSize() : 0;
   if (fileSize == 0) return;
   if (offset == 0 && percent > 0) offset = fileSize * static_cast<size_t>(percent) / 100;
-  offset = alignApproximateOffset(offset);
+  if (alignToLine) {
+    offset = alignApproximateOffset(offset);
+  } else {
+    // A migrated TXPR already points at the visible source character. The
+    // percent-jump heuristic scans FORWARD to the next newline, which would
+    // skip the rest of that paragraph when returning from unified layout.
+    offset = std::min(offset, fileSize - 1);
+    const size_t start = offset > 3 ? offset - 3 : 0;
+    uint8_t bytes[4] = {};
+    const size_t size = std::min(sizeof(bytes), fileSize - start);
+    if (txt->readContent(bytes, start, size)) {
+      offset = start + TxtResumeOffset::characterStart(bytes, size, offset - start);
+    }
+  }
 
   const size_t indexedOffset = pageOffsets.empty() ? 0 : pageOffsets.back();
   const size_t indexedPages = pageOffsets.size();
@@ -357,6 +375,9 @@ void TxtReaderActivity::onReaderMenuConfirm(TxtReaderMenuActivity::MenuAction ac
       pendingScreenshot = true;
       requestUpdate();
       break;
+    case TxtReaderMenuActivity::MenuAction::UNIFIED_READER:
+      activityManager.goToReader(bookPath);
+      break;
     case TxtReaderMenuActivity::MenuAction::GO_HOME:
       onGoHome();
       break;
@@ -400,7 +421,7 @@ void TxtReaderActivity::initializeReader() {
   // Load saved progress
   loadProgress();
   if (pendingApproximateResumeOffset > 0) {
-    beginApproximatePosition(0, pendingApproximateResumeOffset);
+    beginApproximatePosition(0, pendingApproximateResumeOffset, false);
     pendingApproximateResumeOffset = 0;
   } else if (!pageIndexComplete && currentPage >= static_cast<int>(pageOffsets.size())) {
     pendingResumePageTarget = currentPage;
@@ -605,16 +626,19 @@ bool TxtReaderActivity::applyPendingPageTurn() {
   cancelNextPagePreparation();
 
   if (approximatePosition) {
+    const int oldPage = approximateLocalPage;
     if (direction < 0) {
       if (approximateLocalPage > 0) --approximateLocalPage;
     } else if (ensureApproximatePage(approximateLocalPage + 1)) {
       ++approximateLocalPage;
     }
+    noteSessionPageTurn(direction > 0, approximateLocalPage != oldPage);
     return true;
   }
 
   if (direction < 0) {
     if (currentPage > 0) --currentPage;
+    noteSessionPageTurn(false, true);
     return true;
   }
 
@@ -624,6 +648,7 @@ bool TxtReaderActivity::applyPendingPageTurn() {
     updateIndexProgress(true);
   }
   updateTotalPages();
+  const int oldPage = currentPage;
   if (currentPage < static_cast<int>(pageOffsets.size()) - 1) {
     ++currentPage;
   } else if (pageIndexComplete) {
@@ -631,6 +656,7 @@ bool TxtReaderActivity::applyPendingPageTurn() {
     // can display the end-of-book menu without clamping back to the page.
     currentPage = totalPages;
   }
+  noteSessionPageTurn(true, currentPage != oldPage);
   return true;
 }
 
@@ -1062,6 +1088,7 @@ void TxtReaderActivity::renderStatusBar() const {
 }
 
 void TxtReaderActivity::saveProgress() {
+  if (progressRecoveryFailed_) return;
   uint8_t data[12] = {};
   const uint32_t page = static_cast<uint32_t>(std::max(0, displayedPage()));
   const uint32_t offset = static_cast<uint32_t>(displayedOffset());
@@ -1076,6 +1103,11 @@ void TxtReaderActivity::saveProgress() {
 }
 
 void TxtReaderActivity::loadProgress() {
+  if (!ProgressFile::recover(txt->getCachePath())) {
+    progressRecoveryFailed_ = true;
+    LOG_ERR("TRS", "Could not recover saved progress");
+    return;
+  }
   HalFile f;
   if (Storage.openFileForRead("TRS", txt->getCachePath() + "/progress.bin", f)) {
     uint8_t data[12] = {};

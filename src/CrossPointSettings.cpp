@@ -249,6 +249,20 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     }
   }
 
+  const auto indentSpaces = doc["paragraphIndentSpaces"];
+  const bool hasSavedWidth = indentSpaces.is<int>();
+  const int savedWidth = hasSavedWidth ? indentSpaces.as<int>() : 0;
+  paragraphIndentSpaces = migrateParagraphIndentSpaces(hasSavedWidth, savedWidth, extraParagraphSpacing != 0);
+  if (!hasSavedWidth || savedWidth < 0 || savedWidth > 5) needsResave = true;
+  const int savedWordSpacing = doc["wordSpacing"] | 100;
+  wordSpacing = normalizeWordSpacing(savedWordSpacing);
+  if (savedWordSpacing != wordSpacing) needsResave = true;
+  const int savedCharacterSpacing = doc["characterSpacing"] | static_cast<int>(CHARACTER_SPACING_OFFSET);
+  characterSpacing = savedCharacterSpacing >= 0 && savedCharacterSpacing <= 4
+                         ? static_cast<uint8_t>(savedCharacterSpacing)
+                         : CHARACTER_SPACING_OFFSET;
+  if (savedCharacterSpacing != characterSpacing) needsResave = true;
+
   // Apply schema-2 ordinal fixes after the generic loop because fromJson takes
   // a const view of the parsed document.
   if (settingsSchema == 2 && !doc["sleepScreen"].isNull()) {
@@ -271,14 +285,14 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     needsResave = true;
   }
 
-  frontButtonBack = clamp(doc["frontButtonBack"] | static_cast<uint8_t>(FRONT_HW_BACK),
-                           FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_BACK);
+  frontButtonBack =
+      clamp(doc["frontButtonBack"] | static_cast<uint8_t>(FRONT_HW_BACK), FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_BACK);
   frontButtonConfirm = clamp(doc["frontButtonConfirm"] | static_cast<uint8_t>(FRONT_HW_CONFIRM),
                              FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_CONFIRM);
-  frontButtonLeft = clamp(doc["frontButtonLeft"] | static_cast<uint8_t>(FRONT_HW_LEFT),
-                          FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_LEFT);
-  frontButtonRight = clamp(doc["frontButtonRight"] | static_cast<uint8_t>(FRONT_HW_RIGHT),
-                           FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_RIGHT);
+  frontButtonLeft =
+      clamp(doc["frontButtonLeft"] | static_cast<uint8_t>(FRONT_HW_LEFT), FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_LEFT);
+  frontButtonRight = clamp(doc["frontButtonRight"] | static_cast<uint8_t>(FRONT_HW_RIGHT), FRONT_BUTTON_HARDWARE_COUNT,
+                           FRONT_HW_RIGHT);
   validateFrontButtonMapping(*this);
 
   if (!doc["fontPointSize"].isNull()) {
@@ -509,6 +523,9 @@ bool CrossPointSettings::loadFromBinaryFile() {
   if (sdFontFamilyName[0] == '\0') fontPointSize = DEFAULT_FONT_POINT_SIZE;
 #endif
 
+  paragraphIndentSpaces = migrateParagraphIndentSpaces(false, 0, extraParagraphSpacing != 0);
+  characterSpacing = CHARACTER_SPACING_OFFSET;
+  wordSpacing = 100;
   LOG_DBG("CPS", "Settings loaded from binary file");
   return true;
 }
@@ -599,11 +616,14 @@ uint64_t CrossPointSettings::getDailyGoalMs() const {
 }
 
 ReaderRenderSpec CrossPointSettings::readerRenderSpec(const uint16_t viewportWidth,
-                                                       const uint16_t viewportHeight) const {
+                                                      const uint16_t viewportHeight) const {
   ReaderRenderSpec spec;
   spec.fontId = getReaderFontId();
   spec.lineCompression = getReaderLineCompression();
   spec.extraParagraphSpacing = extraParagraphSpacing != 0;
+  spec.paragraphIndentSpaces = paragraphIndentSpaces;
+  spec.characterSpacing = getCharacterSpacing();
+  spec.wordSpacingPercent = wordSpacing;
   spec.paragraphAlignment = paragraphAlignment;
   spec.viewportWidth = viewportWidth;
   spec.viewportHeight = viewportHeight;
@@ -628,8 +648,8 @@ int CrossPointSettings::getReaderFontId() const {
   // wins above; otherwise use the one retained built-in reader font.
   return NOTOSERIF_14_FONT_ID;
 #else
-  const uint8_t pt = snapToNearestPointSize(BUILTIN_READER_POINT_SIZES,
-                                            std::size(BUILTIN_READER_POINT_SIZES), fontPointSize);
+  const uint8_t pt =
+      snapToNearestPointSize(BUILTIN_READER_POINT_SIZES, std::size(BUILTIN_READER_POINT_SIZES), fontPointSize);
   const bool sans = fontFamily == NOTOSANS;
   switch (pt) {
     case 12:

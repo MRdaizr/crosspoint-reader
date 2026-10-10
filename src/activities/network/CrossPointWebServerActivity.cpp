@@ -6,8 +6,8 @@
 #include <GfxRenderer.h>
 #include <HalGPIO.h>
 #include <I18n.h>
-#include <WiFi.h>
 #include <Memory.h>
+#include <WiFi.h>
 
 #include <cstddef>
 
@@ -306,7 +306,12 @@ void CrossPointWebServerActivity::startWebServer() {
   }
 
   // Create the web server instance
-  webServer.reset(new CrossPointWebServer());
+  webServer = makeUniqueNoThrow<CrossPointWebServer>();
+  if (!webServer) {
+    LOG_ERR("WEBACT", "OOM: web server");
+    onGoHome();
+    return;
+  }
   // HTTP uploads keep handleClient() busy until the request body finishes.
   // Sample input on received chunks so Back remains available on slow links.
   webServer->setUploadCancelCheck([this] {
@@ -438,7 +443,8 @@ void CrossPointWebServerActivity::loop() {
     }
 
     // Handle exit on Back button (also check outside loop)
-    const auto firmwareStatus = webServer ? webServer->getFirmwareUpdateStatus() : CrossPointWebServer::FirmwareUpdateStatus{};
+    const auto firmwareStatus =
+        webServer ? webServer->getFirmwareUpdateStatus() : CrossPointWebServer::FirmwareUpdateStatus{};
     const bool firmwareBusy = firmwareStatus.phase == CrossPointWebServer::FirmwareUpdatePhase::UPLOADING ||
                               firmwareStatus.phase == CrossPointWebServer::FirmwareUpdatePhase::VALIDATING ||
                               firmwareStatus.phase == CrossPointWebServer::FirmwareUpdatePhase::FLASHING ||
@@ -517,16 +523,16 @@ void CrossPointWebServerActivity::renderFirmwareUpdateStatus(
   renderer.drawCenteredText(UI_10_FONT_ID, top, line, true, EpdFontFamily::BOLD);
   int y = top + lineHeight + metrics.verticalSpacing;
   GUI.drawProgressBar(
-      renderer, Rect{metrics.contentSidePadding, y, pageWidth - metrics.contentSidePadding * 2, metrics.progressBarHeight},
+      renderer,
+      Rect{metrics.contentSidePadding, y, pageWidth - metrics.contentSidePadding * 2, metrics.progressBarHeight},
       percent, 100);
   y += metrics.progressBarHeight + metrics.verticalSpacing + lineHeight + metrics.verticalSpacing;
 
   if (status.phase == CrossPointWebServer::FirmwareUpdatePhase::FLASHING) {
     renderer.drawCenteredText(UI_10_FONT_ID, y, tr(STR_FIRMWARE_UPDATE_DO_NOT_POWER_OFF));
   } else if (status.total > 0) {
-    renderer.drawCenteredText(
-        UI_10_FONT_ID, y,
-        (std::to_string(status.processed) + " / " + std::to_string(status.total)).c_str());
+    renderer.drawCenteredText(UI_10_FONT_ID, y,
+                              (std::to_string(status.processed) + " / " + std::to_string(status.total)).c_str());
   }
 }
 

@@ -2,6 +2,7 @@
 #include <Epub.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
+#include <FsHelpers.h>
 #include <GfxRenderer.h>
 #include <HalClock.h>
 #include <HalDisplay.h>
@@ -12,6 +13,7 @@
 #include <HalSystem.h>
 #include <HalTiltSensor.h>
 #include <I18n.h>
+#include <LibraryBuilder.h>
 #include <Logging.h>
 #include <SPI.h>
 #include <WiFi.h>
@@ -19,23 +21,26 @@
 
 #include <cstring>
 
+#include "AchievementsStore.h"
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
-#include "AchievementsStore.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
-#include "RecentBooksStore.h"
 #include "ReadingStatsStore.h"
+#include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/network/airpage/AirPageWallpaper.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "images/LoadingIcon.h"
+#include "util/BookCacheUtils.h"
 #include "util/ButtonNavigator.h"
+#include "util/PluginEvents.h"
 #include "util/ScreenshotUtil.h"
 
 GfxRenderer renderer(display);
@@ -178,6 +183,67 @@ void silentRestartToSettings() {
 
 constexpr char SLEEP_FRAME_FILE[] = "/.crosspoint/sleep_frame.bin";
 
+static bool visibleLibraryPath(const char* path) {
+  if (!path || !*path) return false;
+  const std::string_view view(path);
+  for (size_t i = 0; i < view.size(); ++i) {
+    if (view[i] == '.' && (i == 0 || view[i - 1] == '/')) return false;
+  }
+  return true;
+}
+
+static bool libraryBookPath(const char* path) {
+  if (!visibleLibraryPath(path)) return false;
+  std::string_view view(path);
+  if (view.ends_with(".meta.json")) view.remove_suffix(10);
+  return FsHelpers::hasReflowableBookExtension(view) || FsHelpers::hasXtcExtension(view);
+}
+
+static void notifyLibraryMutation(const char* oldPath, const char* newPath, const bool directory) {
+  if (libraryBookPath(oldPath) || libraryBookPath(newPath) ||
+      (directory && (visibleLibraryPath(oldPath) || visibleLibraryPath(newPath)))) {
+    library::markLibraryIndexDirty();
+  }
+  if (directory) return;
+  if (oldPath && newPath && libraryBookPath(oldPath) && libraryBookPath(newPath)) {
+    relocateAdditionalTextCache(oldPath, newPath);
+  } else if (newPath && libraryBookPath(newPath)) {
+    // Writes/publication invalidate layout data, never the user's resume file.
+    invalidateBookCache(newPath);
+  } else if (oldPath && !newPath &&
+             (FsHelpers::hasTxtExtension(std::string_view(oldPath)) ||
+              FsHelpers::hasMarkdownExtension(std::string_view(oldPath)))) {
+    // Native deletion already clears legacy TXT; also remove the unified cache.
+    clearBookCache(oldPath);
+  }
+}
+
+static void deliverSleepPluginEvents(const bool fromTimeout) {
+  const pluginevents::Var vars[] = {{"book", APP_STATE.openEpubPath.c_str()},
+                                    {"reason", fromTimeout ? "timeout" : "button"}};
+  pluginevents::emit(pluginevents::Event::SleepEnter, vars, 2);
+  const uint32_t started = millis();
+  const uint32_t deadline = started + pluginevents::SLEEP_BUDGET_MS;
+  if (WiFi.status() == WL_CONNECTED) {
+    pluginevents::drain(nullptr, 4, deadline);
+    return;
+  }
+  // The global toggle alone is insufficient: an enabled subscriber must opt
+  // in, a saved credential must exist, and the battery must be at least 20%.
+  const std::string ssid = WIFI_STORE.getLastConnectedSsid();
+  auto credential = ssid.empty() ? WIFI_STORE.getCredentialAt(0) : WIFI_STORE.findCredential(ssid);
+  if (!credential.has_value()) credential = WIFI_STORE.getCredentialAt(0);
+  if (!pluginevents::shouldConnectForSleep(SETTINGS.pluginSleepConnect != 0, powerManager.getBatteryPercentage(),
+                                           credential.has_value()))
+    return;
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(credential->ssid.c_str(), credential->password.c_str());
+  while (WiFi.status() != WL_CONNECTED && millis() - started < pluginevents::CONNECT_BUDGET_MS) {
+    delay(25);
+  }
+  if (WiFi.status() == WL_CONNECTED) pluginevents::drain(nullptr, 4, deadline);
+}
+
 static void saveSleepFrameBuffer() {
   HalFile file;
   if (!Storage.openFileForWrite("SLP", SLEEP_FRAME_FILE, file)) return;
@@ -221,6 +287,7 @@ void enterDeepSleep(bool fromTimeout = false) {
   // a WiFi activity would otherwise silentRestart() here and reboot instead.
   deepSleepInProgress = true;
   activityManager.goToSleep(fromTimeout);
+  deliverSleepPluginEvents(fromTimeout);
 
   if (isQuickResumeSleep) {
     saveSleepFrameBuffer();
@@ -316,8 +383,8 @@ void setup() {
 
   // Recovery firmware mode: hold the UP side button together with power at
   // boot to skip directly to the SD-card firmware update screen.
-  const bool recoveryFirmwareMode = wakeupReason == HalGPIO::WakeupReason::PowerButton &&
-                                    gpio.isPressed(HalGPIO::BTN_UP);
+  const bool recoveryFirmwareMode =
+      wakeupReason == HalGPIO::WakeupReason::PowerButton && gpio.isPressed(HalGPIO::BTN_UP);
   if (recoveryFirmwareMode) {
     LOG_INF("MAIN", "Recovery firmware mode (UP + POWER held at boot)");
   }
@@ -339,6 +406,7 @@ void setup() {
   HalSystem::checkPanic();
 
   SETTINGS.loadFromFile();
+  airpage::AirPageWallpaper::recoverInterruptedTransaction();
   APP_STATE.loadFromFile();
   const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
   const bool isPersistedSleepWake = isSleepWake && !APP_STATE.showBootScreen;
@@ -346,6 +414,8 @@ void setup() {
   I18N.setLanguage(static_cast<Language>(SETTINGS.language));
   KOREADER_STORE.loadFromFile();
   OPDS_STORE.loadFromFile();
+  Storage.setMutationCallback(&notifyLibraryMutation);
+  pluginevents::refreshSubscriptions();
   UITheme::getInstance().reload();
   ButtonNavigator::setMappedInputManager(mappedInputManager);
 
@@ -533,8 +603,8 @@ void loop() {
   // CPU frequency scaling while their static screen remains visible.
   static unsigned long lastActivityTime = millis();
   static unsigned long lastUserActivityTime = millis();
-  const bool userActivity = gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() ||
-                            halTiltSensor.hadActivity();
+  const bool userActivity =
+      gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity();
   if (userActivity) {
     lastActivityTime = millis();
     lastUserActivityTime = lastActivityTime;
@@ -648,7 +718,7 @@ void loop() {
   // When an activity requests skip loop delay (e.g., webserver running), use yield() for faster response
   // Otherwise, use longer delay to save power
   if (skipLoopDelay) {
-    yield();                             // Give FreeRTOS a chance to run tasks, but return immediately
+    yield();  // Give FreeRTOS a chance to run tasks, but return immediately
   } else {
     if (millis() - lastActivityTime >= HalPowerManager::IDLE_POWER_SAVING_MS) {
       // Poll for raw button contact during idle in short slices. The next

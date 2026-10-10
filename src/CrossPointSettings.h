@@ -1,12 +1,11 @@
 #pragma once
 #include <ArduinoJson.h>
+#include <Epub/ReaderRenderSpec.h>
 #include <HalStorage.h>
 #include <PersistableStore.h>
 
 #include <cstdint>
 #include <iosfwd>
-
-#include <Epub/ReaderRenderSpec.h>
 
 class CrossPointSettings : public PersistableStore<CrossPointSettings> {
  private:
@@ -186,11 +185,7 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // EPUB reader menu presentation.  Keep LIST as the persisted default so
   // existing devices retain the classic full-screen menu; TOOLBAR is an
   // opt-in bottom-sheet overlay for EPUB readers.
-  enum READER_MENU_STYLE {
-    READER_MENU_LIST = 0,
-    READER_MENU_TOOLBAR = 1,
-    READER_MENU_STYLE_COUNT
-  };
+  enum READER_MENU_STYLE { READER_MENU_LIST = 0, READER_MENU_TOOLBAR = 1, READER_MENU_STYLE_COUNT };
 
   // Hide battery percentage
   enum HIDE_BATTERY_PERCENTAGE { HIDE_NEVER = 0, HIDE_READER = 1, HIDE_ALWAYS = 2, HIDE_BATTERY_PERCENTAGE_COUNT };
@@ -253,6 +248,25 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t clockHasBeenSynced = 0;
   // Text rendering settings
   uint8_t extraParagraphSpacing = 1;
+  uint8_t paragraphIndentSpaces = 2;
+  static constexpr uint8_t WORD_SPACING_MIN = 50;
+  static constexpr uint8_t WORD_SPACING_MAX = 200;
+  static constexpr uint8_t WORD_SPACING_STEP = 25;
+  uint8_t wordSpacing = 100;
+  static constexpr uint8_t CHARACTER_SPACING_OFFSET = 2;  // stored 0..4 maps to -2..+2 px
+  uint8_t characterSpacing = CHARACTER_SPACING_OFFSET;
+  int8_t getCharacterSpacing() const { return static_cast<int8_t>(characterSpacing - CHARACTER_SPACING_OFFSET); }
+  static constexpr uint8_t migrateParagraphIndentSpaces(bool hasSavedWidth, int savedWidth, bool extraSpacing) {
+    return hasSavedWidth ? static_cast<uint8_t>(savedWidth < 0 ? 0 : (savedWidth > 5 ? 5 : savedWidth))
+                         : static_cast<uint8_t>(extraSpacing ? 0 : 3);
+  }
+  static constexpr uint8_t normalizeWordSpacing(int percent) {
+    const int bounded = percent < WORD_SPACING_MIN   ? WORD_SPACING_MIN
+                        : percent > WORD_SPACING_MAX ? WORD_SPACING_MAX
+                                                     : percent;
+    return static_cast<uint8_t>(WORD_SPACING_MIN + (bounded - WORD_SPACING_MIN + WORD_SPACING_STEP / 2) /
+                                                       WORD_SPACING_STEP * WORD_SPACING_STEP);
+  }
   uint8_t textAntiAliasing = 0;
   // Short power button click behaviour
   uint8_t shortPwrBtn = IGNORE;
@@ -319,6 +333,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t showHiddenFiles = 0;
   // Remove a book from the Recent Books list when its End-of-Book screen is reached (0 = off, 1 = on)
   uint8_t removeReadBooksFromRecents = 0;
+  // Prefer indexed book metadata for the library list.
+  uint8_t libraryUseMetadata = 1;
+  // Allow the plugin sleep workflow to request a connection.
+  uint8_t pluginSleepConnect = 0;
   // Move epub to /Read/ folder on SD card when finished (0 = disabled, 1 = enabled)
   uint8_t moveFinishedToReadFolder = 0;
   // Image rendering mode in EPUB reader

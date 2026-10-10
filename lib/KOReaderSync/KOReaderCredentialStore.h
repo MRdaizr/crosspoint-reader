@@ -17,6 +17,13 @@ enum class KOReaderSyncBehavior : uint8_t {
   SMART = 1,
 };
 
+// Protocol capabilities are selected explicitly, independently of the URL.
+enum class KOReaderServerType : uint8_t {
+  CROSSPOINT = 0,
+  KOSYNC = 1,
+  OTHER = 2,
+};
+
 /**
  * Singleton class for storing KOReader sync credentials on the SD card.
  * Passwords are XOR-obfuscated with the device's unique hardware MAC address
@@ -27,7 +34,8 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
  private:
   std::string username;
   std::string password;
-  std::string serverUrl;                                            // Custom sync server URL (empty = default)
+  std::string serverUrl;  // Custom sync server URL (empty = default)
+  KOReaderServerType serverType = KOReaderServerType::KOSYNC;
   DocumentMatchMethod matchMethod = DocumentMatchMethod::FILENAME;  // Default to filename for compatibility
   bool sendMetadata = false;
   KOReaderSyncBehavior syncBehavior = KOReaderSyncBehavior::SMART;
@@ -68,9 +76,13 @@ class KOReaderCredentialStore : public PersistableStore<KOReaderCredentialStore>
   // Get base URL for API calls (with http:// normalization if no protocol, falls back to default)
   std::string getBaseUrl() const;
 
-  // CrossPoint-specific progress extensions are accepted only by the
-  // CrossPoint sync endpoint.  Keep this check centralized so metadata and
-  // rich-position fields never leak to third-party KOReader servers.
+  void setServerType(KOReaderServerType type);
+  KOReaderServerType getServerType() const { return serverType; }
+  bool supportsRichProgress() const { return serverType != KOReaderServerType::KOSYNC; }
+  bool supportsExtendedMetadata() const { return serverType == KOReaderServerType::OTHER; }
+
+  // Legacy URL detection, used only when migrating configurations without a
+  // server type. Keep its hostname/port/path matching behavior unchanged.
   bool usesCrossPointSyncServer() const;
 
   // Document matching method

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "FootnoteEntry.h"
+#include "PageLink.h"
 #include "blocks/ImageBlock.h"
 #include "blocks/TextBlock.h"
 
@@ -76,6 +77,9 @@ class Page {
   // the list of block index and line numbers on this page
   std::vector<std::unique_ptr<PageElement>> elements;
   std::vector<FootnoteEntry> footnotes;
+  PageLinks links;
+  bool linkGeometryComplete = true;  // False on metadata OOM: offer the legacy list.
+  static constexpr uint16_t MAX_LINKS_PER_PAGE = 32;
   static constexpr uint16_t MAX_FOOTNOTES_PER_PAGE = 16;
   static constexpr uint16_t MAX_ELEMENTS_PER_PAGE = 4096;
 

@@ -71,6 +71,9 @@ class ChapterHtmlSlimParser {
   int fontId;
   float lineCompression;
   bool extraParagraphSpacing;
+  uint8_t paragraphIndentSpaces = 2;
+  int8_t characterSpacing = 0;
+  uint8_t wordSpacingPercent = 100;
   uint8_t paragraphAlignment;
   uint16_t viewportWidth;
   uint16_t viewportHeight;
@@ -143,6 +146,10 @@ class ChapterHtmlSlimParser {
   // Footnote link tracking
   bool insideFootnoteLink = false;
   int footnoteLinkDepth = -1;
+  uint8_t currentFootnoteLinkId = 0;
+  uint32_t currentLinkIdentity = 0;
+  uint32_t nextLinkIdentity = 0;
+  std::unique_ptr<char[]> currentLinkHref;
   FootnoteEntry currentFootnote = {};
   int currentFootnoteLinkTextLen = 0;
   std::vector<std::pair<int, FootnoteEntry>> pendingFootnotes;  // <wordIndex, entry>
@@ -209,6 +216,11 @@ class ChapterHtmlSlimParser {
         parseBufferSize(parseBufferSize) {}
 
   ~ChapterHtmlSlimParser();
+  void setTextSpacing(int8_t character, uint8_t wordPercent) {
+    characterSpacing = character;
+    wordSpacingPercent = wordPercent;
+  }
+  void setParagraphIndentSpaces(uint8_t spaces) { paragraphIndentSpaces = spaces; }
   bool parseAndBuildPages();
   bool beginParsing();
   ParseResult parseNextChunk(uint8_t maxChunks = 1);

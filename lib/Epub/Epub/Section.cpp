@@ -4,6 +4,7 @@
 #include <GfxRenderer.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <Serialization.h>
 #include <esp_heap_caps.h>
 #include <esp_system.h>
@@ -47,7 +48,9 @@ namespace {
 //      and <ul>/<ol> containers contribute margins/padding to child insets.
 // v45: Internal EPUB links preserve CSS superscript/subscript positioning.
 // v46: Long paragraphs retain first-line and spacing state across soft flushes.
-constexpr uint8_t SECTION_FILE_VERSION = 46;
+// v47: configurable indentation/tracking/word spacing and TextBlock tracking payload.
+// v48: checked internal-link targets, source identities, geometry and OOM fallback flag.
+constexpr uint8_t SECTION_FILE_VERSION = 48;
 // A section being written is never readable. The version is stamped with the
 // final/partial value only after all page tables have been written.
 constexpr uint8_t SECTION_FILE_INCOMPLETE_VERSION = 0;
@@ -75,7 +78,10 @@ constexpr uint32_t BUILD_CHECKPOINT_MAGIC = 0x43504231;  // CPB1
 // change, which otherwise could mix old flattened rows with new grid rows.
 // v5 invalidates any checkpoint whose pages lack Ruby payloads; v8 aligns the
 // checkpoint with section semantics v36-v43 and the partial-cache format.
-constexpr uint16_t BUILD_CHECKPOINT_VERSION = 8;
+// v9: serialize and compare spacing, invalidate old page payloads on resume.
+// v10: page links/identity. Resume replays the HTML prefix, including the
+// pending paragraph's link target IDs, before appending any new-format pages.
+constexpr uint16_t BUILD_CHECKPOINT_VERSION = 10;
 
 void releaseFontCachesForBuild(GfxRenderer& renderer) {
   if (auto* fontCache = renderer.getFontCacheManager()) {
@@ -91,8 +97,9 @@ bool streamEpubItemWithScratch(GfxRenderer& renderer, Epub& epub, const std::str
 
 constexpr uint32_t HEADER_SIZE = sizeof(uint8_t) + sizeof(int) + sizeof(float) + sizeof(bool) + sizeof(uint8_t) +
                                  sizeof(uint16_t) + sizeof(uint16_t) + sizeof(uint16_t) + sizeof(bool) + sizeof(bool) +
-                                 sizeof(uint8_t) + sizeof(bool) + sizeof(uint32_t) + sizeof(uint32_t) +
-                                 sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t);
+                                 sizeof(uint8_t) + sizeof(bool) + sizeof(uint8_t) + sizeof(int8_t) + sizeof(uint8_t) +
+                                 sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
+                                 sizeof(uint32_t);
 
 struct PageLutEntry {
   uint32_t fileOffset;
@@ -105,12 +112,19 @@ struct BuildCheckpointHeader {
   uint32_t magic;
   uint16_t version;
   uint32_t layoutHash;
+  uint8_t paragraphIndentSpaces;
+  int8_t characterSpacing;
+  uint8_t wordSpacingPercent;
 };
+// Serialize fields individually: never write compiler padding to the SD file.
+constexpr size_t CHECKPOINT_HEADER_SIZE =
+    sizeof(uint32_t) + sizeof(uint16_t) + sizeof(uint32_t) + sizeof(uint8_t) + sizeof(int8_t) + sizeof(uint8_t);
 
 uint32_t buildLayoutHash(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
                          const uint8_t paragraphAlignment, const uint16_t viewportWidth, const uint16_t viewportHeight,
                          const bool hyphenationEnabled, const bool embeddedStyle, const uint8_t imageRendering,
-                         const bool focusReadingEnabled) {
+                         const bool focusReadingEnabled, const uint8_t paragraphIndentSpaces,
+                         const int8_t characterSpacing, const uint8_t wordSpacingPercent) {
   uint32_t hash = 2166136261UL;
   const auto mix = [&hash](const uint32_t value) { hash = (hash ^ value) * 16777619UL; };
   uint32_t compressionBits = 0;
@@ -126,6 +140,9 @@ uint32_t buildLayoutHash(const int fontId, const float lineCompression, const bo
   mix(embeddedStyle);
   mix(imageRendering);
   mix(focusReadingEnabled);
+  mix(paragraphIndentSpaces);
+  mix(static_cast<uint8_t>(characterSpacing));
+  mix(wordSpacingPercent);
   return hash;
 }
 }  // namespace
@@ -331,7 +348,9 @@ void Section::writeSectionFileHeader(HalFile& target, const int fontId, const fl
                                      const bool extraParagraphSpacing, const uint8_t paragraphAlignment,
                                      const uint16_t viewportWidth, const uint16_t viewportHeight,
                                      const bool hyphenationEnabled, const bool embeddedStyle,
-                                     const uint8_t imageRendering, const bool focusReadingEnabled) {
+                                     const uint8_t imageRendering, const bool focusReadingEnabled,
+                                     const uint8_t paragraphIndentSpaces, const int8_t characterSpacing,
+                                     const uint8_t wordSpacingPercent) {
   if (!target) {
     LOG_DBG("SCT", "File not open for writing header");
     return;
@@ -340,8 +359,9 @@ void Section::writeSectionFileHeader(HalFile& target, const int fontId, const fl
                                    sizeof(extraParagraphSpacing) + sizeof(paragraphAlignment) + sizeof(viewportWidth) +
                                    sizeof(viewportHeight) + sizeof(pageCount) + sizeof(hyphenationEnabled) +
                                    sizeof(embeddedStyle) + sizeof(imageRendering) + sizeof(focusReadingEnabled) +
-                                   sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
-                                   sizeof(uint32_t),
+                                   sizeof(paragraphIndentSpaces) + sizeof(characterSpacing) +
+                                   sizeof(wordSpacingPercent) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
+                                   sizeof(uint32_t) + sizeof(uint32_t),
                 "Header size mismatch");
   serialization::writePod(target, SECTION_FILE_INCOMPLETE_VERSION);
   serialization::writePod(target, fontId);
@@ -354,6 +374,9 @@ void Section::writeSectionFileHeader(HalFile& target, const int fontId, const fl
   serialization::writePod(target, embeddedStyle);
   serialization::writePod(target, imageRendering);
   serialization::writePod(target, focusReadingEnabled);
+  serialization::writePod(target, paragraphIndentSpaces);
+  serialization::writePod(target, characterSpacing);
+  serialization::writePod(target, wordSpacingPercent);
   serialization::writePod(target, pageCount);  // Placeholder for page count (will be initially 0, patched later)
   serialization::writePod(target, static_cast<uint32_t>(0));  // Placeholder for LUT offset (patched later)
   serialization::writePod(target, static_cast<uint32_t>(0));  // Placeholder for anchor map offset (patched later)
@@ -365,7 +388,9 @@ void Section::writeSectionFileHeader(HalFile& target, const int fontId, const fl
 bool Section::loadSectionFile(const int fontId, const float lineCompression, const bool extraParagraphSpacing,
                               const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                               const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
-                              const uint8_t imageRendering, const bool focusReadingEnabled) {
+                              const uint8_t imageRendering, const bool focusReadingEnabled,
+                              const uint8_t paragraphIndentSpaces, const int8_t characterSpacing,
+                              const uint8_t wordSpacingPercent) {
   partial_ = false;
   partialPageCount_ = 0;
   partialBytesConsumed_ = 0;
@@ -404,6 +429,9 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
     bool fileEmbeddedStyle;
     uint8_t fileImageRendering;
     bool fileFocusReadingEnabled;
+    uint8_t fileParagraphIndentSpaces;
+    int8_t fileCharacterSpacing;
+    uint8_t fileWordSpacingPercent;
     serialization::readPod(file, fileFontId);
     serialization::readPod(file, fileLineCompression);
     serialization::readPod(file, fileExtraParagraphSpacing);
@@ -414,12 +442,17 @@ bool Section::loadSectionFile(const int fontId, const float lineCompression, con
     serialization::readPod(file, fileEmbeddedStyle);
     serialization::readPod(file, fileImageRendering);
     serialization::readPod(file, fileFocusReadingEnabled);
+    serialization::readPod(file, fileParagraphIndentSpaces);
+    serialization::readPod(file, fileCharacterSpacing);
+    serialization::readPod(file, fileWordSpacingPercent);
 
     if (fontId != fileFontId || lineCompression != fileLineCompression ||
         extraParagraphSpacing != fileExtraParagraphSpacing || paragraphAlignment != fileParagraphAlignment ||
         viewportWidth != fileViewportWidth || viewportHeight != fileViewportHeight ||
         hyphenationEnabled != fileHyphenationEnabled || embeddedStyle != fileEmbeddedStyle ||
-        imageRendering != fileImageRendering || focusReadingEnabled != fileFocusReadingEnabled) {
+        imageRendering != fileImageRendering || focusReadingEnabled != fileFocusReadingEnabled ||
+        paragraphIndentSpaces != fileParagraphIndentSpaces || characterSpacing != fileCharacterSpacing ||
+        wordSpacingPercent != fileWordSpacingPercent) {
       file.close();
       LOG_ERR("SCT", "Deserialization failed: Parameters do not match");
       clearCache();
@@ -489,7 +522,9 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
                                 const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                                 const uint16_t viewportHeight, const bool hyphenationEnabled, const bool embeddedStyle,
                                 const uint8_t imageRendering, const bool focusReadingEnabled,
-                                const std::function<void()>& popupFn, const std::function<void(uint8_t)>& progressFn) {
+                                const std::function<void()>& popupFn, const std::function<void(uint8_t)>& progressFn,
+                                const uint8_t paragraphIndentSpaces, const int8_t characterSpacing,
+                                const uint8_t wordSpacingPercent) {
   // A fresh section can require substantial CSS/layout allocations. Drop
   // rebuildable glyph and advance caches before streaming or parsing it.
   releaseFontCachesForBuild(renderer);
@@ -549,7 +584,8 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
     return false;
   }
   writeSectionFileHeader(file, fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
-                         viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled);
+                         viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled,
+                         paragraphIndentSpaces, characterSpacing, wordSpacingPercent);
   std::vector<PageLutEntry> lut = {};
 
   // Derive the content base directory and image cache path prefix for the parser
@@ -599,6 +635,8 @@ bool Section::createSectionFile(const int fontId, const float lineCompression, c
       embeddedStyle, contentBase, imageBasePath, imageRendering, std::move(tocAnchors), popupFn, cssParser, 0,
       progressFn);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
+  visitor.setTextSpacing(characterSpacing, wordSpacingPercent);
+  visitor.setParagraphIndentSpaces(paragraphIndentSpaces);
   success = visitor.parseAndBuildPages();
 
   Storage.remove(tmpHtmlPath.c_str());
@@ -680,7 +718,9 @@ bool Section::resumeIncrementalBuild(const int fontId, const float lineCompressi
                                      const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                                      const uint16_t viewportHeight, const bool hyphenationEnabled,
                                      const bool embeddedStyle, const uint8_t imageRendering,
-                                     const bool focusReadingEnabled, const std::function<void(uint8_t)>& progressFn) {
+                                     const bool focusReadingEnabled, const std::function<void(uint8_t)>& progressFn,
+                                     const uint8_t paragraphIndentSpaces, const int8_t characterSpacing,
+                                     const uint8_t wordSpacingPercent) {
   if (!Storage.exists(buildFilePath.c_str()) || !Storage.exists(buildHtmlPath.c_str()) ||
       !Storage.exists(buildIndexPath.c_str())) {
     return false;
@@ -693,10 +733,20 @@ bool Section::resumeIncrementalBuild(const int fontId, const float lineCompressi
   BuildCheckpointHeader header{};
   const uint32_t layoutHash =
       buildLayoutHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth, viewportHeight,
-                      hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled);
-  if (checkpoint.read(&header, sizeof(header)) != sizeof(header) || checkpoint.size() < sizeof(header) ||
-      header.magic != BUILD_CHECKPOINT_MAGIC || header.version != BUILD_CHECKPOINT_VERSION ||
-      header.layoutHash != layoutHash || (checkpoint.size() - sizeof(header)) % sizeof(BuildPageEntry) != 0) {
+                      hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled, paragraphIndentSpaces,
+                      characterSpacing, wordSpacingPercent);
+  if (checkpoint.size() < CHECKPOINT_HEADER_SIZE) return false;
+  serialization::readPod(checkpoint, header.magic);
+  serialization::readPod(checkpoint, header.version);
+  serialization::readPod(checkpoint, header.layoutHash);
+  serialization::readPod(checkpoint, header.paragraphIndentSpaces);
+  serialization::readPod(checkpoint, header.characterSpacing);
+  serialization::readPod(checkpoint, header.wordSpacingPercent);
+  if (checkpoint.position() != CHECKPOINT_HEADER_SIZE || header.magic != BUILD_CHECKPOINT_MAGIC ||
+      header.version != BUILD_CHECKPOINT_VERSION || header.layoutHash != layoutHash ||
+      header.paragraphIndentSpaces != paragraphIndentSpaces || header.characterSpacing != characterSpacing ||
+      header.wordSpacingPercent != wordSpacingPercent ||
+      (checkpoint.size() - CHECKPOINT_HEADER_SIZE) % sizeof(BuildPageEntry) != 0) {
     checkpoint.close();
     return false;
   }
@@ -779,7 +829,7 @@ bool Section::resumeIncrementalBuild(const int fontId, const float lineCompressi
   resumePageCount = builtPageCount;
   buildActive = true;
   buildHtmlReused_ = true;
-  buildParser = std::make_unique<ChapterHtmlSlimParser>(
+  buildParser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
       epub, buildHtmlPath, renderer, fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
       viewportHeight, hyphenationEnabled, focusReadingEnabled,
       [this](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
@@ -792,6 +842,13 @@ bool Section::resumeIncrementalBuild(const int fontId, const float lineCompressi
       },
       embeddedStyle, contentBase, imageBasePath, imageRendering, std::move(tocAnchors), nullptr, buildCssParser, 0,
       progressFn, INCREMENTAL_PARSE_BUFFER_SIZE);
+  if (!buildParser) {
+    LOG_ERR("SCT", "OOM: resumed chapter parser");
+    preserveIncrementalBuild();
+    return false;
+  }
+  buildParser->setTextSpacing(characterSpacing, wordSpacingPercent);
+  buildParser->setParagraphIndentSpaces(paragraphIndentSpaces);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
   if (!buildParser->beginParsing()) {
     preserveIncrementalBuild();
@@ -805,13 +862,15 @@ bool Section::beginIncrementalBuild(const int fontId, const float lineCompressio
                                     const uint8_t paragraphAlignment, const uint16_t viewportWidth,
                                     const uint16_t viewportHeight, const bool hyphenationEnabled,
                                     const bool embeddedStyle, const uint8_t imageRendering,
-                                    const bool focusReadingEnabled, const std::function<void(uint8_t)>& progressFn) {
+                                    const bool focusReadingEnabled, const std::function<void(uint8_t)>& progressFn,
+                                    const uint8_t paragraphIndentSpaces, const int8_t characterSpacing,
+                                    const uint8_t wordSpacingPercent) {
   // Release caches before resumeIncrementalBuild too: it may allocate parser
   // state while reopening an existing HTML cache.
   releaseFontCachesForBuild(renderer);
   if (resumeIncrementalBuild(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
                              viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled,
-                             progressFn)) {
+                             progressFn, paragraphIndentSpaces, characterSpacing, wordSpacingPercent)) {
     return true;
   }
   const bool reuseHtml = hasHtmlCache();
@@ -851,17 +910,28 @@ bool Section::beginIncrementalBuild(const int fontId, const float lineCompressio
   }
 
   writeSectionFileHeader(buildFile, fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
-                         viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled);
+                         viewportHeight, hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled,
+                         paragraphIndentSpaces, characterSpacing, wordSpacingPercent);
   HalFile checkpoint;
   if (!Storage.openFileForWrite("SCT", buildIndexPath, checkpoint)) {
     discardIncrementalBuild();
     return false;
   }
   const BuildCheckpointHeader checkpointHeader{
-      BUILD_CHECKPOINT_MAGIC, BUILD_CHECKPOINT_VERSION,
+      BUILD_CHECKPOINT_MAGIC,
+      BUILD_CHECKPOINT_VERSION,
       buildLayoutHash(fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth, viewportHeight,
-                      hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled)};
-  checkpoint.write(&checkpointHeader, sizeof(checkpointHeader));
+                      hyphenationEnabled, embeddedStyle, imageRendering, focusReadingEnabled, paragraphIndentSpaces,
+                      characterSpacing, wordSpacingPercent),
+      paragraphIndentSpaces,
+      characterSpacing,
+      wordSpacingPercent};
+  serialization::writePod(checkpoint, checkpointHeader.magic);
+  serialization::writePod(checkpoint, checkpointHeader.version);
+  serialization::writePod(checkpoint, checkpointHeader.layoutHash);
+  serialization::writePod(checkpoint, checkpointHeader.paragraphIndentSpaces);
+  serialization::writePod(checkpoint, checkpointHeader.characterSpacing);
+  serialization::writePod(checkpoint, checkpointHeader.wordSpacingPercent);
   checkpoint.close();
 
   size_t lastSlash = localPath.find_last_of('/');
@@ -896,7 +966,7 @@ bool Section::beginIncrementalBuild(const int fontId, const float lineCompressio
 
   buildActive = true;
   resumePageCount = 0;
-  buildParser = std::make_unique<ChapterHtmlSlimParser>(
+  buildParser = makeUniqueNoThrow<ChapterHtmlSlimParser>(
       epub, buildHtmlPath, renderer, fontId, lineCompression, extraParagraphSpacing, paragraphAlignment, viewportWidth,
       viewportHeight, hyphenationEnabled, focusReadingEnabled,
       [this](std::unique_ptr<Page> page, const uint16_t paragraphIndex, const uint16_t listItemIndex,
@@ -905,6 +975,13 @@ bool Section::beginIncrementalBuild(const int fontId, const float lineCompressio
       },
       embeddedStyle, contentBase, imageBasePath, imageRendering, std::move(tocAnchors), nullptr, buildCssParser, 0,
       progressFn, INCREMENTAL_PARSE_BUFFER_SIZE);
+  if (!buildParser) {
+    LOG_ERR("SCT", "OOM: chapter parser");
+    discardIncrementalBuild();
+    return false;
+  }
+  buildParser->setTextSpacing(characterSpacing, wordSpacingPercent);
+  buildParser->setParagraphIndentSpaces(paragraphIndentSpaces);
   Hyphenator::setPreferredLanguage(epub->getLanguage());
   if (!buildParser->beginParsing()) {
     discardIncrementalBuild();
@@ -1041,7 +1118,8 @@ std::unique_ptr<Page> Section::buildPagePreview(const int fontId, const float li
                                                 const uint16_t viewportWidth, const uint16_t viewportHeight,
                                                 const bool hyphenationEnabled, const bool embeddedStyle,
                                                 const uint8_t imageRendering, const bool focusReadingEnabled,
-                                                const uint16_t targetPage) {
+                                                const uint16_t targetPage, const uint8_t paragraphIndentSpaces,
+                                                const int8_t characterSpacing, const uint8_t wordSpacingPercent) {
   // This bounded preview is the first layout operation on a section-cache
   // miss, so reclaim page/font caches before its EPUB inflate and parser work.
   releaseFontCachesForBuild(renderer);
@@ -1106,6 +1184,8 @@ std::unique_ptr<Page> Section::buildPagePreview(const int fontId, const float li
       embeddedStyle, contentBase, imageBasePath, imageRendering, {}, nullptr, cssParser,
       static_cast<uint16_t>(targetPage + 1));
   Hyphenator::setPreferredLanguage(epub->getLanguage());
+  visitor.setTextSpacing(characterSpacing, wordSpacingPercent);
+  visitor.setParagraphIndentSpaces(paragraphIndentSpaces);
   success = visitor.parseAndBuildPages();
 
   Storage.remove(tmpHtmlPath.c_str());
@@ -1253,7 +1333,8 @@ std::unique_ptr<Page> Section::loadPageDuringBuild(const ReaderRenderSpec& spec,
   // an immediate page (for example an anchor jump on a cold cache).
   return buildPagePreview(spec.fontId, spec.lineCompression, spec.extraParagraphSpacing, spec.paragraphAlignment,
                           spec.viewportWidth, spec.viewportHeight, spec.hyphenationEnabled, spec.embeddedStyle,
-                          spec.imageRendering, spec.focusReadingEnabled, targetPage);
+                          spec.imageRendering, spec.focusReadingEnabled, targetPage, spec.paragraphIndentSpaces,
+                          spec.characterSpacing, spec.wordSpacingPercent);
 }
 
 std::string Section::getTextFromSectionFile() {

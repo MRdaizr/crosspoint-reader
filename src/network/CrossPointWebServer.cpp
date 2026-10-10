@@ -4,8 +4,12 @@
 #include <FsHelpers.h>
 #include <HalGPIO.h>
 #include <HalStorage.h>
+#include <LibraryBuilder.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <WiFi.h>
+#include <esp_random.h>
+#include <mbedtls/base64.h>
 
 #include <algorithm>
 #include <string>
@@ -14,6 +18,8 @@
 #include "CrossPointSettings.h"
 #include "CrossPointState.h"
 #include "FirmwareFlasher.h"
+#include "HttpDownloader.h"
+#include "LibraryWebApi.h"
 #include "NutstoreConfigStore.h"
 #include "OpdsServerStore.h"
 #include "ProtectedPaths.h"
@@ -31,9 +37,15 @@
 #include "html/SettingsPageHtml.generated.h"
 #include "html/TodoPageHtml.generated.h"
 #include "html/js/jszip_minJs.generated.h"
+#include "html/shared/PluginHost.js.inc"
 #include "network/NutstoreSync.h"
 #include "util/BookCacheUtils.h"
 #include "util/BookmarkUtil.h"
+#include "util/PluginCrypto.h"
+#include "util/PluginEvents.h"
+#include "util/PluginHttp.h"
+#include "util/PluginLocations.h"
+#include "util/PluginPermissions.h"
 #include "util/TaskWatchdog.h"
 
 namespace {
@@ -362,6 +374,476 @@ const char* firmwareFlashResultMessage(firmware_flash::Result result) {
 // - HomePageHtml (from html/HomePage.html)
 // - FilesPageHeaderHtml (from html/FilesPageHeader.html)
 // - FilesPageFooterHtml (from html/FilesPageFooter.html)
+namespace {
+bool pluginSafeFile(const std::string& name) {
+  if (name.empty() || name.size() > 128 || name.front() == '/' || name.find("..") != std::string::npos) return false;
+  return protectedpaths::isPluginPath("/probe/" + name);
+}
+const char* pluginMime(const std::string& name) {
+  const size_t dot = name.rfind('.');
+  const std::string extension = dot == std::string::npos ? "" : name.substr(dot);
+  if (extension == ".js") return "application/javascript";
+  if (extension == ".css") return "text/css";
+  if (extension == ".html") return "text/html";
+  if (extension == ".json") return "application/json";
+  if (extension == ".svg") return "image/svg+xml";
+  if (extension == ".md") return "text/plain";
+  return "application/octet-stream";
+}
+}  // namespace
+
+bool CrossPointWebServer::pluginSessionAllowed(bool respond) const {
+  if (!server || !pluginSession[0]) return false;
+  const String supplied =
+      server->hasHeader("X-Plugin-Session") ? server->header("X-Plugin-Session") : server->arg("session");
+  if (supplied != pluginSession) {
+    if (respond) server->send(403, "application/json", "{\"error\":\"invalid web session\"}");
+    return false;
+  }
+  // Browser mutations must come from this origin. Non-browser API callers use
+  // the capability acquired from /api/plugins during this web-server session.
+  const String origin = server->header("Origin");
+  if (!origin.isEmpty() && origin != String("http://") + server->hostHeader()) {
+    if (respond) server->send(403, "application/json", "{\"error\":\"cross-origin request\"}");
+    return false;
+  }
+  return true;
+}
+bool CrossPointWebServer::pluginAuthorized(const char* plugin) const {
+  if (!pluginSessionAllowed()) return false;
+  if (!PluginLocations::validName(plugin) || !PluginPermissions::allowed(plugin)) {
+    server->send(403, "application/json", "{\"error\":\"plugin disabled or changed; approval required\"}");
+    return false;
+  }
+  return true;
+}
+bool CrossPointWebServer::readPluginJson(JsonDocument& doc) const {
+  if (!server->hasArg("plain") || server->arg("plain").length() > 16 * 1024) {
+    server->send(413, "application/json", "{\"error\":\"missing or oversized body\"}");
+    return false;
+  }
+  if (deserializeJson(doc, server->arg("plain"), DeserializationOption::NestingLimit(16)) != DeserializationError::Ok) {
+    server->send(400, "application/json", "{\"error\":\"invalid JSON\"}");
+    return false;
+  }
+  return true;
+}
+void CrossPointWebServer::sendPluginJson(const JsonDocument& doc) const {
+  String body;
+  if (measureJson(doc) > 24 * 1024 || !body.reserve(measureJson(doc))) {
+    server->send(503, "application/json", "{\"error\":\"out of memory\"}");
+    return;
+  }
+  serializeJson(doc, body);
+  server->sendHeader("Cache-Control", "no-store");
+  server->send(200, "application/json", body);
+}
+void CrossPointWebServer::handlePluginList() const {
+  const String origin = server->header("Origin");
+  if (!origin.isEmpty() && origin != String("http://") + server->hostHeader()) {
+    server->send(403, "application/json", "{\"error\":\"cross-origin request\"}");
+    return;
+  }
+  JsonDocument result;
+  auto list = result.to<JsonArray>();
+  for (const auto& entry : PluginLocations::scanPlugins()) {
+    auto record = list.add<JsonObject>();
+    const auto status = PluginPermissions::inspect(entry.name.c_str());
+    record["name"] = entry.name;
+    record["dir"] = entry.dir;
+    record["title"] = entry.name;
+    record["description"] = "";
+    record["script"] = entry.hasPluginJs ? "plugin.js" : (entry.hasMainJs ? "main.js" : "");
+    record["mount"] = "settings";
+    record["enabled"] = status.enabled;
+    record["approved"] = status.approved;
+    record["available"] = status.available;
+    record["systemEnabled"] = PluginPermissions::systemEnabled();
+    record["digest"] = status.digest;
+    std::string raw;
+    if (entry.hasManifest && pluginhttp::readFile(entry.dir + "/manifest.json", 8192, raw)) {
+      JsonDocument metadata, filter;
+      filter["title"] = true;
+      filter["description"] = true;
+      filter["mount"] = true;
+      filter["version"] = true;
+      if (deserializeJson(metadata, raw, DeserializationOption::Filter(filter)) == DeserializationError::Ok) {
+        const char* title = metadata["title"] | "";
+        const char* description = metadata["description"] | "";
+        const char* mount = metadata["mount"] | "settings";
+        if (strlen(title) <= 128 && *title) record["title"] = title;
+        if (strlen(description) <= 512) record["description"] = description;
+        if (strcmp(mount, "files") == 0 || strcmp(mount, "settings") == 0) record["mount"] = mount;
+        record["version"] = metadata["version"] | "";
+      }
+    }
+  }
+  server->sendHeader("X-Plugin-Session", pluginSession);
+  sendPluginJson(result);
+}
+void CrossPointWebServer::handlePluginPermission() {
+  if (!pluginSessionAllowed()) return;
+  JsonDocument req;
+  if (!readPluginJson(req)) return;
+  const char* name = req["plugin"] | "";
+  if (!PluginPermissions::setEnabled(name, req["enabled"] | false, req["digest"] | "")) {
+    server->send(409, "application/json", "{\"error\":\"plugin changed or approval could not be saved\"}");
+    return;
+  }
+  pluginevents::refreshSubscriptions();
+  server->send(200, "application/json", "{\"ok\":true}");
+}
+void CrossPointWebServer::handlePluginFile() const {
+  const String name = server->arg("name");
+  if (!pluginAuthorized(name.c_str())) return;
+  const std::string file = server->arg("file").c_str();
+  const auto dir = PluginLocations::findPluginDir(name.c_str());
+  const auto path = dir + "/" + file;
+  if (!pluginSafeFile(file) || !protectedpaths::isPluginPath(path)) {
+    server->send(400, "text/plain", "invalid plugin path");
+    return;
+  }
+  HalFile input = Storage.open(path.c_str());
+  if (!input || input.isDirectory() || input.fileSize64() > 256 * 1024) {
+    server->send(404, "text/plain", "not found or too large");
+    return;
+  }
+  auto buffer = makeUniqueNoThrow<uint8_t[]>(256);
+  if (!buffer) {
+    server->send(503, "text/plain", "out of memory");
+    return;
+  }
+  server->sendHeader("Cache-Control", "no-store");
+  server->sendHeader("X-Content-Type-Options", "nosniff");
+  server->setContentLength(input.fileSize());
+  server->send(200, pluginMime(file), "");
+  auto client = server->client();
+  while (input.available() && client.connected()) {
+    const int n = input.read(buffer.get(), 256);
+    if (n <= 0 || client.write(buffer.get(), n) != static_cast<size_t>(n)) {
+      client.stop();
+      break;
+    }
+    resetTaskWatchdogIfSubscribed();
+  }
+}
+void CrossPointWebServer::handlePluginHost() const {
+  server->sendHeader("Cache-Control", "no-store");
+  server->send_P(200, "application/javascript", PLUGIN_HOST_JS, sizeof(PLUGIN_HOST_JS) - 1);
+}
+void CrossPointWebServer::handlePluginRunnerPage() const {
+  static constexpr char RUNNER[] PROGMEM =
+      "<!doctype html><html><head><meta charset=\"utf-8\">"
+      "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Plugin runner</title></head>"
+      "<body><h1>Plugin runner</h1><p>Keep this page open to run approved browser actions.</p>"
+      "<div id=\"plugin-container\"></div><script src=\"/js/plugin-host.js\"></script>"
+      "<script>loadPlugins(null)</script></body></html>";
+  server->sendHeader("Cache-Control", "no-store");
+  server->send_P(200, "text/html", RUNNER, sizeof(RUNNER) - 1);
+}
+void CrossPointWebServer::handlePluginJobSubmit() {
+  JsonDocument req;
+  if (!readPluginJson(req)) return;
+  const char* plugin = req["plugin"] | "";
+  if (!pluginAuthorized(plugin)) return;
+  const char* action = req["action"] | "";
+  if (!PluginJobPool::validAction(action) || (!req["args"].isNull() && measureJson(req["args"]) >= 192)) {
+    server->send(400, "application/json", "{\"error\":\"invalid action or args >=192 bytes\"}");
+    return;
+  }
+  auto args = makeUniqueNoThrow<char[]>(192);
+  if (!args) {
+    server->send(503, "application/json", "{\"error\":\"out of memory\"}");
+    return;
+  }
+  if (req["args"].isNull())
+    strcpy(args.get(), "{}");
+  else
+    serializeJson(req["args"], args.get(), 192);
+  auto* job = pluginJobs.submit(plugin, action, args.get(), millis(), true);
+  if (!job) {
+    server->send(503, "application/json", "{\"error\":\"job pool full\"}");
+    return;
+  }
+  JsonDocument response;
+  response["id"] = job->id;
+  sendPluginJson(response);
+}
+void CrossPointWebServer::handlePluginJobClaim() {
+  const String plugin = server->arg("plugin");
+  if (!pluginAuthorized(plugin.c_str())) return;
+  auto* job = pluginJobs.claim(plugin.c_str(), millis(), true);
+  JsonDocument response;
+  response["id"] = job ? job->id : 0;
+  if (job) {
+    response["claim"] = job->claim;
+    response["action"] = job->action;
+    JsonDocument args;
+    deserializeJson(args, job->args);
+    response["args"] = args.as<JsonVariantConst>();
+  }
+  sendPluginJson(response);
+}
+void CrossPointWebServer::handlePluginJobComplete() {
+  JsonDocument req;
+  if (!readPluginJson(req)) return;
+  auto* job = pluginJobs.find(req["id"] | 0u);
+  // Authorize even unknown ids: no guessed id exposes another plugin's result.
+  const char* plugin = req["plugin"] | (job ? job->plugin : "");
+  if (!pluginAuthorized(plugin)) return;
+  if (!job || strcmp(plugin, job->plugin) != 0) {
+    server->send(404, "application/json", "{\"error\":\"unknown job\"}");
+    return;
+  }
+  if (!req["result"].isNull() && measureJson(req["result"]) >= 192) {
+    server->send(413, "application/json", "{\"error\":\"result >=192 bytes\"}");
+    return;
+  }
+  auto result = makeUniqueNoThrow<char[]>(192);
+  if (!result) {
+    server->send(503, "application/json", "{\"error\":\"out of memory\"}");
+    return;
+  }
+  if (req["result"].isNull())
+    strcpy(result.get(), "null");
+  else
+    serializeJson(req["result"], result.get(), 192);
+  if (!pluginJobs.complete(job->id, req["claim"] | 0u, req["ok"] | false, result.get(), millis(), true)) {
+    server->send(409, "application/json", "{\"error\":\"stale lease\"}");
+    return;
+  }
+  server->send(200, "application/json", "{\"ok\":true}");
+}
+void CrossPointWebServer::handlePluginJobStatus() {
+  auto* job = pluginJobs.find(strtoul(server->arg("id").c_str(), nullptr, 10));
+  const String plugin = server->arg("plugin");
+  if (!pluginAuthorized(plugin.c_str())) return;
+  JsonDocument response;
+  if (!job || plugin != job->plugin) {
+    response["state"] = "unknown";
+    response["result"] = nullptr;
+  } else {
+    static constexpr const char* STATES[] = {"empty", "pending", "running", "done", "error"};
+    response["id"] = job->id;
+    response["state"] = STATES[job->state];
+    JsonDocument result;
+    deserializeJson(result, job->result[0] ? job->result : "null");
+    response["result"] = result.as<JsonVariantConst>();
+  }
+  sendPluginJson(response);
+}
+void CrossPointWebServer::suspendPluginTransferServices() {
+  // Active WS uploads reject relays/fetches in their handlers; closing a live
+  // upload's socket here would strand its caller and destroy local lifecycle.
+  if (wsServer) {
+    wsServer->close();
+    wsServer.reset();
+    wsInstance = nullptr;
+  }
+  if (udpActive) {
+    udp.stop();
+    udpActive = false;
+  }
+}
+void CrossPointWebServer::resumePluginTransferServices() {
+  if (!running) return;
+  wsServer = makeUniqueNoThrow<WebSocketsServer>(wsPort);
+  if (wsServer) {
+    wsInstance = this;
+    wsServer->begin();
+    wsServer->onEvent(wsEventCallback);
+  } else
+    LOG_ERR("WEB", "OOM: resume WebSocket");
+  udpActive = udp.begin(LOCAL_UDP_PORT);
+}
+void CrossPointWebServer::handleRelay() {
+  JsonDocument req;
+  if (!readPluginJson(req)) return;
+  const std::string plugin = req["plugin"] | "";
+  if (!pluginAuthorized(plugin.c_str())) return;
+  if (wsUploadInProgress) {
+    server->send(409, "application/json", "{\"error\":\"upload in progress\"}");
+    return;
+  }
+  const std::string url = req["url"] | "", method = req["method"] | "GET", body = req["body"] | "";
+  pluginhttp::Headers headers;
+  pluginhttp::readHeaders(req["headers"], headers);
+  req.clear();
+  req.shrinkToFit();
+  suspendPluginTransferServices();
+  const auto abort = [&] {
+    resetTaskWatchdogIfSubscribed();
+    return !PluginPermissions::systemEnabled() || (uploadCancelCheck && uploadCancelCheck());
+  };
+  String content;
+  pluginhttp::Headers responseHeaders;
+  const int status = pluginhttp::request(nullptr, url, method, body, headers, content, 32 * 1024, &responseHeaders,
+                                         abort, millis() + 30000);
+  resumePluginTransferServices();
+  if (status < 0) {
+    server->send(502, "application/json", "{\"error\":\"relay failed or response too large\"}");
+    return;
+  }
+  JsonDocument doc;
+  auto list = doc.to<JsonArray>();
+  for (const auto& header : responseHeaders) {
+    auto pair = list.add<JsonArray>();
+    pair.add(header.first);
+    pair.add(header.second);
+  }
+  String rawHeaders;
+  serializeJson(doc, rawHeaders);
+  server->sendHeader("X-Relay-Status", String(status));
+  server->sendHeader("X-Relay-Headers", rawHeaders);
+  server->send(200, "application/octet-stream", content);
+}
+void CrossPointWebServer::handleFetch() {
+  JsonDocument req;
+  if (!readPluginJson(req)) return;
+  const std::string plugin = req["plugin"] | "", url = req["url"] | "", dest = req["dest"] | "";
+  if (!pluginAuthorized(plugin.c_str())) return;
+  if (wsUploadInProgress) {
+    server->send(409, "application/json", "{\"error\":\"upload in progress\"}");
+    return;
+  }
+  if (!protectedpaths::isPluginPath(dest) || !protectedpaths::isPluginPath(dest + ".part") ||
+      !protectedpaths::isPluginPath(dest + ".bak") || (req["offset"] | 0u) != 0) {
+    server->send(400, "application/json", "{\"error\":\"invalid destination/offset\"}");
+    return;
+  }
+  const size_t slash = dest.rfind('/');
+  if (slash > 0 && !Storage.ensureDirectoryExists(dest.substr(0, slash).c_str())) {
+    server->send(500, "application/json", "{\"error\":\"cannot create parent\"}");
+    return;
+  }
+  pluginhttp::Headers headers;
+  pluginhttp::readHeaders(req["headers"], headers);
+  req.clear();
+  req.shrinkToFit();
+  bool cancel = false;
+  suspendPluginTransferServices();
+  const auto status = HttpDownloader::downloadToFile(
+      url, dest,
+      [&](size_t, size_t) {
+        resetTaskWatchdogIfSubscribed();
+        cancel = !PluginPermissions::systemEnabled() || (uploadCancelCheck && uploadCancelCheck());
+      },
+      &cancel, "", "", headers, 32 * 1024 * 1024, millis() + 120000,
+      [&] { return !PluginPermissions::systemEnabled() || (uploadCancelCheck && uploadCancelCheck()); });
+  resumePluginTransferServices();
+  if (status != HttpDownloader::OK) {
+    server->send(status == HttpDownloader::UNAUTHORIZED ? 401 : 502, "application/json",
+                 "{\"error\":\"download failed\"}");
+    return;
+  }
+  invalidateBookCache(dest);
+  const pluginevents::Var vars[] = {{"path", dest.c_str()}, {"title", dest.c_str()}, {"plugin", plugin.c_str()}};
+  pluginevents::emit(pluginevents::Event::BookDownloaded, vars, 3);
+  HalFile file = Storage.open(dest.c_str());
+  JsonDocument response;
+  response["ok"] = true;
+  response["complete"] = true;
+  response["bytes"] = file ? file.fileSize() : 0;
+  sendPluginJson(response);
+}
+void CrossPointWebServer::handlePluginFsUpload() {
+  const auto& part = server->upload();
+  auto& state = pluginUpload;
+  const auto fail = [&](int error) {
+    if (state.file.isOpen()) state.file.close();
+    if (!state.tmp.empty()) Storage.remove(state.tmp.c_str());
+    state.error = error;
+  };
+  if (part.status == UPLOAD_FILE_START) {
+    if (state.started) {
+      fail(400);
+      return;
+    }
+    state = PluginUpload{};
+    state.started = true;
+    state.plugin = server->arg("plugin").c_str();
+    state.path = server->arg("path").c_str();
+    if (!pluginSessionAllowed(false) || !PluginPermissions::allowed(state.plugin.c_str())) {
+      state.error = 403;
+      return;
+    }
+    state.tmp = state.path + ".tmp";
+    if (!protectedpaths::isPluginPath(state.path) || !protectedpaths::isPluginPath(state.tmp) ||
+        !protectedpaths::isPluginPath(state.path + ".bak")) {
+      state.tmp.clear();
+      fail(400);
+      return;
+    }
+    const size_t slash = state.path.rfind('/');
+    if (slash > 0 && !Storage.ensureDirectoryExists(state.path.substr(0, slash).c_str())) {
+      fail(500);
+      return;
+    }
+    if (!Storage.openFileForWrite("PLG", state.tmp, state.file)) fail(500);
+  } else if (part.status == UPLOAD_FILE_WRITE) {
+    if (state.error || !state.started || !state.file) return;
+    if (!PluginPermissions::systemEnabled() || (uploadCancelCheck && uploadCancelCheck())) {
+      fail(403);
+      return;
+    }
+    if (part.currentSize > 256 * 1024 - state.bytes) {
+      fail(413);
+      return;
+    }
+    if (state.file.write(part.buf, part.currentSize) != part.currentSize) {
+      fail(500);
+      return;
+    }
+    state.bytes += part.currentSize;
+    resetTaskWatchdogIfSubscribed();
+  } else if (part.status == UPLOAD_FILE_END) {
+    if (!state.error && state.file) {
+      state.file.flush();
+      if (!state.file.close())
+        fail(500);
+      else
+        state.ended = true;
+    }
+  } else if (part.status == UPLOAD_FILE_ABORTED)
+    fail(400);
+}
+void CrossPointWebServer::handlePluginFs() {
+  auto& state = pluginUpload;
+  if (!state.error && (!state.started || !state.ended || !state.bytes)) state.error = 400;
+  if (!state.error && (!pluginSessionAllowed(false) || !PluginPermissions::allowed(state.plugin.c_str())))
+    state.error = 403;
+  if (!state.error && !Storage.replaceFile(state.tmp.c_str(), state.path.c_str())) state.error = 500;
+  if (state.error) {
+    if (state.file.isOpen()) state.file.close();
+    if (!state.tmp.empty()) Storage.remove(state.tmp.c_str());
+    server->send(state.error, "application/json", "{\"error\":\"plugin upload rejected or incomplete\"}");
+  } else {
+    invalidateBookCache(state.path);
+    JsonDocument response;
+    response["ok"] = true;
+    response["bytes"] = state.bytes;
+    sendPluginJson(response);
+  }
+  state = PluginUpload{};
+}
+void CrossPointWebServer::handleCrypto() {
+  JsonDocument req;
+  if (!readPluginJson(req)) return;
+  if (!pluginAuthorized(req["plugin"] | "")) return;
+  JsonDocument response;
+  int status = 200;
+  if (!plugincrypto::process(req, response, status)) {
+    String error;
+    if (!error.reserve(measureJson(response)) || !serializeJson(response, error)) {
+      server->send(503, "application/json", "{\"error\":\"out of memory\"}");
+      return;
+    }
+    server->send(status, "application/json", error);
+    return;
+  }
+  sendPluginJson(response);
+}
+
 CrossPointWebServer::CrossPointWebServer() {}
 
 CrossPointWebServer::~CrossPointWebServer() { stop(); }
@@ -389,7 +871,7 @@ void CrossPointWebServer::begin() {
   LOG_DBG("WEB", "Network mode: %s", apMode ? "AP" : "STA");
 
   LOG_DBG("WEB", "Creating web server on port %d...", port);
-  server.reset(new WebServer(port));
+  server = makeUniqueNoThrow<WebServer>(port);
 
   // Disable WiFi sleep to improve responsiveness and prevent 'unreachable' errors.
   // This is critical for reliable web server operation on ESP32.
@@ -417,6 +899,29 @@ void CrossPointWebServer::begin() {
 
   server->on("/api/status", HTTP_GET, [this] { handleStatus(); });
   server->on("/api/files", HTTP_GET, [this] { handleFileListData(); });
+  server->on("/api/library", HTTP_GET, [this] { handleLibraryGet(*server); });
+  server->on("/api/library/rebuild", HTTP_POST, [this] {
+    if (wsUploadInProgress) {
+      server->send(409, "application/json", "{\"error\":\"upload_in_progress\"}");
+      return;
+    }
+    const String origin = server->header("Origin");
+    if (!origin.isEmpty() && origin != String("http://") + server->hostHeader()) {
+      server->send(403, "application/json", "{\"error\":\"cross_origin_request\"}");
+      return;
+    }
+    const library::BuildCallbacks callbacks{
+        this,
+        [](void* opaque) {
+          auto* self = static_cast<CrossPointWebServer*>(opaque);
+          resetTaskWatchdogIfSubscribed();
+          return self->uploadCancelCheck && self->uploadCancelCheck();
+        },
+        [](void*, library::BuildPhase, uint16_t, uint16_t) { resetTaskWatchdogIfSubscribed(); }};
+    suspendPluginTransferServices();
+    handleLibraryRebuild(*server, callbacks);  // synchronous; never re-enter handleClient
+    resumePluginTransferServices();
+  });
   server->on("/download", HTTP_GET, [this] { handleDownload(); });
 
   // Upload endpoint with special handling for multipart form data
@@ -464,23 +969,43 @@ void CrossPointWebServer::begin() {
   server->on("/api/wifi", HTTP_POST, [this] { handlePostWifiNetwork(); });
   server->on("/api/wifi/delete", HTTP_POST, [this] { handleDeleteWifiNetwork(); });
 
+  pluginJobs.reset(esp_random());
+  for (size_t i = 0; i < 4; ++i) snprintf(pluginSession + i * 8, 9, "%08lx", static_cast<unsigned long>(esp_random()));
+  server->on("/api/plugins", HTTP_GET, [this] { handlePluginList(); });
+  server->on("/api/plugins/permission", HTTP_POST, [this] { handlePluginPermission(); });
+  server->on("/plugin", HTTP_GET, [this] { handlePluginFile(); });
+  server->on("/js/plugin-host.js", HTTP_GET, [this] { handlePluginHost(); });
+  server->on("/plugins-run", HTTP_GET, [this] { handlePluginRunnerPage(); });
+  server->on("/api/plugin-jobs", HTTP_POST, [this] { handlePluginJobSubmit(); });
+  server->on("/api/plugin-jobs/claim", HTTP_GET, [this] { handlePluginJobClaim(); });
+  server->on("/api/plugin-jobs/complete", HTTP_POST, [this] { handlePluginJobComplete(); });
+  server->on("/api/plugin-jobs/status", HTTP_GET, [this] { handlePluginJobStatus(); });
+  server->on("/api/relay", HTTP_POST, [this] { handleRelay(); });
+  server->on("/api/fetch", HTTP_POST, [this] { handleFetch(); });
+  server->on("/api/crypto", HTTP_POST, [this] { handleCrypto(); });
+  server->on("/api/plugin-fs", HTTP_POST, [this] { handlePluginFs(); }, [this] { handlePluginFsUpload(); });
+
   server->onNotFound([this] { handleNotFound(); });
   LOG_DBG("WEB", "[MEM] Free heap after route setup: %d bytes", ESP.getFreeHeap());
 
   // Collect WebDAV headers and register handler
-  const char* davHeaders[] = {"Depth", "Destination", "Overwrite", "If", "Lock-Token", "Timeout"};
-  server->collectHeaders(davHeaders, 6);
-  server->addHandler(new WebDAVHandler());  // Note: WebDAVHandler will be deleted by WebServer when server is stopped
+  const char* davHeaders[] = {"Depth",      "Destination", "Overwrite", "If",
+                              "Lock-Token", "Timeout",     "Origin",    "X-Plugin-Session"};
+  server->collectHeaders(davHeaders, 8);
+  auto* dav = new (std::nothrow) WebDAVHandler();
+  if (dav) server->addHandler(dav);  // WebServer owns and deletes this handler.
   LOG_DBG("WEB", "WebDAV handler initialized");
 
   server->begin();
 
   // Start WebSocket server for fast binary uploads
   LOG_DBG("WEB", "Starting WebSocket server on port %d...", wsPort);
-  wsServer.reset(new WebSocketsServer(wsPort));
+  wsServer = makeUniqueNoThrow<WebSocketsServer>(wsPort);
   wsInstance = const_cast<CrossPointWebServer*>(this);
-  wsServer->begin();
-  wsServer->onEvent(wsEventCallback);
+  if (wsServer) {
+    wsServer->begin();
+    wsServer->onEvent(wsEventCallback);
+  }
   LOG_DBG("WEB", "WebSocket server started");
 
   udpActive = udp.begin(LOCAL_UDP_PORT);
@@ -521,6 +1046,11 @@ void CrossPointWebServer::abortWsUpload(const char* tag) {
 }
 
 void CrossPointWebServer::stop() {
+  pluginJobs.reset();
+  pluginSession[0] = '\0';
+  if (pluginUpload.file.isOpen()) pluginUpload.file.close();
+  if (!pluginUpload.tmp.empty()) Storage.remove(pluginUpload.tmp.c_str());
+  pluginUpload = PluginUpload{};
   if (!running || !server) {
     LOG_DBG("WEB", "stop() called but already stopped (running=%d, server=%p)", running, server.get());
     return;
@@ -931,7 +1461,7 @@ static bool flushUploadBuffer(CrossPointWebServer::UploadState& state) {
   if (state.bufferPos > 0 && state.file) {
     resetTaskWatchdogIfSubscribed();  // Reset watchdog before potentially slow SD write
     const unsigned long writeStart = millis();
-    const size_t written = state.file.write(state.buffer.data(), state.bufferPos);
+    const size_t written = state.file.write(state.buffer.get(), state.bufferPos);
     totalWriteTime += millis() - writeStart;
     writeCount++;
     resetTaskWatchdogIfSubscribed();  // Reset watchdog after SD write
@@ -973,6 +1503,11 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
     state.bufferPos = 0;
     totalWriteTime = 0;
     writeCount = 0;
+
+    if (!state.buffer) {
+      state.error = "Not enough memory for upload buffer";
+      return;
+    }
 
     if (!FsHelpers::isSafePathComponent(state.fileName)) {
       state.error = "Invalid file name";
@@ -1032,7 +1567,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
         const size_t space = UploadState::UPLOAD_BUFFER_SIZE - state.bufferPos;
         const size_t toCopy = (remaining < space) ? remaining : space;
 
-        memcpy(state.buffer.data() + state.bufferPos, data, toCopy);
+        memcpy(state.buffer.get() + state.bufferPos, data, toCopy);
         state.bufferPos += toCopy;
         data += toCopy;
         remaining -= toCopy;
@@ -1081,7 +1616,7 @@ void CrossPointWebServer::handleUpload(UploadState& state) const {
         String filePath = state.path;
         if (!filePath.endsWith("/")) filePath += "/";
         filePath += state.fileName;
-        clearBookCache(filePath.c_str());
+        invalidateBookCache(filePath.c_str());
       }
     }
   } else if (upload.status == UPLOAD_FILE_ABORTED) {
@@ -1550,6 +2085,7 @@ void CrossPointWebServer::handleGetSettings() const {
         break;
       }
       case SettingType::VALUE: {
+        if (!doc[s.key].is<int>()) break;
         doc["type"] = "value";
         if (s.valuePtr) {
           doc["value"] = static_cast<int>(SETTINGS.*(s.valuePtr));
@@ -1628,7 +2164,10 @@ void CrossPointWebServer::handlePostSettings() {
       case SettingType::TOGGLE: {
         const int val = doc[s.key].as<int>() ? 1 : 0;
         if (s.valuePtr) {
+          const bool metadataChanged =
+              s.valuePtr == &CrossPointSettings::libraryUseMetadata && SETTINGS.*(s.valuePtr) != val;
           SETTINGS.*(s.valuePtr) = val;
+          if (metadataChanged) library::markLibraryIndexDirty();
         }
         applied++;
         break;
@@ -1649,7 +2188,8 @@ void CrossPointWebServer::handlePostSettings() {
       }
       case SettingType::VALUE: {
         const int val = doc[s.key].as<int>();
-        if (val >= s.valueRange.min && val <= s.valueRange.max) {
+        if (val >= s.valueRange.min && val <= s.valueRange.max &&
+            (s.valueRange.step == 0 || (val - s.valueRange.min) % s.valueRange.step == 0)) {
           if (s.valuePtr) {
             SETTINGS.*(s.valuePtr) = static_cast<uint8_t>(val);
           }
@@ -2320,7 +2860,7 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
             wsLastCompleteSize = 0;
             wsLastCompleteAt = millis();
             LOG_DBG("WS", "Zero-byte upload complete: %s", filePath.c_str());
-            clearBookCache(filePath.c_str());
+            invalidateBookCache(filePath.c_str());
             wsServer->sendTXT(num, "DONE");
             wsLastProgressSent = 0;
             break;
@@ -2389,7 +2929,7 @@ void CrossPointWebServer::onWebSocketEvent(uint8_t num, WStype_t type, uint8_t* 
         String filePath = wsUploadPath;
         if (!filePath.endsWith("/")) filePath += "/";
         filePath += wsUploadFileName;
-        clearBookCache(filePath.c_str());
+        invalidateBookCache(filePath.c_str());
 
         wsServer->sendTXT(num, "DONE");
         wsLastProgressSent = 0;
@@ -2421,6 +2961,11 @@ void CrossPointWebServer::handleFirmwareUploadData() {
       firmwareUpload.bufferPos = 0;
       lastFirmwareNotifyPercent = -1;
       setFirmwareStatus(FirmwareUpdatePhase::UPLOADING, 0, upload.totalSize, "Uploading firmware...");
+
+      if (!firmwareUpload.buffer) {
+        setFirmwareStatus(FirmwareUpdatePhase::FAILED, 0, upload.totalSize, "Not enough memory for upload buffer.");
+        break;
+      }
 
       String filename = upload.filename;
       filename.toLowerCase();
@@ -2465,13 +3010,19 @@ void CrossPointWebServer::handleFirmwareUploadData() {
       while (remaining > 0) {
         size_t space = FirmwareUploadState::BUFFER_SIZE - firmwareUpload.bufferPos;
         size_t chunk = (remaining < space) ? remaining : space;
-        memcpy(firmwareUpload.buffer.data() + firmwareUpload.bufferPos, src, chunk);
+        memcpy(firmwareUpload.buffer.get() + firmwareUpload.bufferPos, src, chunk);
         firmwareUpload.bufferPos += chunk;
         src += chunk;
         remaining -= chunk;
 
         if (firmwareUpload.bufferPos >= FirmwareUploadState::BUFFER_SIZE) {
-          firmwareUpload.file.write(firmwareUpload.buffer.data(), firmwareUpload.bufferPos);
+          if (firmwareUpload.file.write(firmwareUpload.buffer.get(), firmwareUpload.bufferPos) !=
+              firmwareUpload.bufferPos) {
+            firmwareUpload.valid = false;
+            setFirmwareStatus(FirmwareUpdatePhase::FAILED, firmwareUpload.bytesWritten, upload.totalSize,
+                              "SD write failed.");
+            break;
+          }
           firmwareUpload.bytesWritten += firmwareUpload.bufferPos;
           firmwareUpload.bufferPos = 0;
           setFirmwareStatus(FirmwareUpdatePhase::UPLOADING, firmwareUpload.bytesWritten, upload.totalSize,
@@ -2484,8 +3035,14 @@ void CrossPointWebServer::handleFirmwareUploadData() {
 
     case UPLOAD_FILE_END: {
       if (firmwareUpload.valid && firmwareUpload.bufferPos > 0) {
-        firmwareUpload.file.write(firmwareUpload.buffer.data(), firmwareUpload.bufferPos);
-        firmwareUpload.bytesWritten += firmwareUpload.bufferPos;
+        if (firmwareUpload.file.write(firmwareUpload.buffer.get(), firmwareUpload.bufferPos) !=
+            firmwareUpload.bufferPos) {
+          firmwareUpload.valid = false;
+          setFirmwareStatus(FirmwareUpdatePhase::FAILED, firmwareUpload.bytesWritten, upload.totalSize,
+                            "SD write failed.");
+        } else {
+          firmwareUpload.bytesWritten += firmwareUpload.bufferPos;
+        }
         firmwareUpload.bufferPos = 0;
       }
       if (firmwareUpload.valid) {
@@ -2493,7 +3050,11 @@ void CrossPointWebServer::handleFirmwareUploadData() {
                           "Validating firmware...");
       }
       if (firmwareUpload.file.isOpen()) {
-        firmwareUpload.file.close();
+        if (!firmwareUpload.file.close() && firmwareUpload.valid) {
+          firmwareUpload.valid = false;
+          setFirmwareStatus(FirmwareUpdatePhase::FAILED, firmwareUpload.bytesWritten, upload.totalSize,
+                            "SD close failed.");
+        }
       }
 
       if (!firmwareUpload.valid && !firmwareUpload.filePath.empty()) {

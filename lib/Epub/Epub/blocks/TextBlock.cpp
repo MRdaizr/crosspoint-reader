@@ -15,7 +15,7 @@
 namespace {
 constexpr uint16_t MAX_WORDS = 10000;
 constexpr uint16_t MAX_RUBY_BYTES = 1024;
-}
+}  // namespace
 
 size_t TextBlock::arenaSize(const uint16_t wordCount, const uint16_t textSize, const bool hasFocus) {
   size_t size = static_cast<size_t>(wordCount) * (sizeof(uint16_t) + sizeof(int16_t) + sizeof(uint8_t));
@@ -60,15 +60,19 @@ void TextBlock::bindArenaPointers() {
 
 TextBlock::TextBlock(const std::vector<std::string>& inputWords, const std::vector<int16_t>& inputXpos,
                      const std::vector<EpdFontFamily::Style>& inputStyles,
-                     const std::vector<uint8_t>& inputFocusBoundary,
-                     const std::vector<uint16_t>& inputFocusSuffixX, const BlockStyle& style,
-                     std::vector<std::string> inputRubyTexts)
-    : focusPresent(!inputFocusBoundary.empty()), blockStyle(style), rubyTexts(std::move(inputRubyTexts)) {
+                     const std::vector<uint8_t>& inputFocusBoundary, const std::vector<uint16_t>& inputFocusSuffixX,
+                     const BlockStyle& style, std::vector<std::string> inputRubyTexts, PageLinks inputLinks,
+                     const bool linksComplete)
+    : focusPresent(!inputFocusBoundary.empty()),
+      blockStyle(style),
+      rubyTexts(std::move(inputRubyTexts)),
+      linkSpans(std::move(inputLinks)),
+      linkGeometryComplete(linksComplete) {
   if (inputWords.size() != inputXpos.size() || inputWords.size() != inputStyles.size() ||
       (focusPresent &&
        (inputWords.size() != inputFocusBoundary.size() || inputWords.size() != inputFocusSuffixX.size())) ||
-      (!rubyTexts.empty() && rubyTexts.size() != inputWords.size()) ||
-      inputWords.size() > MAX_WORDS || inputWords.size() > std::numeric_limits<uint16_t>::max()) {
+      (!rubyTexts.empty() && rubyTexts.size() != inputWords.size()) || inputWords.size() > MAX_WORDS ||
+      inputWords.size() > std::numeric_limits<uint16_t>::max()) {
     LOG_ERR("TXB", "Invalid text block vectors (words=%u, xpos=%u, styles=%u, boundary=%u, suffixX=%u)",
             static_cast<uint32_t>(inputWords.size()), static_cast<uint32_t>(inputXpos.size()),
             static_cast<uint32_t>(inputStyles.size()), static_cast<uint32_t>(inputFocusBoundary.size()),
@@ -177,8 +181,8 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
     const size_t wordLen = wordTextLen(i);
     const int wordX = wordXpos(i) + x;
     const EpdFontFamily::Style currentStyle = wordStyle(i);
-    const auto baseDir = static_cast<BidiUtils::BidiBaseDir>(
-        BidiUtils::detectParagraphLevel(word, blockStyle.isRtl ? 1 : 0));
+    const auto baseDir =
+        static_cast<BidiUtils::BidiBaseDir>(BidiUtils::detectParagraphLevel(word, blockStyle.isRtl ? 1 : 0));
     const uint8_t boundary = focusBoundary(i);
 
     const int rubyShift = getRubyShift(ascender);
@@ -192,54 +196,50 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
     if (boundary > 0) {
       static constexpr size_t MAX_FOCUS_PREFIX_BYTES = 9 * 4 + 1;
       char boldBuf[40];
-      static_assert(sizeof(boldBuf) >= MAX_FOCUS_PREFIX_BYTES,
-                    "boldBuf too small for max focus prefix");
+      static_assert(sizeof(boldBuf) >= MAX_FOCUS_PREFIX_BYTES, "boldBuf too small for max focus prefix");
       const auto boldStyle = static_cast<EpdFontFamily::Style>(currentStyle | EpdFontFamily::BOLD);
       const size_t boldLen = std::min<size_t>({static_cast<size_t>(boundary), wordLen, sizeof(boldBuf) - 1});
       std::memcpy(boldBuf, word, boldLen);
       boldBuf[boldLen] = '\0';
-      renderer.drawText(fontId, wordX, wordY, boldBuf, true, boldStyle, baseDir);
-      renderer.drawText(fontId, wordX + focusSuffixX(i), wordY, word + boldLen, true, currentStyle, baseDir);
+      renderer.drawText(fontId, wordX, wordY, boldBuf, true, boldStyle, baseDir, blockStyle.characterSpacing);
+      renderer.drawText(fontId, wordX + focusSuffixX(i), wordY, word + boldLen, true, currentStyle, baseDir,
+                        blockStyle.characterSpacing);
     } else {
-      renderer.drawText(fontId, wordX, wordY, word, true, currentStyle, baseDir);
+      renderer.drawText(fontId, wordX, wordY, word, true, currentStyle, baseDir, blockStyle.characterSpacing);
     }
 
     // Draw one compact ruby annotation above the complete base-token group.
     // Followers carry RUBY_CONTINUE and are intentionally not drawn again.
-    if (i < rubyTexts.size() && !rubyTexts[i].empty() &&
-        (currentStyle & EpdFontFamily::RUBY_CONTINUE) == 0) {
+    if (i < rubyTexts.size() && !rubyTexts[i].empty() && (currentStyle & EpdFontFamily::RUBY_CONTINUE) == 0) {
       size_t groupEnd = i + 1;
       int baseLeft = wordX;
-      int baseRight = wordX + renderer.getTextAdvanceX(fontId, word, currentStyle);
+      int baseRight = wordX + renderer.getTextAdvanceX(fontId, word, currentStyle, blockStyle.characterSpacing);
       while (groupEnd < numWords && (wordStyle(groupEnd) & EpdFontFamily::RUBY_CONTINUE) != 0) {
         const char* nextWord = wordText(groupEnd);
         const int nextX = wordXpos(groupEnd) + x;
-        const int nextRight = nextX + renderer.getTextAdvanceX(fontId, nextWord, wordStyle(groupEnd));
+        const int nextRight =
+            nextX + renderer.getTextAdvanceX(fontId, nextWord, wordStyle(groupEnd), blockStyle.characterSpacing);
         baseLeft = std::min(baseLeft, nextX);
         baseRight = std::max(baseRight, nextRight);
         ++groupEnd;
       }
-      const int rubyWidth = renderer.getTextAdvanceX(fontId, rubyTexts[i].c_str(), EpdFontFamily::SUP);
+      const int rubyWidth =
+          renderer.getTextAdvanceX(fontId, rubyTexts[i].c_str(), EpdFontFamily::SUP, blockStyle.characterSpacing);
       int rubyX = baseLeft + (baseRight - baseLeft - rubyWidth) / 2;
       rubyX = std::max(0, std::min(rubyX, renderer.getScreenWidth() - rubyWidth));
       const int rubyY = wordY - ascender;
-      renderer.drawText(fontId, rubyX, rubyY, rubyTexts[i].c_str(), true, EpdFontFamily::SUP, baseDir);
+      renderer.drawText(fontId, rubyX, rubyY, rubyTexts[i].c_str(), true, EpdFontFamily::SUP, baseDir,
+                        blockStyle.characterSpacing);
     }
 
     if (!scanning && (currentStyle & EpdFontFamily::UNDERLINE) != 0) {
-      int underlineWidth = renderer.getTextWidth(fontId, word, currentStyle, baseDir);
+      const int underlineWidth = renderer.getTextAdvanceX(fontId, word, currentStyle, blockStyle.characterSpacing);
       const int underlineY = wordY + ascender + 2;
-      if ((currentStyle & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
-        underlineWidth = (underlineWidth + 1) / 2;
-      }
       renderer.drawLine(wordX, underlineY, wordX + underlineWidth, underlineY, true);
     }
     if (!scanning && (currentStyle & EpdFontFamily::STRIKETHROUGH) != 0) {
-      int strikeWidth = renderer.getTextWidth(fontId, word, currentStyle, baseDir);
+      const int strikeWidth = renderer.getTextAdvanceX(fontId, word, currentStyle, blockStyle.characterSpacing);
       const int strikeY = wordY + ascender * 4 / 5;
-      if ((currentStyle & (EpdFontFamily::SUP | EpdFontFamily::SUB)) != 0) {
-        strikeWidth = (strikeWidth + 1) / 2;
-      }
       renderer.drawLine(wordX, strikeY, wordX + strikeWidth, strikeY, 2, true);
     }
   }
@@ -282,6 +282,7 @@ bool TextBlock::serialize(HalFile& file) const {
   serialization::writePod(file, blockStyle.textIndentDefined);
   serialization::writePod(file, blockStyle.isRtl);
   serialization::writePod(file, blockStyle.directionDefined);
+  serialization::writePod(file, blockStyle.characterSpacing);
   return true;
 }
 
@@ -365,6 +366,12 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   serialization::readPod(file, block->blockStyle.textIndentDefined);
   serialization::readPod(file, block->blockStyle.isRtl);
   serialization::readPod(file, block->blockStyle.directionDefined);
+  if (file.read(&block->blockStyle.characterSpacing, sizeof(block->blockStyle.characterSpacing)) !=
+          sizeof(block->blockStyle.characterSpacing) ||
+      block->blockStyle.characterSpacing < -2 || block->blockStyle.characterSpacing > 2) {
+    LOG_ERR("TXB", "Deserialization failed: invalid tracking payload");
+    return nullptr;
+  }
   block->isValid = true;
   return block;
 }

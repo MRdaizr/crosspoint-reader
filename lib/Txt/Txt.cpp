@@ -3,6 +3,7 @@
 #include <FsHelpers.h>
 #include <JpegToBmpConverter.h>
 #include <Logging.h>
+#include <Memory.h>
 
 Txt::Txt(std::string path, std::string cacheBasePath)
     : filepath(std::move(path)), cacheBasePath(std::move(cacheBasePath)) {
@@ -28,7 +29,6 @@ bool Txt::load() {
   }
 
   fileSize = file.size();
-  file.close();
 
   loaded = true;
   LOG_DBG("TXT", "Loaded TXT file: %s (%zu bytes)", filepath.c_str(), fileSize);
@@ -41,8 +41,8 @@ std::string Txt::getTitle() const {
   std::string filename = (lastSlash != std::string::npos) ? filepath.substr(lastSlash + 1) : filepath;
 
   // Remove .txt extension
-  if (FsHelpers::hasTxtExtension(filename)) {
-    filename = filename.substr(0, filename.length() - 4);
+  if (FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename)) {
+    filename = filename.substr(0, filename.find_last_of('.'));
   }
 
   return filename;
@@ -122,10 +122,18 @@ bool Txt::generateCoverBmp() const {
     if (!Storage.openFileForWrite("TXT", getCoverBmpPath(), dst)) {
       return false;
     }
-    uint8_t buffer[1024];
+    auto buffer = makeUniqueNoThrow<uint8_t[]>(1024);
+    if (!buffer) {
+      LOG_ERR("TXT", "OOM copying cover");
+      return false;
+    }
     while (src.available()) {
-      size_t bytesRead = src.read(buffer, sizeof(buffer));
-      dst.write(buffer, bytesRead);
+      const int bytesRead = src.read(buffer.get(), 1024);
+      if (bytesRead <= 0 || dst.write(buffer.get(), bytesRead) != size_t(bytesRead)) {
+        dst.close();
+        Storage.remove(getCoverBmpPath().c_str());
+        return false;
+      }
     }
     LOG_DBG("TXT", "Copied BMP cover to cache");
     return true;

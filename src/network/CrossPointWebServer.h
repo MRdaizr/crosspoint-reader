@@ -1,6 +1,8 @@
 #pragma once
 
+#include <ArduinoJson.h>
 #include <HalStorage.h>
+#include <Memory.h>
 #include <NetworkUdp.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
@@ -12,6 +14,7 @@
 #include <vector>
 
 #include "NutstoreSync.h"
+#include "activities/plugins/PluginJobPool.h"
 
 // Structure to hold file information
 struct FileInfo {
@@ -62,10 +65,10 @@ class CrossPointWebServer {
     // 4KB is a good balance: large enough to reduce syscall overhead, small enough
     // to keep individual write times short and avoid watchdog issues
     static constexpr size_t UPLOAD_BUFFER_SIZE = 4096;  // 4KB buffer
-    std::vector<uint8_t> buffer;
+    std::unique_ptr<uint8_t[]> buffer;
     size_t bufferPos = 0;
 
-    UploadState() { buffer.resize(UPLOAD_BUFFER_SIZE); }
+    UploadState() : buffer(makeUniqueNoThrow<uint8_t[]>(UPLOAD_BUFFER_SIZE)) {}
   } upload;
 
   CrossPointWebServer();
@@ -158,10 +161,10 @@ class CrossPointWebServer {
     bool magicChecked = false;
     size_t bytesWritten = 0;
     static constexpr size_t BUFFER_SIZE = 4096;
-    std::vector<uint8_t> buffer;
+    std::unique_ptr<uint8_t[]> buffer;
     size_t bufferPos = 0;
 
-    FirmwareUploadState() { buffer.resize(BUFFER_SIZE); }
+    FirmwareUploadState() : buffer(makeUniqueNoThrow<uint8_t[]>(BUFFER_SIZE)) {}
   } firmwareUpload;
 
   bool firmwareRestartPending = false;
@@ -183,4 +186,36 @@ class CrossPointWebServer {
   void handleGetWifiNetworks() const;
   void handlePostWifiNetwork();
   void handleDeleteWifiNetwork();
+
+  // Additive SD plugin routes. All executable/resource routes check both the
+  // web-session capability and the current on-SD approval fingerprint.
+  char pluginSession[33] = {};
+  PluginJobPool pluginJobs;
+  bool pluginSessionAllowed(bool respond = true) const;
+  bool pluginAuthorized(const char* plugin) const;
+  bool readPluginJson(JsonDocument& doc) const;
+  void sendPluginJson(const JsonDocument& doc) const;
+  void handlePluginList() const;
+  void handlePluginPermission();
+  void handlePluginFile() const;
+  void handlePluginHost() const;
+  void handlePluginRunnerPage() const;
+  void handlePluginJobSubmit();
+  void handlePluginJobClaim();
+  void handlePluginJobComplete();
+  void handlePluginJobStatus();
+  void handleRelay();
+  void handleFetch();
+  void handleCrypto();
+  void handlePluginFsUpload();
+  void handlePluginFs();
+  void suspendPluginTransferServices();
+  void resumePluginTransferServices();
+  struct PluginUpload {
+    HalFile file;
+    std::string plugin, path, tmp;
+    size_t bytes = 0;
+    bool started = false, ended = false;
+    int error = 0;
+  } pluginUpload;
 };

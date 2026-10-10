@@ -19,17 +19,24 @@ namespace ProgressFile {
 // a broken FAT cluster chain that the firmware could neither rewrite nor clear,
 // stranding the book on an old page (issue #2275).
 //
-// This is crash-safe, not metadata-atomic: on FAT the replace is remove + rename,
-// two separate directory operations, so a crash between them can leave neither
-// file -- which simply reads as "no saved progress" on next launch, never a
-// corrupt or unclearable file. The point is that progress.bin is never torn.
+// FAT publication uses a backup rather than removing the previous position.
+// Readers must recover() before loading: an interrupted rename leaves the old
+// complete file in progress.bin.bak, and the temporary file is never read.
 //
 // Note: this prevents corruption on a healthy card going forward. It cannot
 // repair an already-corrupted progress.bin -- removing the stale file may itself
 // fail at the FAT level, in which case recovery still requires fsck on a host.
 //
+inline bool recover(const std::string& cachePath) {
+  const std::string path = cachePath + "/progress.bin";
+  const std::string backup = path + ".bak";
+  if (Storage.exists(path.c_str()) || !Storage.exists(backup.c_str())) return true;
+  return Storage.rename(backup.c_str(), path.c_str());
+}
+
 // Returns true only if the new progress.bin is fully in place.
 inline bool writeAtomic(const std::string& cachePath, const uint8_t* data, size_t len) {
+  if (!data || !len || !recover(cachePath)) return false;
   const std::string finalPath = cachePath + "/progress.bin";
   const std::string tmpPath = cachePath + "/progress.bin.tmp";
 
@@ -46,15 +53,13 @@ inline bool writeAtomic(const std::string& cachePath, const uint8_t* data, size_
       return false;
     }
     f.flush();
-    // f (the temp file) is closed at scope exit (DESTRUCTOR_CLOSES_FILE=1) before
-    // the rename below -- SdFat must not rename a path that still has an open FsFile.
+    if (!f.close()) {
+      LOG_ERR("PRG", "Could not close temp progress file: %s", tmpPath.c_str());
+      return false;
+    }
   }
 
-  // SdFat's rename does not overwrite an existing destination, so drop the old
-  // canonical file first. The brief window where neither file exists reads as
-  // "no saved progress" on next launch -- never a corrupt, unclearable file.
-  Storage.remove(finalPath.c_str());
-  if (!Storage.rename(tmpPath.c_str(), finalPath.c_str())) {
+  if (!Storage.replaceFile(tmpPath.c_str(), finalPath.c_str())) {
     LOG_ERR("PRG", "Failed to rename temp progress into place: %s", finalPath.c_str());
     return false;
   }

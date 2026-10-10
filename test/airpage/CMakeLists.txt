@@ -1,5 +1,6 @@
 add_executable(AirPageImageStoreTest
   AirPageImageStoreTest.cpp
+  ${REPO_ROOT}/test/common/SimulatorSerial.cpp
   ${REPO_ROOT}/src/activities/network/airpage/AirPageImageStore.cpp
   ${REPO_ROOT}/lib/Epub/Epub/converters/ImageDimsProbe.cpp
   ${REPO_ROOT}/lib/Epub/Epub/converters/ImageToFramebufferDecoder.cpp

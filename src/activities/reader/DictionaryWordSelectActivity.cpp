@@ -88,6 +88,13 @@ void DictionaryWordSelectActivity::extractWords() {
       box.x = static_cast<int16_t>(line->xPos + block->wordXpos(i) + marginLeft);
       box.y = static_cast<int16_t>(line->yPos + marginTop + rubyShift);
       box.style = block->wordStyle(i);
+      box.tracking = block->getBlockStyle().characterSpacing;
+      box.focusBoundary = block->focusBoundary(i);
+      box.focusSuffixX = block->focusSuffixX(i);
+      if ((box.style & EpdFontFamily::SUP) != 0)
+        box.y -= ascender * 2 / 5;
+      else if ((box.style & EpdFontFamily::SUB) != 0)
+        box.y += ascender / 4;
       box.width = 0;  // measured below, once the advance table is ready
       box.row = rowCount;
       box.text = text;
@@ -97,6 +104,9 @@ void DictionaryWordSelectActivity::extractWords() {
       pageText.append(text);
       pageText.push_back(' ');
       styleMask |= static_cast<uint8_t>(1u << (static_cast<uint8_t>(box.style) & 0x03));
+      if (box.focusBoundary) {
+        styleMask |= static_cast<uint8_t>(1u << ((static_cast<uint8_t>(box.style) | EpdFontFamily::BOLD) & 0x03));
+      }
     }
     if (rowHasWords) rowCount++;
   }
@@ -104,7 +114,11 @@ void DictionaryWordSelectActivity::extractWords() {
   if (styleMask == 0) styleMask = 0x01;  // REGULAR
   renderer.ensureSdCardFontReady(fontId, pageText.c_str(), styleMask);
   for (auto& word : words) {
-    word.width = static_cast<int16_t>(renderer.getTextAdvanceX(fontId, word.text, word.style));
+    const int width = word.focusBoundary
+                          ? word.focusSuffixX + renderer.getTextAdvanceX(fontId, word.text + word.focusBoundary,
+                                                                         word.style, word.tracking)
+                          : renderer.getTextAdvanceX(fontId, word.text, word.style, word.tracking);
+    word.width = static_cast<int16_t>(std::clamp(width, 1, static_cast<int>(INT16_MAX)));
   }
 }
 

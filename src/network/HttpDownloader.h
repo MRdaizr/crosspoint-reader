@@ -3,6 +3,8 @@
 
 #include <functional>
 #include <string>
+#include <utility>
+#include <vector>
 
 /**
  * HTTP client utility for fetching content and downloading files. Built on
@@ -16,33 +18,39 @@ class HttpDownloader {
   // Called with each body chunk as it arrives; return false to abort. Lets a
   // streaming parser consume the response without buffering the whole body.
   using DataCallback = std::function<bool(const uint8_t* data, size_t len)>;
+  using Header = std::pair<std::string, std::string>;
+  static constexpr size_t MIN_TLS_FREE_HEAP = 48 * 1024;
+  static constexpr size_t MIN_TLS_MAX_ALLOC = 24 * 1024;
 
   enum DownloadError {
     OK = 0,
     HTTP_ERROR,
     FILE_ERROR,
     ABORTED,
+    UNAUTHORIZED,
   };
 
   /**
    * Fetch text content from a URL with optional credentials.
    */
   static bool fetchUrl(const std::string& url, std::string& outContent, const std::string& username = "",
-                       const std::string& password = "");
+                       const std::string& password = "", const std::vector<Header>& headers = {});
 
   static bool fetchUrl(const std::string& url, Stream& stream, const std::string& username = "",
-                       const std::string& password = "");
+                       const std::string& password = "", const std::vector<Header>& headers = {});
 
   /**
    * Stream the response body to onData as it arrives, without buffering it.
    */
   static bool fetchUrl(const std::string& url, const DataCallback& onData, const std::string& username = "",
-                       const std::string& password = "");
+                       const std::string& password = "", const std::vector<Header>& headers = {});
 
   /**
    * Download a file to the SD card with optional credentials.
    */
   static DownloadError downloadToFile(const std::string& url, const std::string& destPath,
                                       ProgressCallback progress = nullptr, bool* cancelFlag = nullptr,
-                                      const std::string& username = "", const std::string& password = "");
+                                      const std::string& username = "", const std::string& password = "",
+                                      const std::vector<Header>& headers = {}, size_t maxBytes = 0,
+                                      uint32_t deadlineMs = 0, const std::function<bool()>& shouldAbort = nullptr);
 };

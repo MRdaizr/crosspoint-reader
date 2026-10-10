@@ -23,7 +23,16 @@ class TextSettingsActivity final : public UiTabListActivity {
   void render(RenderLock&&) override;
 
  private:
-  enum class LayoutRow { LineSpacing, ParaSpacing, Alignment, ScreenMargin, Count };
+  enum class LayoutRow {
+    LineSpacing,
+    ParaSpacing,
+    ParaIndentation,
+    Alignment,
+    WordSpacing,
+    CharacterSpacing,
+    ScreenMargin,
+    Count
+  };
   enum class StyleRow { FocusReading, Hyphenation, EmbeddedStyle, AntiAliasing, Count };
 
   int listCount() const override;
@@ -52,8 +61,15 @@ class TextSettingsActivity final : public UiTabListActivity {
   bool focusedRowHasNoPreview() const;
   void switchTab(int direction = 1);
 
-  struct FontEntry { std::string name; bool isBuiltin; uint8_t settingIndex; };
-  struct SizeEntry { std::string name; uint8_t pointSize; };
+  struct FontEntry {
+    std::string name;
+    bool isBuiltin;
+    uint8_t settingIndex;
+  };
+  struct SizeEntry {
+    std::string name;
+    uint8_t pointSize;
+  };
 
   const SdCardFontRegistry* registry_;
   OptionPopup optionPopup_;

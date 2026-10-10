@@ -64,12 +64,14 @@ bool XtcReaderActivity::skipPages(const int amount) {
   int64_t target = static_cast<int64_t>(currentPage) + amount;
   target = std::max<int64_t>(0, std::min<int64_t>(maxPage, target));
   if (target == static_cast<int64_t>(currentPage)) return false;
+  noteSessionPageTurn(amount == 1, true);
   currentPage = static_cast<uint32_t>(target);
   requestUpdate();
   return true;
 }
 
 void XtcReaderActivity::loop() {
+  if (handleProgressRecoveryError()) return;
   rememberBookOnceRendered();
   READING_STATS.noteActivity();
   const bool atEndOfBook = xtc && xtc->getPageCount() > 0 && currentPage >= xtc->getPageCount();
@@ -386,6 +388,7 @@ void XtcReaderActivity::renderPage() {
 }
 
 void XtcReaderActivity::saveProgress() const {
+  if (progressRecoveryFailed_) return;
   uint8_t data[4];
   data[0] = currentPage & 0xFF;
   data[1] = (currentPage >> 8) & 0xFF;
@@ -397,6 +400,11 @@ void XtcReaderActivity::saveProgress() const {
 }
 
 void XtcReaderActivity::loadProgress() {
+  if (!ProgressFile::recover(xtc->getCachePath())) {
+    progressRecoveryFailed_ = true;
+    LOG_ERR("XTR", "Could not recover saved progress");
+    return;
+  }
   HalFile f;
   if (Storage.openFileForRead("XTR", xtc->getCachePath() + "/progress.bin", f)) {
     uint8_t data[4];

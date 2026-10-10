@@ -3,8 +3,8 @@
 #include <GfxRenderer.h>
 #include <I18n.h>
 
-#include "MappedInputManager.h"
 #include "CrossPointSettings.h"
+#include "MappedInputManager.h"
 #include "components/UITheme.h"
 
 namespace fui = freeink::ui;
@@ -12,9 +12,9 @@ namespace fui = freeink::ui;
 EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
                                                const std::string& title, const int currentPage, const int totalPages,
                                                const int bookProgressPercent, const uint8_t currentOrientation,
-                                               const bool hasFootnotes, const bool hasBookmarks)
+                                               const bool hasFootnotes, const bool hasBookmarks, const bool textSource)
     : UiListActivity("EpubReaderMenu", renderer, mappedInput),
-      menuItems(buildMenuItems(hasFootnotes, hasBookmarks)),
+      menuItems(buildMenuItems(hasFootnotes, hasBookmarks, textSource)),
       title(title),
       pendingOrientation(currentOrientation),
       currentPage(currentPage),
@@ -22,9 +22,10 @@ EpubReaderMenuActivity::EpubReaderMenuActivity(GfxRenderer& renderer, MappedInpu
       bookProgressPercent(bookProgressPercent) {}
 
 std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuItems(bool hasFootnotes,
-                                                                                     bool hasBookmarks) {
+                                                                                     bool hasBookmarks,
+                                                                                     bool textSource) {
   std::vector<MenuItem> items;
-  items.reserve(16);
+  items.reserve(17);
   items.push_back({MenuAction::SELECT_CHAPTER, StrId::STR_SELECT_CHAPTER});
   if (hasFootnotes) {
     items.push_back({MenuAction::FOOTNOTES, StrId::STR_FOOTNOTES});
@@ -44,6 +45,7 @@ std::vector<EpubReaderMenuActivity::MenuItem> EpubReaderMenuActivity::buildMenuI
   items.push_back({MenuAction::GO_HOME, StrId::STR_GO_HOME_BUTTON});
   items.push_back({MenuAction::SYNC, StrId::STR_SYNC_PROGRESS});
   items.push_back({MenuAction::DELETE_CACHE, StrId::STR_DELETE_CACHE});
+  if (textSource) items.push_back({MenuAction::TEXT_COMPATIBILITY, StrId::STR_TEXT_USE_COMPATIBILITY});
   return items;
 }
 
@@ -104,27 +106,39 @@ void EpubReaderMenuActivity::drawChrome() {
                    std::to_string(totalPages) + std::string(tr(STR_PAGES_SEPARATOR));
   }
   progressLine += std::string(tr(STR_BOOK_PREFIX)) + std::to_string(bookProgressPercent) + "%";
-  GUI.drawSubHeader(renderer, Rect{0, metrics.topPadding + metrics.headerHeight, renderer.getScreenWidth(), metrics.tabBarHeight},
+  GUI.drawSubHeader(renderer,
+                    Rect{0, metrics.topPadding + metrics.headerHeight, renderer.getScreenWidth(), metrics.tabBarHeight},
                     progressLine.c_str());
 }
 
 void EpubReaderMenuActivity::buildScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  screen.setContentMargin(fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight), 0,
-                                      static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  screen.setContentMargin(
+      fui::Insets{static_cast<int16_t>(metrics.topPadding + metrics.headerHeight + metrics.tabBarHeight), 0,
+                  static_cast<int16_t>(metrics.buttonHintsHeight), 0});
   screen.spacer(static_cast<int16_t>(metrics.verticalSpacing));
   for (size_t i = 0; i < menuItems.size(); ++i) {
     const auto action = menuItems[i].action;
-    if (action == MenuAction::ROTATE_SCREEN) rowValues[i] = I18N.get(orientationLabels[pendingOrientation]);
-    else if (action == MenuAction::AUTO_PAGE_TURN) rowValues[i] = pageTurnLabels[selectedPageTurnOption];
-    else if (action == MenuAction::NIGHT_MODE) rowValues[i] = SETTINGS.screenInverted ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+    if (action == MenuAction::ROTATE_SCREEN)
+      rowValues[i] = I18N.get(orientationLabels[pendingOrientation]);
+    else if (action == MenuAction::AUTO_PAGE_TURN)
+      rowValues[i] = pageTurnLabels[selectedPageTurnOption];
+    else if (action == MenuAction::NIGHT_MODE)
+      rowValues[i] = SETTINGS.screenInverted ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
     else if (action == MenuAction::DICTIONARY)
       rowValues[i] = SETTINGS.dictionaryName[0] ? SETTINGS.dictionaryName : I18N.get(StrId::STR_NONE_OPT);
-    else rowValues[i].clear();
+    else
+      rowValues[i].clear();
     rowItems[i].value = rowValues[i].empty() ? nullptr : rowValues[i].c_str();
   }
   fui::ListProps props;
-  props.items = rowItems.data(); props.count = static_cast<uint16_t>(rowItems.size()); props.action = ACTION_ROW;
-  props.inputMask = fui::InputTouch; props.valueInset = 8; props.labelText = screen.theme().smallText; props.labelText.maxLines = 2;
-  syncListViewport(screen, props); screen.list(props);
+  props.items = rowItems.data();
+  props.count = static_cast<uint16_t>(rowItems.size());
+  props.action = ACTION_ROW;
+  props.inputMask = fui::InputTouch;
+  props.valueInset = 8;
+  props.labelText = screen.theme().smallText;
+  props.labelText.maxLines = 2;
+  syncListViewport(screen, props);
+  screen.list(props);
 }

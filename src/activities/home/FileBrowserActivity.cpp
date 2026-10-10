@@ -110,7 +110,7 @@ void FileBrowserActivity::loadFiles() {
         }
       } else if (FsHelpers::hasEpubExtension(filename) || FsHelpers::hasXtcExtension(filename) ||
                  FsHelpers::hasTxtExtension(filename) || FsHelpers::hasMarkdownExtension(filename) ||
-                 FsHelpers::hasBmpExtension(filename) || FsHelpers::hasPngExtension(filename)) {
+                 FsHelpers::hasImageExtension(filename)) {
         files.emplace_back(filename);
       }
     }
@@ -130,8 +130,8 @@ void FileBrowserActivity::onEnter() {
 
   sdFontSystem.ensureLoaded(renderer);
   const int listFontId = sdFontSystem.currentFontId();
-  LOG_INF("FBR", "FileBrowser list font source=%s id=%d",
-          renderer.isSdCardFont(listFontId) ? "SD" : "builtin", listFontId);
+  LOG_INF("FBR", "FileBrowser list font source=%s id=%d", renderer.isSdCardFont(listFontId) ? "SD" : "builtin",
+          listFontId);
 
   // If Confirm was held while this activity opened (typical when launched from a menu), ignore
   // its release — otherwise we'd immediately auto-open whatever is at index 0.
@@ -260,8 +260,7 @@ bool FileBrowserActivity::handleCustomInput() {
     RenderLock lock(*this);
     canGoHome = mode == Mode::Books && basepath != "/" && !lockLongPressBack;
   }
-  if (canGoHome && mappedInput.isPressed(MappedInputManager::Button::Back) &&
-      mappedInput.getHeldTime() >= GO_HOME_MS) {
+  if (canGoHome && mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_HOME_MS) {
     {
       RenderLock lock(*this);
       closeRouting();
@@ -433,7 +432,8 @@ void FileBrowserActivity::drawChrome() {
       (mode == Mode::PickFirmware)
           ? std::string(tr(STR_SELECT_FIRMWARE_FILE))
           : ((basepath == "/") ? std::string(tr(STR_SD_CARD)) : basepath.substr(basepath.rfind('/') + 1));
-  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight}, folderName.c_str());
+  GUI.drawHeader(renderer, Rect{0, metrics.topPadding, renderer.getScreenWidth(), metrics.headerHeight},
+                 folderName.c_str());
 }
 
 void FileBrowserActivity::buildScreen(UiScreen& screen) {
@@ -478,7 +478,10 @@ void FileBrowserActivity::buildScreen(UiScreen& screen) {
   props.rowProviderCtx = this;
   props.count = static_cast<uint16_t>(files.size());
   props.action = ACTION_ROW;
-  props.inputMask = fui::InputTouch; props.valueInset = 8; props.labelText = screen.theme().smallText; props.labelText.maxLines = 1;
+  props.inputMask = fui::InputTouch;
+  props.valueInset = 8;
+  props.labelText = screen.theme().smallText;
+  props.labelText.maxLines = 1;
   syncListViewport(screen, props);
   const int first = std::clamp(nav.top, 0, static_cast<int>(files.size()));
   const int count = std::min(static_cast<int>(files.size()) - first, std::max(1, nav.visibleRows));
@@ -556,7 +559,8 @@ void FileBrowserActivity::drawFooter() {
   const bool selectingFirmwareFile = mode == Mode::PickFirmware && hasSelectedFile && !files[nav.selected].empty() &&
                                      files[nav.selected].back() != '/';
   const char* confirmLabel = files.empty() ? "" : (selectingFirmwareFile ? tr(STR_SELECT) : tr(STR_OPEN));
-  const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, files.empty() ? "" : tr(STR_DIR_UP), files.empty() ? "" : tr(STR_DIR_DOWN));
+  const auto labels = mappedInput.mapLabels(backLabel, confirmLabel, files.empty() ? "" : tr(STR_DIR_UP),
+                                            files.empty() ? "" : tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 

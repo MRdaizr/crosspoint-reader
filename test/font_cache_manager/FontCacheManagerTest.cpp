@@ -24,13 +24,34 @@ const SdCardFont::PrewarmCall* findCall(const SdCardFont& font, const uint8_t st
 
 void* operator new(const size_t size) {
   if (countHeapAllocations) heapAllocationCount++;
-  if (void* allocation = std::malloc(size)) return allocation;
+  if (void* allocation = std::malloc(size ? size : 1)) return allocation;
   throw std::bad_alloc();
+}
+
+// libstdc++ uses nothrow new for stable_sort's temporary buffer. Keep that
+// allocation on the same malloc/free path as our replacement delete, including
+// under ASan, and include it in the no-hot-path-allocation assertion.
+void* operator new(const size_t size, const std::nothrow_t&) noexcept {
+  if (countHeapAllocations) heapAllocationCount++;
+  return std::malloc(size ? size : 1);
 }
 
 void operator delete(void* allocation) noexcept { std::free(allocation); }
 
 void operator delete(void* allocation, size_t) noexcept { std::free(allocation); }
+
+void operator delete(void* allocation, const std::nothrow_t&) noexcept { std::free(allocation); }
+
+TEST(FontCacheManagerTest, HeapCounterTracksNothrowAllocations) {
+  heapAllocationCount = 0;
+  countHeapAllocations = true;
+  void* allocation = ::operator new(8, std::nothrow);
+  countHeapAllocations = false;
+  const size_t count = heapAllocationCount;
+  ASSERT_NE(nullptr, allocation);
+  ::operator delete(allocation);
+  EXPECT_EQ(1u, count);
+}
 
 TEST(FontCacheManagerTest, PrewarmScopeBatchesEachFontAndResolvedStyleSeparately) {
   SdCardFont readerFont;

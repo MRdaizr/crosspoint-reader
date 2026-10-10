@@ -16,7 +16,7 @@ TEST_P(ParagraphSoftFlushTest, IndentsOnlyTheFirstEmittedLineAcrossFlushes) {
   style.alignment = CssTextAlign::Left;
   style.textIndentDefined = true;
   style.textIndent = 12;
-  ParsedText text(false, GetParam(), false, style);
+  ParsedText text(false, GetParam(), false, style, 3);
   std::vector<std::unique_ptr<TextBlock>> lines;
   std::vector<uint32_t> offsets;
   const auto collect = [&](std::unique_ptr<TextBlock> line, uint32_t offset) {
@@ -59,7 +59,7 @@ TEST_P(ParagraphSoftFlushTest, EmptySoftFlushDoesNotConsumeFirstLineIndent) {
   style.alignment = CssTextAlign::Left;
   style.textIndentDefined = true;
   style.textIndent = 12;
-  ParsedText text(false, GetParam(), false, style);
+  ParsedText text(false, GetParam(), false, style, 3);
   std::vector<std::unique_ptr<TextBlock>> lines;
   const auto collect = [&](std::unique_ptr<TextBlock> line, uint32_t) { lines.push_back(std::move(line)); };
   text.addWord("word", EpdFontFamily::REGULAR);
@@ -77,7 +77,7 @@ TEST(WordStoreLayoutTest, LongCjkParagraphSurvivesSeveralChunkRetirements) {
   GfxRenderer renderer;
   BlockStyle style;
   style.alignment = CssTextAlign::Left;
-  ParsedText text(true, false, false, style);
+  ParsedText text(true, false, false, style, 0);
   std::string source;
   for (int i = 0; i < 600; ++i) source += "中文日本語";
   text.addWord(source, EpdFontFamily::REGULAR);
@@ -102,7 +102,7 @@ TEST(WordStoreLayoutTest, RubyGroupsAndFocusMetadataSurviveSoftFlush) {
   GfxRenderer renderer;
   BlockStyle style;
   style.alignment = CssTextAlign::Left;
-  ParsedText text(true, false, true, style);
+  ParsedText text(true, false, true, style, 0);
   for (unsigned i = 0; i < 500; ++i) text.addWord("reading", EpdFontFamily::REGULAR);
   const size_t rubyStart = text.size();
   text.addWord("日本語", EpdFontFamily::REGULAR, true);
@@ -146,7 +146,7 @@ TEST(WordStoreLayoutTest, HyphenatedFocusWordRetainsCompleteTextAndOffsets) {
   GfxRenderer renderer;
   BlockStyle style;
   style.alignment = CssTextAlign::Left;
-  ParsedText text(true, true, true, style);
+  ParsedText text(true, true, true, style, 0);
   const std::string source = "internationalization";
   text.addWord(source, EpdFontFamily::REGULAR, false, false, 100);
   std::string rendered;
@@ -173,7 +173,7 @@ TEST(WordStoreLayoutTest, SoftHyphensAndPunctuationStayUtf8Safe) {
   GfxRenderer renderer;
   BlockStyle style;
   style.alignment = CssTextAlign::Left;
-  ParsedText text(true, true, false, style);
+  ParsedText text(true, true, false, style, 0);
   text.addWord(
       "abcd\xC2\xAD"
       "efgh",

@@ -1,8 +1,10 @@
 #pragma once
 
 #include <Print.h>
+#include <TxtSourceMap.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -13,6 +15,17 @@
 class ZipFile;
 
 class Epub {
+ public:
+  using LoadCallbacks = TxtToHtml::Callbacks;
+  static constexpr const char* TXT_SPINE_HREF = "__text__.xhtml";
+  struct SyncMetadata {
+    std::string isbn;
+    std::string asin;
+    std::string series;
+    std::optional<float> seriesIndex;
+  };
+
+ private:
   // the ncx file (EPUB 2)
   std::string tocNcxItem;
   // the nav file (EPUB 3)
@@ -29,22 +42,30 @@ class Epub {
   std::unique_ptr<CssParser> cssParser;
   // CSS files
   std::vector<std::string> cssFiles;
+  std::string cacheBasePath;
+  std::string textTitle;
+  bool syntheticText = false;
+  std::unique_ptr<TxtSourceMap> textSourceMap;
 
-  bool findContentOpfFile(std::string* contentOpfFile) const;
-  bool parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, bool writeSpineEntries = true);
+  bool findContentOpfFile(std::string* contentOpfFile, ZipFile* sharedZip = nullptr) const;
+  bool parseContentOpf(BookMetadataCache::BookMetadata& bookMetadata, bool writeSpineEntries = true,
+                       bool metadataOnly = false, ZipFile* sharedZip = nullptr);
   bool parseTocNcxFile() const;
   bool parseTocNavFile() const;
   void discoverCssFilesFromZip();
-  CssParser::ParseResult parseCssFiles(CssParser::CacheStatus existingCacheStatus = CssParser::CacheStatus::Missing) const;
+  CssParser::ParseResult parseCssFiles(
+      CssParser::CacheStatus existingCacheStatus = CssParser::CacheStatus::Missing) const;
 
  public:
-  explicit Epub(std::string filepath, const std::string& cacheDir) : filepath(std::move(filepath)) {
-    // create a cache key based on the filepath
-    cachePath = cacheDir + "/epub_" + std::to_string(std::hash<std::string>{}(this->filepath));
-  }
+  explicit Epub(std::string filepath, const std::string& cacheDir);
   ~Epub() = default;
   std::string& getBasePath() { return contentBasePath; }
-  bool load(bool buildIfMissing = true, bool skipLoadingCss = false);
+  bool load(bool buildIfMissing = true, bool skipLoadingCss = false, const LoadCallbacks* callbacks = nullptr);
+  bool isSyntheticText() const { return syntheticText; }
+  const TxtSourceMap* getTextSourceMap() const { return textSourceMap.get(); }
+  // Read package metadata without creating book/spine/CSS caches.
+  bool loadMetadata(std::string& title, std::string& author);
+  bool loadSyncMetadata(SyncMetadata& metadata);
   bool clearCache() const;
   void setupCacheDir() const;
   const std::string& getCachePath() const;

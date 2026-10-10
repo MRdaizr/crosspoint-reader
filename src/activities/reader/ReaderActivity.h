@@ -1,5 +1,6 @@
 #pragma once
 #include <Epub/ReaderRenderSpec.h>
+#include <ReaderSession.h>
 
 #include <atomic>
 #include <cstdint>
@@ -43,10 +44,20 @@ class ReaderActivity : public Activity {
   // first-open refresh cadence when launched by ActivityManager. Existing X4
   // callers default to false and retain their current refresh behavior.
   bool allowFastInitialRefresh_ = false;
+  // A failed SD recovery must never be replaced by a newly saved page zero.
+  bool progressRecoveryFailed_ = false;
+  bool handleProgressRecoveryError();
   std::unique_ptr<EndOfBookOptions> endOfBookOptions;
   std::atomic<bool> endOfBookOptionsReady{false};
   ReaderResumeGate resumeGate;
-  void markPageRendered() { resumeGate.markPageRendered(); }
+  ReaderSession readerSession;
+  std::atomic<int8_t> pendingSessionTurn{0};
+  std::atomic<bool> renderedForEvents{false};
+  void markPageRendered();
+  void noteSessionPageTurn(bool forward, bool succeeded) {
+    pendingSessionTurn.store(forward && succeeded ? 1 : -1, std::memory_order_release);
+  }
+  void flushReaderSession();
   void rememberBookOnceRendered();
 
   // Format hooks.  Keeping these in the base class makes lifecycle and page

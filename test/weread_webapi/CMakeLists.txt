@@ -37,6 +37,7 @@ gtest_discover_tests(WeReadTouchGeometryTest)
 
 add_executable(WeReadStoreTest
   WeReadStoreTest.cpp
+  ${REPO_ROOT}/test/common/SimulatorSerial.cpp
   ${REPO_ROOT}/lib/JsonParser/StreamingJsonParser.cpp
   ${REPO_ROOT}/lib/WeReadWebApi/src/WeReadBrowse.cpp
   ${REPO_ROOT}/lib/WeReadWebApi/src/WeReadProtocol.cpp

@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "../PageLink.h"
 #include "Block.h"
 #include "BlockStyle.h"
 
@@ -35,6 +36,9 @@ class TextBlock final : public Block {
   const uint16_t* focusSuffixPositions = nullptr;
   const char* textData = nullptr;
   std::vector<std::string> rubyTexts;
+  // Layout-only. The parser moves these into Page; the text arena stays unchanged.
+  PageLinks linkSpans;
+  bool linkGeometryComplete = true;
 
   static size_t arenaSize(uint16_t wordCount, uint16_t textSize, bool hasFocus);
   void bindArenaPointers();
@@ -42,11 +46,10 @@ class TextBlock final : public Block {
 
  public:
   explicit TextBlock(const std::vector<std::string>& words, const std::vector<int16_t>& word_xpos,
-                     const std::vector<EpdFontFamily::Style>& word_styles,
-                      const std::vector<uint8_t>& focus_boundary,
-                      const std::vector<uint16_t>& focus_suffix_x,
-                      const BlockStyle& blockStyle = BlockStyle(),
-                      std::vector<std::string> rubyTexts = {});
+                     const std::vector<EpdFontFamily::Style>& word_styles, const std::vector<uint8_t>& focus_boundary,
+                     const std::vector<uint16_t>& focus_suffix_x, const BlockStyle& blockStyle = BlockStyle(),
+                     std::vector<std::string> rubyTexts = {}, PageLinks linkSpans = PageLinks(),
+                     bool linkGeometryComplete = true);
   ~TextBlock() override = default;
 
   void setBlockStyle(const BlockStyle& style) { blockStyle = style; }
@@ -59,6 +62,8 @@ class TextBlock final : public Block {
   bool hasRuby() const;
   int getRubyShift(int ascender) const { return hasRuby() ? (ascender / 2) : 0; }
   const std::vector<std::string>& getRubyTexts() const { return rubyTexts; }
+  PageLinks takeLinkSpans() { return std::move(linkSpans); }
+  bool hasCompleteLinkGeometry() const { return linkGeometryComplete; }
 
   const char* wordText(size_t index) const;
   size_t wordTextLen(size_t index) const;
@@ -66,9 +71,7 @@ class TextBlock final : public Block {
   EpdFontFamily::Style wordStyle(size_t index) const {
     return index < numWords ? static_cast<EpdFontFamily::Style>(styles[index]) : EpdFontFamily::REGULAR;
   }
-  uint8_t focusBoundary(size_t index) const {
-    return focusPresent && index < numWords ? focusBoundaries[index] : 0;
-  }
+  uint8_t focusBoundary(size_t index) const { return focusPresent && index < numWords ? focusBoundaries[index] : 0; }
   uint16_t focusSuffixX(size_t index) const {
     return focusPresent && index < numWords ? focusSuffixPositions[index] : 0;
   }

@@ -13,16 +13,20 @@
 #include "CrossPointSettings.h"
 #include "MappedInputManager.h"
 #include "ReaderFontSizes.h"
-#include "activities/RenderLock.h"
 #include "SdCardFontSystem.h"
+#include "activities/RenderLock.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 namespace fui = freeink::ui;
 namespace {
 constexpr StrId TAB_NAME_IDS[] = {StrId::STR_FONT, StrId::STR_SIZE, StrId::STR_LAYOUT, StrId::STR_STYLE};
-constexpr StrId LAYOUT_ROW_NAME_IDS[] = {StrId::STR_LINE_SPACING, StrId::STR_EXTRA_SPACING, StrId::STR_PARA_ALIGNMENT,
-                                         StrId::STR_SCREEN_MARGIN};
+constexpr StrId LAYOUT_ROW_NAME_IDS[] = {
+    StrId::STR_LINE_SPACING, StrId::STR_EXTRA_SPACING,     StrId::STR_PARAGRAPH_INDENTATION, StrId::STR_PARA_ALIGNMENT,
+    StrId::STR_WORD_SPACING, StrId::STR_CHARACTER_SPACING, StrId::STR_SCREEN_MARGIN};
+constexpr StrId CHARACTER_SPACING_IDS[] = {StrId::STR_SPACING_MINUS_2, StrId::STR_SPACING_MINUS_1,
+                                           StrId::STR_SPACING_ZERO, StrId::STR_SPACING_PLUS_1,
+                                           StrId::STR_SPACING_PLUS_2};
 constexpr StrId STYLE_ROW_NAME_IDS[] = {StrId::STR_FOCUS_READING, StrId::STR_HYPHENATION, StrId::STR_EMBEDDED_STYLE,
                                         StrId::STR_TEXT_AA};
 constexpr StrId LINE_SPACING_IDS[] = {StrId::STR_TIGHT, StrId::STR_NORMAL, StrId::STR_WIDE, StrId::STR_EXTRA_WIDE};
@@ -82,10 +86,14 @@ void TextSettingsActivity::rebuildRowItems() {
   rowItems_.reserve(listCount());
   for (int i = 0; i < listCount(); ++i) {
     fui::ListItem item;
-    if (tab_ == Tab::Family) item.label = fonts_[i].name.c_str();
-    else if (tab_ == Tab::Size) item.label = sizes_[i].name.c_str();
-    else if (tab_ == Tab::Layout) item.label = I18N.get(LAYOUT_ROW_NAME_IDS[i]);
-    else if (tab_ == Tab::Style) item.label = I18N.get(STYLE_ROW_NAME_IDS[i]);
+    if (tab_ == Tab::Family)
+      item.label = fonts_[i].name.c_str();
+    else if (tab_ == Tab::Size)
+      item.label = sizes_[i].name.c_str();
+    else if (tab_ == Tab::Layout)
+      item.label = I18N.get(LAYOUT_ROW_NAME_IDS[i]);
+    else if (tab_ == Tab::Style)
+      item.label = I18N.get(STYLE_ROW_NAME_IDS[i]);
     item.actionValue = static_cast<int16_t>(i);
     item.icon = {};
     rowItems_.push_back(item);
@@ -131,8 +139,10 @@ bool TextSettingsActivity::handleButtons() {
     return true;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (ringPos() == 0) switchTab();
-    else activateRow(ringPos() - 1);
+    if (ringPos() == 0)
+      switchTab();
+    else
+      activateRow(ringPos() - 1);
     return true;
   }
   return false;
@@ -141,14 +151,18 @@ bool TextSettingsActivity::handleButtons() {
 void TextSettingsActivity::buildScreen(UiScreen& screen) {
   const int tabTop = afterHeader + previewHeight;
   const int captionHeight = renderer.getTextHeight(UI_10_FONT_ID) + metrics_.verticalSpacing;
-  screen.setContentMargin(fui::Insets{static_cast<int16_t>(tabTop), 0,
-                                      static_cast<int16_t>(bottomReserved + captionHeight), 0});
+  screen.setContentMargin(
+      fui::Insets{static_cast<int16_t>(tabTop), 0, static_cast<int16_t>(bottomReserved + captionHeight), 0});
   buildTabBar(screen);
   for (int i = 0; i < listCount(); ++i) {
-    if (tab_ == Tab::Family) rowValues_[i] = i == currentFamilyIndex_ ? tr(STR_SELECTED) : "";
-    else if (tab_ == Tab::Size) rowValues_[i] = i == currentSizeIndex_ ? tr(STR_SELECTED) : "";
-    else if (tab_ == Tab::Layout) rowValues_[i] = layoutValueText(i);
-    else rowValues_[i] = styleValueText(i);
+    if (tab_ == Tab::Family)
+      rowValues_[i] = i == currentFamilyIndex_ ? tr(STR_SELECTED) : "";
+    else if (tab_ == Tab::Size)
+      rowValues_[i] = i == currentSizeIndex_ ? tr(STR_SELECTED) : "";
+    else if (tab_ == Tab::Layout)
+      rowValues_[i] = layoutValueText(i);
+    else
+      rowValues_[i] = styleValueText(i);
     rowItems_[i].value = rowValues_[i].empty() ? nullptr : rowValues_[i].c_str();
   }
   fui::ListProps props;
@@ -248,7 +262,10 @@ void TextSettingsActivity::confirmLayoutRow(const int row) {
   switch (static_cast<LayoutRow>(row)) {
     case LayoutRow::LineSpacing:
       optionPopup_.show(StrId::STR_LINE_SPACING, LINE_SPACING_IDS, static_cast<int>(std::size(LINE_SPACING_IDS)),
-                        SETTINGS.lineSpacing, [](int value) { SETTINGS.lineSpacing = static_cast<uint8_t>(value); SETTINGS.saveToFile(); });
+                        SETTINGS.lineSpacing, [](int value) {
+                          SETTINGS.lineSpacing = static_cast<uint8_t>(value);
+                          SETTINGS.saveToFile();
+                        });
       requestUpdate();
       break;
     case LayoutRow::ParaSpacing:
@@ -258,18 +275,66 @@ void TextSettingsActivity::confirmLayoutRow(const int row) {
       break;
     case LayoutRow::Alignment:
       optionPopup_.show(StrId::STR_PARA_ALIGNMENT, ALIGNMENT_IDS, static_cast<int>(std::size(ALIGNMENT_IDS)),
-                        SETTINGS.paragraphAlignment, [](int value) { SETTINGS.paragraphAlignment = static_cast<uint8_t>(value); SETTINGS.saveToFile(); });
+                        SETTINGS.paragraphAlignment, [](int value) {
+                          SETTINGS.paragraphAlignment = static_cast<uint8_t>(value);
+                          SETTINGS.saveToFile();
+                        });
+      requestUpdate();
+      break;
+    case LayoutRow::ParaIndentation: {
+      std::vector<std::string> options;
+      options.reserve(6);
+      options.emplace_back(tr(STR_STATE_OFF));
+      for (int spaces = 1; spaces <= 5; ++spaces) options.push_back(std::to_string(spaces));
+      optionPopup_.show(StrId::STR_PARAGRAPH_INDENTATION, options, SETTINGS.paragraphIndentSpaces, [](int index) {
+        if (SETTINGS.paragraphIndentSpaces == index) return;
+        SETTINGS.paragraphIndentSpaces = static_cast<uint8_t>(index);
+        SETTINGS.saveToFile();
+      });
+      requestUpdate();
+      break;
+    }
+    case LayoutRow::WordSpacing: {
+      std::vector<std::string> options;
+      options.reserve((CrossPointSettings::WORD_SPACING_MAX - CrossPointSettings::WORD_SPACING_MIN) /
+                          CrossPointSettings::WORD_SPACING_STEP +
+                      1);
+      for (int percent = CrossPointSettings::WORD_SPACING_MIN; percent <= CrossPointSettings::WORD_SPACING_MAX;
+           percent += CrossPointSettings::WORD_SPACING_STEP)
+        options.push_back(std::to_string(percent) + "%");
+      const int current =
+          (SETTINGS.wordSpacing - CrossPointSettings::WORD_SPACING_MIN) / CrossPointSettings::WORD_SPACING_STEP;
+      optionPopup_.show(StrId::STR_WORD_SPACING, options, current, [](int index) {
+        const auto value =
+            static_cast<uint8_t>(CrossPointSettings::WORD_SPACING_MIN + index * CrossPointSettings::WORD_SPACING_STEP);
+        if (SETTINGS.wordSpacing == value) return;
+        SETTINGS.wordSpacing = value;
+        SETTINGS.saveToFile();
+      });
+      requestUpdate();
+      break;
+    }
+    case LayoutRow::CharacterSpacing:
+      optionPopup_.show(StrId::STR_CHARACTER_SPACING, CHARACTER_SPACING_IDS,
+                        static_cast<int>(std::size(CHARACTER_SPACING_IDS)), SETTINGS.characterSpacing, [](int index) {
+                          if (SETTINGS.characterSpacing == index) return;
+                          SETTINGS.characterSpacing = static_cast<uint8_t>(index);
+                          SETTINGS.saveToFile();
+                        });
       requestUpdate();
       break;
     case LayoutRow::ScreenMargin: {
       std::vector<std::string> options;
       for (int margin = CrossPointSettings::SCREEN_MARGIN_MIN; margin <= CrossPointSettings::SCREEN_MARGIN_MAX;
-           margin += CrossPointSettings::SCREEN_MARGIN_STEP) options.push_back(std::to_string(margin));
+           margin += CrossPointSettings::SCREEN_MARGIN_STEP)
+        options.push_back(std::to_string(margin));
       const int current = (std::clamp<int>(SETTINGS.screenMargin, CrossPointSettings::SCREEN_MARGIN_MIN,
-                                           CrossPointSettings::SCREEN_MARGIN_MAX) - CrossPointSettings::SCREEN_MARGIN_MIN) /
+                                           CrossPointSettings::SCREEN_MARGIN_MAX) -
+                           CrossPointSettings::SCREEN_MARGIN_MIN) /
                           CrossPointSettings::SCREEN_MARGIN_STEP;
       optionPopup_.show(StrId::STR_SCREEN_MARGIN, options, current, [](int value) {
-        SETTINGS.screenMargin = static_cast<uint8_t>(CrossPointSettings::SCREEN_MARGIN_MIN + value * CrossPointSettings::SCREEN_MARGIN_STEP);
+        SETTINGS.screenMargin = static_cast<uint8_t>(CrossPointSettings::SCREEN_MARGIN_MIN +
+                                                     value * CrossPointSettings::SCREEN_MARGIN_STEP);
         SETTINGS.saveToFile();
       });
       requestUpdate();
@@ -282,22 +347,47 @@ void TextSettingsActivity::confirmLayoutRow(const int row) {
 
 std::string TextSettingsActivity::layoutValueText(const int row) const {
   switch (static_cast<LayoutRow>(row)) {
-    case LayoutRow::LineSpacing: return SETTINGS.lineSpacing < std::size(LINE_SPACING_IDS) ? I18N.get(LINE_SPACING_IDS[SETTINGS.lineSpacing]) : I18N.get(StrId::STR_NORMAL);
-    case LayoutRow::ParaSpacing: return SETTINGS.extraParagraphSpacing ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
-    case LayoutRow::Alignment: return SETTINGS.paragraphAlignment < std::size(ALIGNMENT_IDS) ? I18N.get(ALIGNMENT_IDS[SETTINGS.paragraphAlignment]) : I18N.get(StrId::STR_JUSTIFY);
-    case LayoutRow::ScreenMargin: return std::to_string(SETTINGS.screenMargin);
-    default: return {};
+    case LayoutRow::LineSpacing:
+      return SETTINGS.lineSpacing < std::size(LINE_SPACING_IDS) ? I18N.get(LINE_SPACING_IDS[SETTINGS.lineSpacing])
+                                                                : I18N.get(StrId::STR_NORMAL);
+    case LayoutRow::ParaSpacing:
+      return SETTINGS.extraParagraphSpacing ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
+    case LayoutRow::ParaIndentation:
+      return SETTINGS.paragraphIndentSpaces == 0 ? tr(STR_STATE_OFF) : std::to_string(SETTINGS.paragraphIndentSpaces);
+    case LayoutRow::WordSpacing:
+      return std::to_string(SETTINGS.wordSpacing) + "%";
+    case LayoutRow::CharacterSpacing:
+      return I18N.get(CHARACTER_SPACING_IDS[SETTINGS.characterSpacing < std::size(CHARACTER_SPACING_IDS)
+                                                ? SETTINGS.characterSpacing
+                                                : CrossPointSettings::CHARACTER_SPACING_OFFSET]);
+    case LayoutRow::Alignment:
+      return SETTINGS.paragraphAlignment < std::size(ALIGNMENT_IDS)
+                 ? I18N.get(ALIGNMENT_IDS[SETTINGS.paragraphAlignment])
+                 : I18N.get(StrId::STR_JUSTIFY);
+    case LayoutRow::ScreenMargin:
+      return std::to_string(SETTINGS.screenMargin);
+    default:
+      return {};
   }
 }
 
 void TextSettingsActivity::confirmStyleRow(const int row) {
   uint8_t* value = nullptr;
   switch (static_cast<StyleRow>(row)) {
-    case StyleRow::FocusReading: value = &SETTINGS.focusReadingEnabled; break;
-    case StyleRow::Hyphenation: value = &SETTINGS.hyphenationEnabled; break;
-    case StyleRow::EmbeddedStyle: value = &SETTINGS.embeddedStyle; break;
-    case StyleRow::AntiAliasing: value = &SETTINGS.textAntiAliasing; break;
-    default: return;
+    case StyleRow::FocusReading:
+      value = &SETTINGS.focusReadingEnabled;
+      break;
+    case StyleRow::Hyphenation:
+      value = &SETTINGS.hyphenationEnabled;
+      break;
+    case StyleRow::EmbeddedStyle:
+      value = &SETTINGS.embeddedStyle;
+      break;
+    case StyleRow::AntiAliasing:
+      value = &SETTINGS.textAntiAliasing;
+      break;
+    default:
+      return;
   }
   *value = !*value;
   SETTINGS.saveToFile();
@@ -307,11 +397,20 @@ void TextSettingsActivity::confirmStyleRow(const int row) {
 std::string TextSettingsActivity::styleValueText(const int row) const {
   bool value = false;
   switch (static_cast<StyleRow>(row)) {
-    case StyleRow::FocusReading: value = SETTINGS.focusReadingEnabled; break;
-    case StyleRow::Hyphenation: value = SETTINGS.hyphenationEnabled; break;
-    case StyleRow::EmbeddedStyle: value = SETTINGS.embeddedStyle; break;
-    case StyleRow::AntiAliasing: value = SETTINGS.textAntiAliasing; break;
-    default: return {};
+    case StyleRow::FocusReading:
+      value = SETTINGS.focusReadingEnabled;
+      break;
+    case StyleRow::Hyphenation:
+      value = SETTINGS.hyphenationEnabled;
+      break;
+    case StyleRow::EmbeddedStyle:
+      value = SETTINGS.embeddedStyle;
+      break;
+    case StyleRow::AntiAliasing:
+      value = SETTINGS.textAntiAliasing;
+      break;
+    default:
+      return {};
   }
   return value ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
 }

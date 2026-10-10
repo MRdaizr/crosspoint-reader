@@ -35,8 +35,12 @@ class ParsedText {
   // Source-visible Unicode-codepoint offset for each logical token. This metadata
   // is used only to stamp section page LUTs and never reaches page serialization.
   std::vector<uint32_t> wordVisibleOffsets;
+  std::vector<uint8_t> wordLinkIds;
+  PageLinks linkTargets{255};
+  bool linkMetadataComplete = true;
   BlockStyle blockStyle;
-  bool extraParagraphSpacing;
+  uint8_t paragraphIndentSpaces;
+  uint8_t wordSpacingPercent = 100;
   bool hyphenationEnabled;
   bool focusReadingEnabled;
   bool isNaturalAlign;
@@ -72,17 +76,24 @@ class ParsedText {
 
  public:
   explicit ParsedText(const bool extraParagraphSpacing, const bool hyphenationEnabled = false,
-                      const bool focusReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle())
+                      const bool focusReadingEnabled = false, const BlockStyle& blockStyle = BlockStyle(),
+                      const uint8_t paragraphIndentSpaces = 2)
       : blockStyle(blockStyle),
-        extraParagraphSpacing(extraParagraphSpacing),
+        paragraphIndentSpaces(paragraphIndentSpaces),
         hyphenationEnabled(hyphenationEnabled),
         focusReadingEnabled(focusReadingEnabled),
         isNaturalAlign(false),
-        hasRtlWord(false) {}
+        hasRtlWord(false) {
+    // Kept for existing callers; indentation is independent of paragraph gaps.
+    (void)extraParagraphSpacing;
+  }
   ~ParsedText() = default;
 
   void addWord(std::string word, EpdFontFamily::Style fontStyle, bool underline = false, bool attachToPrevious = false,
-               uint32_t visibleTextOffset = 0);
+               uint32_t visibleTextOffset = 0, uint8_t linkId = 0);
+  uint8_t addLinkTarget(const char* href, uint32_t identity = 0);
+  bool linkTargetMatches(uint8_t linkId, const char* href, uint32_t identity = 0) const;
+  void markLinkMetadataIncomplete() { linkMetadataComplete = false; }
   void setRubyForWordAt(size_t index, const std::string& ruby);
   void setRubyGroupAt(size_t startIndex, size_t count, const std::string& ruby);
   EpdFontFamily::Style getWordStyleAt(size_t index) const {
@@ -96,5 +107,6 @@ class ParsedText {
   bool isEmpty() const { return words.empty(); }
   void layoutAndExtractLines(const GfxRenderer& renderer, int fontId, uint16_t viewportWidth,
                              const std::function<void(std::unique_ptr<TextBlock>, uint32_t)>& processLine,
-                             bool includeLastLine = true);
+                             bool includeLastLine = true, int8_t characterSpacing = 0,
+                             uint8_t wordSpacingPercent = 100);
 };

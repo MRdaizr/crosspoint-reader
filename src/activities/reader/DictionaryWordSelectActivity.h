@@ -36,6 +36,9 @@ class DictionaryWordSelectActivity final : public Activity {
     uint16_t row;
     const char* text;
     EpdFontFamily::Style style;
+    int8_t tracking;
+    uint8_t focusBoundary;
+    uint16_t focusSuffixX;
   };
 
   enum class Popup : uint8_t { None, Busy, NotFound, Error };

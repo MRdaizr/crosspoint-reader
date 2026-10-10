@@ -5,9 +5,9 @@
 #include <I18n.h>
 #include <Logging.h>
 
-#include "MappedInputManager.h"
 #include "AchievementsStore.h"
 #include "FlashcardStatsStore.h"
+#include "MappedInputManager.h"
 #include "PomodoroStatsStore.h"
 #include "ReadingStatsStore.h"
 #include "components/UITheme.h"
@@ -34,23 +34,28 @@ StrId titleFor(ClearCacheType type) {
 
 StrId warningFor(ClearCacheType type, int line) {
   if (type == ClearCacheType::All) {
-    return line == 1 ? StrId::STR_CLEAR_ALL_WARNING_1
-                     : line == 2 ? StrId::STR_CLEAR_ALL_WARNING_2 : StrId::STR_CLEAR_ALL_WARNING_3;
+    return line == 1   ? StrId::STR_CLEAR_ALL_WARNING_1
+           : line == 2 ? StrId::STR_CLEAR_ALL_WARNING_2
+                       : StrId::STR_CLEAR_ALL_WARNING_3;
   }
   if (type == ClearCacheType::Flashcards) {
-    return line == 1 ? StrId::STR_CLEAR_FLASHCARD_WARNING_1
-                     : line == 2 ? StrId::STR_CLEAR_FLASHCARD_WARNING_2 : StrId::STR_CLEAR_FLASHCARD_WARNING_3;
+    return line == 1   ? StrId::STR_CLEAR_FLASHCARD_WARNING_1
+           : line == 2 ? StrId::STR_CLEAR_FLASHCARD_WARNING_2
+                       : StrId::STR_CLEAR_FLASHCARD_WARNING_3;
   }
   if (type == ClearCacheType::ReadingStats) {
-    return line == 1 ? StrId::STR_CLEAR_READING_STATS_WARNING_1
-                     : line == 2 ? StrId::STR_CLEAR_READING_STATS_WARNING_2 : StrId::STR_NONE_OPT;
+    return line == 1   ? StrId::STR_CLEAR_READING_STATS_WARNING_1
+           : line == 2 ? StrId::STR_CLEAR_READING_STATS_WARNING_2
+                       : StrId::STR_NONE_OPT;
   }
   if (type == ClearCacheType::PomodoroStats) {
-    return line == 1 ? StrId::STR_CLEAR_POMODORO_WARNING_1
-                     : line == 2 ? StrId::STR_CLEAR_POMODORO_WARNING_2 : StrId::STR_NONE_OPT;
+    return line == 1   ? StrId::STR_CLEAR_POMODORO_WARNING_1
+           : line == 2 ? StrId::STR_CLEAR_POMODORO_WARNING_2
+                       : StrId::STR_NONE_OPT;
   }
-  return line == 1 ? StrId::STR_CLEAR_CACHE_WARNING_1
-                   : line == 2 ? StrId::STR_CLEAR_CACHE_WARNING_2 : StrId::STR_CLEAR_CACHE_WARNING_3;
+  return line == 1   ? StrId::STR_CLEAR_CACHE_WARNING_1
+         : line == 2 ? StrId::STR_CLEAR_CACHE_WARNING_2
+                     : StrId::STR_CLEAR_CACHE_WARNING_3;
 }
 }  // namespace
 
@@ -130,7 +135,7 @@ void ClearCacheActivity::clearCache() {
   if (cacheType == ClearCacheType::All) {
     const ClearCacheType originalType = cacheType;
     constexpr ClearCacheType TYPES[] = {ClearCacheType::Reading, ClearCacheType::ReadingStats,
-                                         ClearCacheType::Flashcards, ClearCacheType::PomodoroStats};
+                                        ClearCacheType::Flashcards, ClearCacheType::PomodoroStats};
     int totalCleared = 0;
     int totalFailed = 0;
     for (const auto type : TYPES) {
@@ -177,8 +182,10 @@ void ClearCacheActivity::clearCache() {
   if (cacheType == ClearCacheType::Flashcards) {
     FLASHCARD_STATS.clear();
     if (Storage.exists("/.crosspoint/flashcards")) {
-      if (Storage.removeDir("/.crosspoint/flashcards")) ++clearedCount;
-      else ++failedCount;
+      if (Storage.removeDir("/.crosspoint/flashcards"))
+        ++clearedCount;
+      else
+        ++failedCount;
     }
     for (size_t rootIndex = 0; rootIndex < FlashcardDeckUtils::ROOT_COUNT; ++rootIndex) {
       const char* rootPath = FlashcardDeckUtils::ROOTS[rootIndex];
@@ -192,8 +199,10 @@ void ClearCacheActivity::clearCache() {
         file.close();
         if (filename.size() > 4 && filename.rfind(".idx") == filename.size() - 4) {
           const std::string path = std::string(rootPath) + "/" + filename;
-          if (Storage.remove(path.c_str())) ++clearedCount;
-          else ++failedCount;
+          if (Storage.remove(path.c_str()))
+            ++clearedCount;
+          else
+            ++failedCount;
         }
       }
       decks.close();
@@ -220,14 +229,14 @@ void ClearCacheActivity::clearCache() {
     file.getName(name, sizeof(name));
     String itemName(name);
 
-    // Only delete directories matching known book cache names.
+    // Clear regenerable entries, keeping positions and interrupted-save backups.
     if (file.isDirectory() && isBookCacheDirectoryName(itemName.c_str())) {
       String fullPath = "/.crosspoint/" + itemName;
       LOG_DBG("CLEAR_CACHE", "Removing cache: %s", fullPath.c_str());
 
       file.close();  // Close before attempting to delete
 
-      if (Storage.removeDir(fullPath.c_str())) {
+      if (invalidateBookCacheDirectory(fullPath.c_str())) {
         clearedCount++;
       } else {
         LOG_ERR("CLEAR_CACHE", "Failed to remove: %s", fullPath.c_str());

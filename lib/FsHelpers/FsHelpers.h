@@ -39,6 +39,16 @@ inline bool hasPngExtension(const String& fileName) {
 // Check for .bmp extension (case-insensitive)
 bool hasBmpExtension(std::string_view fileName);
 
+// The standalone viewer supports these formats (GIF remains EPUB-only).
+inline bool hasImageExtension(std::string_view fileName) {
+  return hasBmpExtension(fileName) || hasPngExtension(fileName) || hasJpgExtension(fileName);
+}
+
+inline bool hasReflowableBookExtension(std::string_view fileName) {
+  return checkFileExtension(fileName, ".epub") || checkFileExtension(fileName, ".txt") ||
+         checkFileExtension(fileName, ".md");
+}
+
 // Check for .gif extension (case-insensitive)
 bool hasGifExtension(std::string_view fileName);
 inline bool hasGifExtension(const String& fileName) {

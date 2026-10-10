@@ -19,8 +19,8 @@
 #include "MappedInputManager.h"
 #include "OpdsServerStore.h"
 #include "RecentBooksStore.h"
-#include "components/UiAppHelpers.h"
 #include "components/UITheme.h"
+#include "components/UiAppHelpers.h"
 #include "fontIds.h"
 
 namespace fui = freeink::ui;
@@ -32,7 +32,7 @@ int HomeActivity::getMenuItemCount() const {
   // book, otherwise button wrapping and FUI hit values drift from the drawn
   // menu.
   int count = (metrics.homeContinueReadingInMenu && !recentBooks.empty()) ? 1 : static_cast<int>(recentBooks.size());
-  count += 5;  // File Browser, Recents, File transfer, Extensions, Settings
+  count += 6;  // Files, Recents, Library, File transfer, Extensions, Settings
   if (hasOpdsServers) {
     count++;
   }
@@ -41,7 +41,7 @@ int HomeActivity::getMenuItemCount() const {
 
 int HomeActivity::getMenuListCount() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  int count = 5 + (hasOpdsServers ? 1 : 0);
+  int count = 6 + (hasOpdsServers ? 1 : 0);
   if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) ++count;
   return count;
 }
@@ -148,7 +148,8 @@ void HomeActivity::onEnter() {
   const auto& metrics = UITheme::getInstance().getMetrics();
   loadRecentBooks(metrics.homeRecentBooksCount);
 
-  const int base = (metrics.homeContinueReadingInMenu && !recentBooks.empty()) ? 0 : static_cast<int>(recentBooks.size());
+  const int base =
+      (metrics.homeContinueReadingInMenu && !recentBooks.empty()) ? 0 : static_cast<int>(recentBooks.size());
   int menuIndex = menuItemToIndex(initialMenuItem, hasOpdsServers);
   if (metrics.homeContinueReadingInMenu && !recentBooks.empty() && initialMenuItem != HomeMenuItem::NONE) ++menuIndex;
   selectorIndex = initialMenuItem == HomeMenuItem::NONE ? 0 : base + menuIndex;
@@ -167,9 +168,7 @@ void HomeActivity::onExit() {
   freeCoverBuffer();
 }
 
-void HomeActivity::fuiScreen(UiScreen& screen, void* user) {
-  static_cast<HomeActivity*>(user)->buildFuiScreen(screen);
-}
+void HomeActivity::fuiScreen(UiScreen& screen, void* user) { static_cast<HomeActivity*>(user)->buildFuiScreen(screen); }
 
 void HomeActivity::onFuiMenu(const fui::ActionEvent& event, void* user) {
   auto* self = static_cast<HomeActivity*>(user);
@@ -183,9 +182,9 @@ void HomeActivity::onFuiMenu(const fui::ActionEvent& event, void* user) {
 
 void HomeActivity::buildFuiScreen(UiScreen& screen) {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  screen.setContentMargin(
-      fui::Insets{static_cast<int16_t>(metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset),
-                  0, static_cast<int16_t>(metrics.buttonHintsHeight), 0});
+  screen.setContentMargin(fui::Insets{
+      static_cast<int16_t>(metrics.homeTopPadding + metrics.homeCoverTileHeight + metrics.homeMenuTopOffset), 0,
+      static_cast<int16_t>(metrics.buttonHintsHeight), 0});
 
   const int menuCount = getMenuListCount();
   fuiMenuLabels.clear();
@@ -210,6 +209,9 @@ void HomeActivity::buildFuiScreen(UiScreen& screen) {
   menuIconSlots.push_back(FuiMenuIconSlot::HomeBrowseFiles);
   fuiMenuLabels.emplace_back(tr(STR_MENU_RECENT_BOOKS));
   menuIcons.push_back(Recent);
+  menuIconSlots.push_back(FuiMenuIconSlot::HomeRecents);
+  fuiMenuLabels.emplace_back(tr(STR_LIBRARY));
+  menuIcons.push_back(Library);
   menuIconSlots.push_back(FuiMenuIconSlot::HomeRecents);
   if (hasOpdsServers) {
     fuiMenuLabels.emplace_back(tr(STR_OPDS_BROWSER));
@@ -244,9 +246,8 @@ void HomeActivity::buildFuiScreen(UiScreen& screen) {
   fuiMenuProps.labelText = screen.theme().bodyText;
   fuiMenuProps.valueInset = 8;
   fuiMenuProps.selectedIndex = static_cast<int16_t>(selected);
-  fuiMenuProps.rowHeight = static_cast<int16_t>(mappedInput.hasTouch()
-                                                    ? screen.theme().rowHeight
-                                                    : metrics.listRowHeight);
+  fuiMenuProps.rowHeight =
+      static_cast<int16_t>(mappedInput.hasTouch() ? screen.theme().rowHeight : metrics.listRowHeight);
   fuiNav.syncToProps(screen.body(), fuiMenuProps.rowHeight, screen.theme().listRowGap, menuCount, fuiMenuProps);
   screen.list(fuiMenuProps);
 }
@@ -337,6 +338,9 @@ void HomeActivity::activateSelected() {
     case HomeMenuItem::RECENTS:
       onRecentsOpen();
       break;
+    case HomeMenuItem::LIBRARY:
+      onLibraryOpen();
+      break;
     case HomeMenuItem::OPDS_BROWSER:
       onOpdsBrowserOpen();
       break;
@@ -400,6 +404,7 @@ void HomeActivity::onSelectBook(const std::string& path) { activityManager.goToR
 void HomeActivity::onFileBrowserOpen() { activityManager.goToFileBrowser(); }
 
 void HomeActivity::onRecentsOpen() { activityManager.goToRecentBooks(); }
+void HomeActivity::onLibraryOpen() { activityManager.goToLibrary(); }
 
 void HomeActivity::onSettingsOpen() { activityManager.goToSettings(); }
 

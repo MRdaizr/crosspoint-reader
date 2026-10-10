@@ -115,15 +115,7 @@ bool isNonNavigableInlineElement(const char* name) { return strcmp(name, "span")
 
 bool isNonVisibleTextTag(const char* name) { return name && VisibleTextUtils::isNonVisibleElement(name); }
 
-bool isInternalEpubLink(const char* href) {
-  if (!href || href[0] == '\0') return false;
-  if (strncmp(href, "http://", 7) == 0 || strncmp(href, "https://", 8) == 0) return false;
-  if (strncmp(href, "mailto:", 7) == 0) return false;
-  if (strncmp(href, "ftp://", 6) == 0) return false;
-  if (strncmp(href, "tel:", 4) == 0) return false;
-  if (strncmp(href, "javascript:", 11) == 0) return false;
-  return true;
-}
+bool isInternalEpubLink(const char* href) { return isInternalPageLink(href); }
 
 bool isHeaderOrBlock(const char* name) {
   return matches(name, HEADER_TAGS, std::size(HEADER_TAGS)) || matches(name, BLOCK_TAGS, std::size(BLOCK_TAGS));
@@ -342,7 +334,15 @@ void ChapterHtmlSlimParser::flushPartWordBuffer() {
   if (insideTableCell && !tableRowStacked && tableCellTextBytes + wordBytes > MAX_GRID_TABLE_CELL_BYTES) {
     fallbackTableRowToStacked();
   }
-  currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, partWordVisibleOffset);
+  uint8_t linkId = 0;
+  if (insideFootnoteLink && !currentLinkHref) currentTextBlock->markLinkMetadataIncomplete();
+  if (insideFootnoteLink && currentLinkHref) {
+    if (!currentTextBlock->linkTargetMatches(currentFootnoteLinkId, currentLinkHref.get(), currentLinkIdentity)) {
+      currentFootnoteLinkId = currentTextBlock->addLinkTarget(currentLinkHref.get(), currentLinkIdentity);
+    }
+    linkId = currentFootnoteLinkId;
+  }
+  currentTextBlock->addWord(partWordBuffer, fontStyle, false, nextWordContinues, partWordVisibleOffset, linkId);
   if (insideTableCell && !tableRowStacked) {
     tableCellTextBytes += wordBytes;
     if (currentTextBlock->size() > MAX_GRID_TABLE_CELL_WORDS) {
@@ -394,7 +394,12 @@ void ChapterHtmlSlimParser::startNewTextBlock(const BlockStyle& blockStyle) {
   // If the pending anchor is a TOC chapter boundary, force a page break after the previous
   // block is flushed so the chapter starts on a fresh page.
   flushPendingAnchor();
-  currentTextBlock.reset(new ParsedText(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled, blockStyle));
+  currentTextBlock = makeUniqueNoThrow<ParsedText>(extraParagraphSpacing, hyphenationEnabled, focusReadingEnabled,
+                                                   blockStyle, paragraphIndentSpaces);
+  if (!currentTextBlock) {
+    LOG_ERR("EHP", "OOM: paragraph text block");
+    return;
+  }
   wordsExtractedInBlock = 0;
   listItemBulletOnly = false;
 }
@@ -557,14 +562,16 @@ void ChapterHtmlSlimParser::finishTableRow() {
   for (size_t column = 0; column < columnCount; ++column) {
     auto& lines = tableCellLines[column];
     tableRowCells[column]->layoutAndExtractLines(
-        renderer, fontId, textWidth, [&lines, this](std::unique_ptr<TextBlock> line, const uint32_t offset) {
+        renderer, fontId, textWidth,
+        [&lines, this](std::unique_ptr<TextBlock> line, const uint32_t offset) {
           const size_t lineIndex = lines.size();
           lines.push_back(std::move(line));
           if (tableLineVisibleOffsets.size() <= lineIndex) {
             tableLineVisibleOffsets.resize(lineIndex + 1, UINT32_MAX);
           }
           tableLineVisibleOffsets[lineIndex] = std::min(tableLineVisibleOffsets[lineIndex], offset);
-        });
+        },
+        true, characterSpacing, wordSpacingPercent);
     maxLineCount = std::max(maxLineCount, lines.size());
   }
   tableRowCells.clear();
@@ -762,8 +769,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
     if (!self->currentTextBlock) {
       const BlockStyle flowStyle =
           self->blockStyleStack.empty() ? BlockStyle() : self->blockStyleStack.back().withoutBottom();
-      self->currentTextBlock = makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled,
-                                                             self->focusReadingEnabled, flowStyle);
+      self->currentTextBlock =
+          makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled,
+                                        self->focusReadingEnabled, flowStyle, self->paragraphIndentSpaces);
     }
     self->inRuby = true;
     self->collectingRubyText = false;
@@ -861,8 +869,9 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       tableCellBlockStyle.isRtl = cssStyle.direction == CssTextDirection::Rtl;
     }
 
-    self->currentTextBlock = makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled,
-                                                           self->focusReadingEnabled, tableCellBlockStyle);
+    self->currentTextBlock =
+        makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled, self->focusReadingEnabled,
+                                      tableCellBlockStyle, self->paragraphIndentSpaces);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: table cell");
       self->skipUntilDepth = self->depth;
@@ -1258,8 +1267,19 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
       }
       self->insideFootnoteLink = true;
       self->footnoteLinkDepth = self->depth;
-      strncpy(self->currentFootnote.href, href, sizeof(self->currentFootnote.href) - 1);
-      self->currentFootnote.href[sizeof(self->currentFootnote.href) - 1] = '\0';
+      self->currentLinkIdentity = ++self->nextLinkIdentity;
+      if (self->currentLinkIdentity == 0) self->currentLinkIdentity = ++self->nextLinkIdentity;
+      const size_t hrefLength = strlen(href);
+      self->currentLinkHref = makeUniqueNoThrow<char[]>(hrefLength + 1);
+      if (self->currentLinkHref)
+        memcpy(self->currentLinkHref.get(), href, hrefLength + 1);
+      else
+        LOG_ERR("EHP", "OOM: active link target; retaining legacy footnote");
+      self->currentFootnoteLinkId =
+          self->currentTextBlock ? self->currentTextBlock->addLinkTarget(href, self->currentLinkIdentity) : 0;
+      // Never make a truncated target navigable in the legacy 256-byte list.
+      self->currentFootnote.href[0] = 0;
+      if (hrefLength < sizeof(self->currentFootnote.href)) memcpy(self->currentFootnote.href, href, hrefLength + 1);
       self->currentFootnote.number[0] = '\0';
       self->currentFootnoteLinkTextLen = 0;
 
@@ -1546,8 +1566,9 @@ void XMLCALL ChapterHtmlSlimParser::characterData(void* userData, const XML_Char
   if (!self->currentTextBlock) {
     const BlockStyle flowStyle =
         self->blockStyleStack.empty() ? BlockStyle() : self->blockStyleStack.back().withoutBottom();
-    self->currentTextBlock = makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled,
-                                                           self->focusReadingEnabled, flowStyle);
+    self->currentTextBlock =
+        makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled, self->focusReadingEnabled,
+                                      flowStyle, self->paragraphIndentSpaces);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: text block for character data");
       return;
@@ -1839,6 +1860,8 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
       self->pendingFootnotes.push_back({wordIndex, entry});
     }
     self->insideFootnoteLink = false;
+    self->currentFootnoteLinkId = 0;
+    self->currentLinkHref.reset();
   }
 
   // Leaving skip
@@ -1880,8 +1903,9 @@ void XMLCALL ChapterHtmlSlimParser::endElement(void* userData, const XML_Char* n
     // The next ordinary text node after </table> starts a fresh flow block.
     const BlockStyle flowStyle =
         self->blockStyleStack.empty() ? BlockStyle() : self->blockStyleStack.back().withoutBottom();
-    self->currentTextBlock = makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled,
-                                                           self->focusReadingEnabled, flowStyle);
+    self->currentTextBlock =
+        makeUniqueNoThrow<ParsedText>(self->extraParagraphSpacing, self->hyphenationEnabled, self->focusReadingEnabled,
+                                      flowStyle, self->paragraphIndentSpaces);
     if (!self->currentTextBlock) {
       LOG_ERR("EHP", "OOM: text block after table");
     }
@@ -2140,11 +2164,15 @@ bool ChapterHtmlSlimParser::parseAndBuildPages() {
 }
 
 void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const uint32_t visibleTextOffset) {
-  const int lineHeight =
-      renderer.getLineHeight(fontId) * lineCompression + line->getRubyShift(renderer.getFontAscenderSize(fontId));
+  const int rubyShift = line->getRubyShift(renderer.getFontAscenderSize(fontId));
+  const int lineHeight = renderer.getLineHeight(fontId) * lineCompression + rubyShift;
 
   if (!currentPage) {
-    currentPage.reset(new Page());
+    currentPage = makeUniqueNoThrow<Page>();
+    if (!currentPage) {
+      LOG_ERR("EHP", "OOM: Page");
+      return;
+    }
     currentPageNextY = 0;
   }
 
@@ -2154,7 +2182,11 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
 
   if (currentPageNextY + lineHeight > viewportHeight) {
     completeCurrentPage(xpathParagraphIndex, xpathListItemIndex);
-    currentPage.reset(new Page());
+    currentPage = makeUniqueNoThrow<Page>();
+    if (!currentPage) {
+      LOG_ERR("EHP", "OOM: Page");
+      return;
+    }
     currentPageNextY = 0;
   }
 
@@ -2169,6 +2201,16 @@ void ChapterHtmlSlimParser::addLineToPage(std::unique_ptr<TextBlock> line, const
 
   // Apply horizontal left inset (margin + padding) as x position offset
   const int16_t xOffset = line->getBlockStyle().leftInset();
+  auto spans = line->takeLinkSpans();
+  currentPage->linkGeometryComplete = currentPage->linkGeometryComplete && line->hasCompleteLinkGeometry();
+  for (auto& span : spans) {
+    span.x += xOffset;
+    span.y += currentPageNextY + rubyShift;
+    if (!span.validGeometry() || !currentPage->links.append(std::move(span))) {
+      if (currentPage->links.size() < Page::MAX_LINKS_PER_PAGE) currentPage->linkGeometryComplete = false;
+      LOG_DBG("EHP", "Dropped page link (limit/OOM/geometry)");
+    }
+  }
   auto pageLine = makeUniqueNoThrow<PageLine>(std::move(line), xOffset, currentPageNextY);
   if (!pageLine) {
     LOG_ERR("EHP", "OOM: PageLine");
@@ -2185,7 +2227,11 @@ void ChapterHtmlSlimParser::makePages(const bool includeLastLine) {
   }
 
   if (!currentPage) {
-    currentPage.reset(new Page());
+    currentPage = makeUniqueNoThrow<Page>();
+    if (!currentPage) {
+      LOG_ERR("EHP", "OOM: Page");
+      return;
+    }
     currentPageNextY = 0;
   }
 
@@ -2209,7 +2255,7 @@ void ChapterHtmlSlimParser::makePages(const bool includeLastLine) {
         }
         addLineToPage(std::move(textBlock), offset);
       },
-      includeLastLine);
+      includeLastLine, characterSpacing, wordSpacingPercent);
 
   // Keep trailing spacing and pending footnotes until the paragraph ends.
   if (!includeLastLine) return;

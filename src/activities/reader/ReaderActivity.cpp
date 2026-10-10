@@ -2,7 +2,10 @@
 
 #include <FontCacheManager.h>
 #include <FsHelpers.h>
+#include <HalClock.h>
 #include <HalStorage.h>
+#include <I18n.h>
+#include <KOReaderDocumentId.h>
 #include <Memory.h>
 
 #include <algorithm>
@@ -18,12 +21,48 @@
 #include "Xtc.h"
 #include "XtcReaderActivity.h"
 #include "activities/reader/ReaderUtils.h"
+#include "components/UITheme.h"
+#include "fontIds.h"
+#include "util/PluginEvents.h"
+
+bool ReaderActivity::handleProgressRecoveryError() {
+  if (!progressRecoveryFailed_) return false;
+  if (mappedInput.wasReleased(MappedInputManager::Button::Back)) onGoHome();
+  return true;
+}
+
+void ReaderActivity::markPageRendered() {
+  resumeGate.markPageRendered();
+  renderedForEvents.store(true, std::memory_order_release);
+  const int8_t turn = pendingSessionTurn.exchange(0, std::memory_order_acq_rel);
+  readerSession.noteTurn(turn > 0, turn != 0);
+  const auto epoch = halClock.hasValidTime() ? halClock.nowUtc() : 0;
+  readerSession.onRenderComplete(millis(), epoch, getScreenshotInfo().progressPercent * 100);
+}
+
+void ReaderActivity::flushReaderSession() {
+  if (!pluginevents::anySubscriber(pluginevents::Event::ReaderSession) || !readerSession.takeForFlush()) return;
+  // A document hash is computed only for a subscribed, non-empty session.
+  const std::string document = KOReaderDocumentId::calculate(bookPath);
+  if (document.size() != 32) return;
+  char start[24], end[24], duration[16], first[8], last[8];
+  snprintf(start, sizeof(start), "%lld", static_cast<long long>(readerSession.startTime()));
+  snprintf(end, sizeof(end), "%lld", static_cast<long long>(readerSession.endTime()));
+  snprintf(duration, sizeof(duration), "%u", readerSession.durationSeconds());
+  snprintf(first, sizeof(first), "%u", readerSession.startProgressBp());
+  snprintf(last, sizeof(last), "%u", readerSession.endProgressBp());
+  const pluginevents::Var vars[] = {{"book", bookPath.c_str()},     {"document", document.c_str()},
+                                    {"start_time", start},          {"end_time", end},
+                                    {"duration_seconds", duration}, {"start_progress_bp", first},
+                                    {"end_progress_bp", last},      {"progress_scale", "10000"}};
+  pluginevents::emit(pluginevents::Event::ReaderSession, vars, 8);
+}
 
 bool ReaderActivity::isXtcFile(const std::string& path) { return FsHelpers::hasXtcExtension(path); }
 
 bool ReaderActivity::isTxtFile(const std::string& path) {
   return FsHelpers::hasTxtExtension(path) ||
-         FsHelpers::hasMarkdownExtension(path);  // Treat .md as txt files (until we have a markdown reader)
+         FsHelpers::hasMarkdownExtension(path);  // Explicit compatibility factory; default routing prepares reflow.
 }
 
 std::unique_ptr<ReaderActivity> ReaderActivity::create(GfxRenderer& renderer, MappedInputManager& mappedInput,
@@ -131,12 +170,22 @@ void ReaderActivity::rememberBookOnceRendered() {
   APP_STATE.openEpubPath = bookPath;
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(bookPath, getBookTitle(), getBookAuthor(), getBookThumbBmpPath());
+  const pluginevents::Var vars[] = {{"book", bookPath.c_str()}};
+  pluginevents::emit(pluginevents::Event::ReaderOpen, vars, 1);
 }
 
 void ReaderActivity::onExit() {
   Activity::onExit();
   // A quick sleep/back can arrive before loop() consumes the first render.
   rememberBookOnceRendered();
+  flushReaderSession();
+  if (renderedForEvents.load(std::memory_order_acquire) &&
+      pluginevents::anySubscriber(pluginevents::Event::ReaderExit)) {
+    char percent[8];
+    snprintf(percent, sizeof(percent), "%d", getScreenshotInfo().progressPercent);
+    const pluginevents::Var vars[] = {{"book", bookPath.c_str()}, {"percent", percent}};
+    pluginevents::emit(pluginevents::Event::ReaderExit, vars, 2);
+  }
   // Derived hooks must release parser/cache resources while the Activity
   // context is still valid (for example EPUB image extraction and stats).
   onBookExited();
@@ -243,6 +292,14 @@ void ReaderActivity::renderEndOfBook(const MappedInputManager& input) {
 }
 
 void ReaderActivity::render(RenderLock&&) {
+  if (progressRecoveryFailed_) {
+    renderer.clearScreen();
+    renderer.drawCenteredText(UI_10_FONT_ID, renderer.getScreenHeight() / 2, tr(STR_READER_PROGRESS_READ_FAILED));
+    const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    renderer.displayBuffer();
+    return;
+  }
   if (isAtEndOfBook()) {
     renderEndOfBook(mappedInput);
     return;

@@ -1,6 +1,7 @@
 #include "BmpViewerActivity.h"
 
 #include <Bitmap.h>
+#include <Epub/converters/JpegToFramebufferConverter.h>
 #include <Epub/converters/PngToFramebufferConverter.h>
 #include <FsHelpers.h>
 #include <GfxRenderer.h>
@@ -11,14 +12,13 @@
 #include <algorithm>
 
 #include "CrossPointSettings.h"
+#include "activities/network/airpage/AirPageWallpaper.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 
 namespace {
-constexpr char CUSTOM_SLEEP_ROOT_BMP[] = "/sleep.bmp";
 constexpr char TRANSPARENT_SLEEP_ROOT_BMP[] = "/sleep-overlay.bmp";
 constexpr char TRANSPARENT_SLEEP_ROOT_PNG[] = "/sleep-overlay.png";
-constexpr size_t COPY_BUFFER_SIZE = 2048;
 }  // namespace
 
 BmpViewerActivity::BmpViewerActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string path)
@@ -40,13 +40,39 @@ void BmpViewerActivity::loadSiblingImages() {
     return;
   }
 
-  char name[500];
+  // Filename scratch exceeds the small task-stack budget; checked and freed after scanning.
+  auto name = makeUniqueNoThrow<char[]>(500);
+  if (!name) {
+    LOG_ERR("BMP", "OOM: sibling filename scratch");
+    return;
+  }
+  size_t count = 0;
+  size_t nameBytes = 0;
   for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
     if (!file.isDirectory()) {
-      file.getName(name, sizeof(name));
+      file.getName(name.get(), 500);
+      if (name[0] != '.' && FsHelpers::hasImageExtension(std::string_view(name.get()))) {
+        ++count;
+        nameBytes += strlen(name.get()) + 1 + 32;
+      }
+    }
+    file.close();
+  }
+  // If an unusually large directory cannot fit, keep the selected image
+  // viewable without allocating its whole sibling list or aborting.
+  const size_t vectorBytes = count * sizeof(std::string);
+  if (vectorBytes + 4096 > ESP.getMaxAllocHeap() || vectorBytes + nameBytes + 16384 > ESP.getFreeHeap()) {
+    LOG_ERR("BMP", "Low memory: sibling navigation unavailable for %u images", static_cast<unsigned>(count));
+    return;
+  }
+  siblingImages.reserve(count);
+  dir.rewindDirectory();
+  for (auto file = dir.openNextFile(); file; file = dir.openNextFile()) {
+    if (!file.isDirectory()) {
+      file.getName(name.get(), 500);
       if (name[0] != '.') {
-        std::string fname(name);
-        if (FsHelpers::hasBmpExtension(fname) || FsHelpers::hasPngExtension(fname)) {
+        std::string fname(name.get());
+        if (FsHelpers::hasImageExtension(fname)) {
           siblingImages.push_back(fname);
         }
       }
@@ -66,26 +92,64 @@ void BmpViewerActivity::loadSiblingImages() {
 }
 
 bool BmpViewerActivity::canSetSleepCover() const {
-  return FsHelpers::hasBmpExtension(filePath) ||
+  return FsHelpers::hasBmpExtension(filePath) || FsHelpers::hasJpgExtension(filePath) ||
          (SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::TRANSPARENT_CUSTOM &&
           FsHelpers::hasPngExtension(filePath));
 }
 
-bool BmpViewerActivity::renderPng() {
+bool BmpViewerActivity::renderImage() {
+  const bool jpeg = FsHelpers::hasJpgExtension(filePath);
+  JpegToFramebufferConverter jpegDecoder;
+  PngToFramebufferConverter pngDecoder;
+  ImageToFramebufferDecoder& decoder =
+      jpeg ? static_cast<ImageToFramebufferDecoder&>(jpegDecoder) : static_cast<ImageToFramebufferDecoder&>(pngDecoder);
   ImageDimensions dimensions;
-  if (!PngToFramebufferConverter::getDimensionsStatic(filePath, dimensions)) return false;
+  if (!decoder.getDimensions(filePath, dimensions)) return false;
   if (dimensions.width <= 0 || dimensions.height <= 0) return false;
 
   const float scale = std::min(static_cast<float>(renderer.getScreenWidth()) / dimensions.width,
                                static_cast<float>(renderer.getScreenHeight()) / dimensions.height);
-  const int width = std::min(renderer.getScreenWidth(), static_cast<int>(dimensions.width * std::min(scale, 1.0f)));
+  const int width =
+      std::max(1, std::min(renderer.getScreenWidth(), static_cast<int>(dimensions.width * std::min(scale, 1.0f))));
   const int height =
-      std::min(renderer.getScreenHeight(), static_cast<int>(dimensions.height * std::min(scale, 1.0f)));
+      std::max(1, std::min(renderer.getScreenHeight(), static_cast<int>(dimensions.height * std::min(scale, 1.0f))));
   RenderConfig config{(renderer.getScreenWidth() - width) / 2, (renderer.getScreenHeight() - height) / 2, width,
                       height};
 
-  PngToFramebufferConverter converter;
-  return converter.decodeToFramebuffer(filePath, renderer, config);
+  config.useExactDimensions = true;
+  const bool previous = currentImageIndex > 0;
+  const bool next = currentImageIndex >= 0 && currentImageIndex + 1 < static_cast<int>(siblingImages.size());
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), canSetSleepCover() ? tr(STR_SET_SLEEP_COVER) : "",
+                                            previous ? "<" : "", next ? ">" : "");
+  const auto drawImage = [&]() {
+    if (!decoder.decodeToFramebuffer(filePath, renderer, config)) return false;
+    GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+    return true;
+  };
+  if (!drawImage()) return false;
+  if (!jpeg) return true;
+
+  renderer.displayGrayscaleBase(HalDisplay::HALF_REFRESH);
+  bool ready = true;
+  for (const auto mode : {GfxRenderer::GRAYSCALE_LSB, GfxRenderer::GRAYSCALE_MSB}) {
+    renderer.clearScreen(0x00);
+    renderer.setRenderMode(mode);
+    if (!drawImage()) {
+      ready = false;
+      break;
+    }
+    if (mode == GfxRenderer::GRAYSCALE_LSB)
+      renderer.copyGrayscaleLsbBuffers();
+    else
+      renderer.copyGrayscaleMsbBuffers();
+  }
+  if (ready) renderer.displayGrayBuffer();
+  // Restore the BW framebuffer even on a failed grayscale plane.
+  renderer.setRenderMode(GfxRenderer::BW);
+  renderer.clearScreen();
+  if (ready) ready = drawImage();
+  renderer.cleanupGrayscaleWithFrameBuffer();
+  return ready;
 }
 
 void BmpViewerActivity::onEnter() {
@@ -102,18 +166,20 @@ void BmpViewerActivity::onEnter() {
   Rect popupRect = GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
   GUI.fillPopupProgress(renderer, popupRect, 20);  // Initial 20% progress
 
-  if (FsHelpers::hasPngExtension(filePath)) {
+  if (FsHelpers::hasPngExtension(filePath) || FsHelpers::hasJpgExtension(filePath)) {
     renderer.clearScreen();
     const bool hasPrevious = siblingImages.size() > 1 && currentImageIndex > 0;
     const bool hasNext = siblingImages.size() > 1 && currentImageIndex != -1 &&
                          currentImageIndex < static_cast<int>(siblingImages.size()) - 1;
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), canSetSleepCover() ? tr(STR_SET_SLEEP_COVER) : "",
                                               hasPrevious ? "<" : "", hasNext ? ">" : "");
-    if (renderPng()) {
+    if (renderImage()) {
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
-      renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+      // JPEG gray planes are already on the panel; another full BW refresh would erase them.
+      if (!FsHelpers::hasJpgExtension(filePath)) renderer.displayBuffer(HalDisplay::FAST_REFRESH);
     } else {
-      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, "Could not open file");
+      renderer.clearScreen();
+      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_IMAGE_OPEN_FAILED));
       GUI.drawButtonHints(renderer, labels.btn1, "", "", "");
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
     }
@@ -171,7 +237,7 @@ void BmpViewerActivity::onEnter() {
     } else {
       // Handle file parsing error
       renderer.clearScreen();
-      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, "Invalid BMP File");
+      renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_IMAGE_OPEN_FAILED));
       const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
       GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
       renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -181,7 +247,7 @@ void BmpViewerActivity::onEnter() {
   } else {
     // Handle file open error
     renderer.clearScreen();
-    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, "Could not open file");
+    renderer.drawCenteredText(UI_10_FONT_ID, pageHeight / 2, tr(STR_IMAGE_OPEN_FAILED));
     const auto labels = mappedInput.mapLabels(tr(STR_BACK), "", "", "");
     GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
     renderer.displayBuffer(HalDisplay::HALF_REFRESH);
@@ -197,43 +263,24 @@ void BmpViewerActivity::onExit() {
 void BmpViewerActivity::doSetSleepCover() {
   GUI.drawPopup(renderer, tr(STR_LOADING_POPUP));
 
-  const bool transparentMode = SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::TRANSPARENT_CUSTOM;
+  const bool transparentMode = !FsHelpers::hasJpgExtension(filePath) &&
+                               SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::TRANSPARENT_CUSTOM;
   if (!canSetSleepCover()) return;
 
-  const char* destination = transparentMode
-                                ? (FsHelpers::hasPngExtension(filePath) ? TRANSPARENT_SLEEP_ROOT_PNG
-                                                                           : TRANSPARENT_SLEEP_ROOT_BMP)
-                                : CUSTOM_SLEEP_ROOT_BMP;
-  bool success = filePath == destination;
-
-  if (!success) {
-    auto buffer = makeUniqueNoThrow<uint8_t[]>(COPY_BUFFER_SIZE);
-    if (!buffer) {
-      LOG_ERR("BMP", "OOM: sleep cover copy buffer");
-    } else {
-      HalFile inFile, outFile;
-      if (Storage.openFileForRead("BMP", filePath, inFile) && Storage.openFileForWrite("BMP", destination, outFile)) {
-        int bytesRead;
-        success = true;
-        while ((bytesRead = inFile.read(buffer.get(), COPY_BUFFER_SIZE)) > 0) {
-          if (outFile.write(buffer.get(), static_cast<size_t>(bytesRead)) != static_cast<size_t>(bytesRead)) {
-            success = false;
-            break;
-          }
-        }
-        if (bytesRead < 0) success = false;
-        outFile.close();
-      }
-    }
+  if (!transparentMode) {
+    const auto format = FsHelpers::hasJpgExtension(filePath) ? airpage::ImageFormat::Jpeg : airpage::ImageFormat::Bmp;
+    const bool success = airpage::AirPageWallpaper::installFile(
+        filePath.c_str(), format, SETTINGS.sleepScreenCoverMode == CrossPointSettings::SLEEP_SCREEN_COVER_MODE::CROP);
+    GUI.drawPopup(renderer, success ? tr(STR_DONE) : tr(STR_FAILED_LOWER));
+    delay(1000);
+    onEnter();
+    return;
   }
 
-  if (success) {
-    if (!transparentMode) SETTINGS.sleepScreen = CrossPointSettings::SLEEP_SCREEN_MODE::CUSTOM;
-    SETTINGS.saveToFile();
-    GUI.drawPopup(renderer, tr(STR_DONE));
-  } else {
-    GUI.drawPopup(renderer, tr(STR_FAILED_LOWER));
-  }
+  const char* destination =
+      FsHelpers::hasPngExtension(filePath) ? TRANSPARENT_SLEEP_ROOT_PNG : TRANSPARENT_SLEEP_ROOT_BMP;
+  const bool success = airpage::AirPageWallpaper::installOverlay(filePath.c_str(), destination);
+  GUI.drawPopup(renderer, success ? tr(STR_DONE) : tr(STR_FAILED_LOWER));
 
   delay(1000);
   onEnter();

@@ -10,14 +10,12 @@
 #include <utility>
 
 #include "KOReaderCredentialStore.h"
+#include "KOReaderSyncPayload.h"
 
 int KOReaderSyncClient::lastHttpCode = 0;
 
 namespace {
-constexpr char DEVICE_NAME[] = "CrossPoint";
-constexpr char DEVICE_ID[] = "crosspoint-reader";
-
-// wolfSSL uses the default allocator, which can use PSRAM on supported builds.
+// ESP32-C3 has no PSRAM; wolfSSL and the reader share the internal heap.
 // Keep a free-space floor and room for a full TLS record when the server does
 // not negotiate our smaller record limit. These are preflight margins, not a
 // guarantee that a handshake will fit.
@@ -144,43 +142,7 @@ KOReaderSyncClient::Error KOReaderSyncClient::getProgress(const std::string& doc
     }
 
     outProgress.document = documentHash;
-    outProgress.progress = doc["progress"].as<std::string>();
-    outProgress.percentage = doc["percentage"].as<float>();
-    outProgress.device = doc["device"].as<std::string>();
-    outProgress.deviceId = doc["device_id"].as<std::string>();
-    outProgress.timestamp = doc["timestamp"].as<int64_t>();
-
-    outProgress.metadata.reset();
-    if (KOREADER_STORE.getSendMetadata()) {
-      const JsonObjectConst metadata = doc["metadata"].as<JsonObjectConst>();
-      if (!metadata.isNull()) {
-        KOReaderMetadata value;
-        value.filename = metadata["filename"].as<const char*>() ? metadata["filename"].as<const char*>() : "";
-        value.title = metadata["title"].as<const char*>() ? metadata["title"].as<const char*>() : "";
-        value.authors = metadata["authors"].as<const char*>() ? metadata["authors"].as<const char*>() : "";
-        outProgress.metadata = std::move(value);
-      }
-    }
-
-    // The rich position is a CrossPoint extension and must never be sent to
-    // or trusted from arbitrary KOSync-compatible servers.
-    outProgress.position.reset();
-    if (KOREADER_STORE.usesCrossPointSyncServer()) {
-      const JsonObjectConst position = doc["position"].as<JsonObjectConst>();
-      if (!position.isNull()) {
-        KOReaderRichPosition value;
-        value.pctQ = position["pctQ"].as<uint32_t>();
-        value.spineIndex = position["spine"].as<uint16_t>();
-        value.pageNumber = position["page"].as<uint16_t>();
-        const uint16_t pages = position["pages"].as<uint16_t>();
-        value.totalPages = pages > 0 ? pages : 1;
-        const uint16_t paragraph = position["para"].as<uint16_t>();
-        if (paragraph > 0) value.paragraphIndex = paragraph;
-        const char* xpath = position["xpath"].as<const char*>();
-        if (xpath) value.xpath = xpath;
-        outProgress.position = std::move(value);
-      }
-    }
+    koreaderSync::readProgressPayload(doc.as<JsonVariantConst>(), outProgress, KOREADER_STORE);
 
     LOG_DBG("KOSync", "Got progress: %.2f%% at %s", outProgress.percentage * 100, outProgress.progress.c_str());
     return OK;
@@ -204,34 +166,16 @@ KOReaderSyncClient::Error KOReaderSyncClient::updateProgress(const KOReaderProgr
   if (insufficientHeap()) return LOW_MEMORY;
 
   JsonDocument doc;
-  doc["document"] = progress.document;
-  doc["progress"] = progress.progress;
-  doc["percentage"] = progress.percentage;
-  doc["device"] = DEVICE_NAME;
-  doc["device_id"] = DEVICE_ID;
-
-  if (progress.metadata.has_value()) {
-    auto metadata = doc["metadata"].to<JsonObject>();
-    metadata["filename"] = progress.metadata->filename;
-    metadata["title"] = progress.metadata->title;
-    metadata["authors"] = progress.metadata->authors;
-  }
-
-  if (progress.position.has_value() && KOREADER_STORE.usesCrossPointSyncServer()) {
-    const auto& position = *progress.position;
-    auto rich = doc["position"].to<JsonObject>();
-    rich["pctQ"] = position.pctQ;
-    rich["spine"] = position.spineIndex;
-    rich["page"] = position.pageNumber;
-    rich["pages"] = position.totalPages > 0 ? position.totalPages : 1;
-    if (position.paragraphIndex.has_value()) rich["para"] = *position.paragraphIndex;
-    // Keep the server-side validation limit in the client as well.  Oversized
-    // XPath strings are omitted rather than rejecting an otherwise valid sync.
-    if (!position.xpath.empty() && position.xpath.size() <= 120) rich["xpath"] = position.xpath;
+  if (!koreaderSync::writeProgressPayload(doc, progress, KOREADER_STORE)) {
+    LOG_ERR("KOSync", "Could not allocate progress JSON");
+    return LOW_MEMORY;
   }
 
   std::string body;
   serializeJson(doc, body);
+  doc.clear();
+  // Check again after serialization; request strings also consume the TLS heap.
+  if (insufficientHeap()) return LOW_MEMORY;
 
   freeink::SecureHttpClient http;
   if (!beginClient(http, url)) return NETWORK_ERROR;

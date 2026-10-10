@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <deque>
+#include <memory>
+#include <optional>
 #include <vector>
 
 #include "Epub.h"
@@ -18,6 +20,8 @@ class ContentOpfParser final : public Print {
     IN_BOOK_TITLE,
     IN_BOOK_AUTHOR,
     IN_BOOK_LANGUAGE,
+    IN_BOOK_IDENTIFIER,
+    IN_META_TEXT,
     IN_MANIFEST,
     IN_SPINE,
     IN_GUIDE,
@@ -29,6 +33,14 @@ class ContentOpfParser final : public Print {
   XML_Parser parser = nullptr;
   ParserState state = START;
   BookMetadataCache* cache;
+  const bool metadataOnly;
+  const bool collectExtendedMetadata;
+  bool metadataComplete = false;
+  bool parseFailed = false;
+  bool metadataSpacePending = false;
+  bool authorSeparatorPending = false;
+  struct ExtendedMetadata;
+  std::unique_ptr<ExtendedMetadata> extended;
   HalFile tempItemStore;
   std::string coverItemId;
   bool hasExplicitStartReference = false;
@@ -39,7 +51,9 @@ class ContentOpfParser final : public Print {
     uint16_t idLen;       // length for collision reduction
     uint32_t fileOffset;  // offset in .items.bin
   };
-  std::deque<ItemIndexEntry> itemIndex;
+  // Lazily allocated only when writing manifest/spine entries. Metadata scans
+  // must not allocate the deque's initial map and block.
+  std::unique_ptr<std::deque<ItemIndexEntry>> itemIndex;
   bool useItemIndex = false;
 
   // FNV-1a hash function
@@ -60,6 +74,10 @@ class ContentOpfParser final : public Print {
   std::string title;
   std::string author;
   std::string language;
+  std::string isbn;
+  std::string asin;
+  std::string series;
+  std::optional<float> seriesIndex;
   std::string tocNcxPath;
   std::string tocNavPath;  // EPUB 3 nav document path
   std::string coverItemHref;
@@ -68,11 +86,13 @@ class ContentOpfParser final : public Print {
   std::vector<std::string> cssFiles;  // CSS stylesheet paths
 
   explicit ContentOpfParser(const std::string& cachePath, const std::string& baseContentPath, const size_t xmlSize,
-                            BookMetadataCache* cache)
-      : cachePath(cachePath), baseContentPath(baseContentPath), remainingSize(xmlSize), cache(cache) {}
+                            BookMetadataCache* cache, bool metadataOnly = false, bool collectExtendedMetadata = false);
   ~ContentOpfParser() override;
 
   bool setup();
+  // A short write can mean success (metadata early stop) or an XML failure.
+  // ZIP callers using allowEarlyStop must check this separately.
+  bool succeeded() const { return !parseFailed && (metadataOnly ? metadataComplete : remainingSize == 0); }
 
   size_t write(uint8_t) override;
   size_t write(const uint8_t* buffer, size_t size) override;

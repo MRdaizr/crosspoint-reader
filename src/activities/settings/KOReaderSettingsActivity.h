@@ -5,10 +5,11 @@
 #include <string>
 
 #include "activities/UiListActivity.h"
+#include "components/OptionPopup.h"
 
 /**
  * Submenu for KOReader Sync settings.
-   * Shows credentials, matching/sync behavior, and authentication options.
+ * Shows credentials, matching/sync behavior, and authentication options.
  */
 class KOReaderSettingsActivity final : public UiListActivity {
  public:
@@ -16,13 +17,16 @@ class KOReaderSettingsActivity final : public UiListActivity {
       : UiListActivity("KOReaderSettings", renderer, mappedInput) {}
 
   void onEnter() override;
-  static constexpr int MENU_ITEMS = 8;
+  void render(RenderLock&&) override;
+  static constexpr int MENU_ITEMS = 9;
 
  private:
   std::string rowValues[MENU_ITEMS];
   freeink::ui::ListItem rowItems[MENU_ITEMS]{};
+  OptionPopup profilePopup;
 
   void handleSelection();
+  bool handleCustomInput() override;
   int listCount() const override { return MENU_ITEMS; }
   void buildScreen(UiScreen& screen) override;
   void activateIndex(int index) override;
