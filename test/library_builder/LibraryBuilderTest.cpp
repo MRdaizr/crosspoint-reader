@@ -570,6 +570,72 @@ TEST_F(LibraryBuilderTest, SharedQuerySearchesPastShortSortKeyAndPagesWithoutCha
   EXPECT_EQ(page.total, 2);
 }
 
+TEST_F(LibraryBuilderTest, SearchPaginationAndSelectionReuseMatchesWithoutMetadataReads) {
+  for (unsigned i = 0; i < 100; ++i) fake::add("/" + numbered("needle", i) + ".txt");
+  initial();
+  LibraryIndexFile index;
+  ASSERT_TRUE(index.open(INDEX));
+  LibraryQuery query;
+  QueryPage page;
+  ASSERT_TRUE(query.run(index, "needle", SortOrder::TitleAsc, 0, 16, page));
+  ASSERT_EQ(page.total, 100);
+  const uint16_t first = page.ordinals[0];
+  fake::resetIoCounters();
+  ASSERT_TRUE(query.run(index, "NEEDLE", SortOrder::TitleAsc, 16, 16, page));
+  EXPECT_EQ(page.total, 100);
+  EXPECT_EQ(page.count, 16);
+  EXPECT_EQ(page.ordinals[0], first + 16);
+  ASSERT_TRUE(query.run(index, "needle", SortOrder::TitleAsc, 99, 1, page));
+  EXPECT_EQ(page.ordinals[0], first + 99);
+  ASSERT_TRUE(query.run(index, "needle", SortOrder::TitleAsc, 100, 16, page));
+  EXPECT_EQ(page.count, 0);
+  EXPECT_EQ(fake::reads, 0u);
+  EXPECT_EQ(fake::seeks, 0u);
+  EXPECT_EQ(fake::delays, 0u);
+}
+
+TEST_F(LibraryBuilderTest, SearchCacheInvalidatesOnQuerySortAndIndexReopen) {
+  bookMetadata["/a.epub"].title = "needle A";
+  bookMetadata["/b.epub"].title = "needle B";
+  initial();
+  LibraryIndexFile index;
+  ASSERT_TRUE(index.open(INDEX));
+  LibraryQuery query;
+  QueryPage page;
+  ASSERT_TRUE(query.run(index, "needle", SortOrder::TitleAsc, 0, 1, page));
+  EXPECT_EQ(page.ordinals[0], 0);
+  fake::resetIoCounters();
+  ASSERT_TRUE(query.run(index, "needle", SortOrder::TitleDesc, 0, 1, page));
+  EXPECT_EQ(page.ordinals[0], 1);
+  EXPECT_GT(fake::reads, 0u);
+  ASSERT_TRUE(query.run(index, "missing", SortOrder::TitleDesc, 0, 1, page));
+  EXPECT_EQ(page.total, 0);
+  fake::resetIoCounters();
+  ASSERT_TRUE(query.run(index, "missing", SortOrder::TitleDesc, 0, 1, page));
+  EXPECT_EQ(fake::reads, 0u);
+  const auto oldGeneration = index.generation();
+  ASSERT_TRUE(index.open(INDEX));
+  EXPECT_NE(index.generation(), oldGeneration);
+  fake::resetIoCounters();
+  ASSERT_TRUE(query.run(index, "missing", SortOrder::TitleDesc, 0, 1, page));
+  EXPECT_GT(fake::reads, 0u);
+}
+
+TEST_F(LibraryBuilderTest, FailedScanCannotPublishPartialSearchCache) {
+  bookMetadata["/a.epub"].title = "needle";
+  bookMetadata["/b.epub"].title = "other";
+  initial();
+  LibraryIndexFile index;
+  ASSERT_TRUE(index.open(INDEX));
+  LibraryQuery query;
+  QueryPage page;
+  fake::failRead = 0;
+  EXPECT_FALSE(query.run(index, "needle", SortOrder::TitleAsc, 0, 1, page));
+  ASSERT_TRUE(index.open(INDEX));
+  ASSERT_TRUE(query.run(index, "needle", SortOrder::TitleAsc, 0, 1, page));
+  EXPECT_EQ(page.total, 1);
+}
+
 TEST_F(LibraryBuilderTest, SamePrefixTitlesAreSortedBeyondTheFirstFourCjkCharacters) {
   bookMetadata["/a.epub"].title = "共同前缀乙";
   bookMetadata["/b.epub"].title = "共同前缀甲";

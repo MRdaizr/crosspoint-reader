@@ -65,8 +65,6 @@ void quoted(WebServer& server, const char* text) {
   server.sendContent("\"", 1);
 }
 struct WebScratch {
-  library::LibraryIndexFile index;
-  library::LibraryQuery query;
   library::QueryPage page;
   library::ClixRecord record{};
   char title[256] = {};
@@ -88,7 +86,7 @@ void progressRebuild(void* context, const library::BuildPhase phase, const uint1
 }
 }  // namespace
 
-void handleLibraryGet(WebServer& server) {
+void handleLibraryGet(WebServer& server, LibraryWebQuerySession* session) {
   if (server.method() != HTTP_GET) {
     error(server, 405, "method_not_allowed");
     return;
@@ -119,30 +117,44 @@ void handleLibraryGet(WebServer& server) {
                      : sort == "author" ? (descending ? library::SortOrder::AuthorDesc : library::SortOrder::AuthorAsc)
                      : descending       ? library::SortOrder::RecentDesc
                                         : library::SortOrder::RecentAsc;
-  // ~3 KiB scratch allocated once for the request, never a full JSON shelf.
+  // Only the visible page's display buffers are allocated per request.
+  // The server retains the bounded match bitmap and index handle across pages.
   auto scratch = makeUniqueNoThrow<WebScratch>();
   if (!scratch) {
     error(server, 503, "out_of_memory");
     return;
   }
+  auto ownedSession = session ? nullptr : makeUniqueNoThrow<LibraryWebQuerySession>();
+  if (!session) session = ownedSession.get();
+  if (!session) {
+    error(server, 503, "out_of_memory");
+    return;
+  }
+  const uint32_t generation = library::libraryIndexGeneration();
+  if (session->generation != generation || session->index.ioFailed()) session->reset();
+  session->generation = generation;
   // GET deliberately does not repair/rebuild files. A missing live path with a
   // backup remains recoverable by the next explicit POST or device entry.
-  if (!scratch->index.open(library::libraryIndexPath())) {
+  if (!Storage.exists(library::libraryIndexPath()) ||
+      (!session->index.isOpen() && !session->index.open(library::libraryIndexPath()))) {
+    session->reset();
     error(server, 503, "library_unavailable");
     return;
   }
-  if (!scratch->query.run(scratch->index, std::string_view(query.c_str(), query.length()), order, offset, limit,
+  if (!session->query.run(session->index, std::string_view(query.c_str(), query.length()), order, offset, limit,
                           scratch->page)) {
+    session->reset();
     error(server, 503, "library_read_failed");
     return;
   }
   // Validate this tiny page before sending headers, so corrupt blobs cannot
   // produce a successful-looking partial response.
   for (uint16_t i = 0; i < scratch->page.count; ++i) {
-    if (!scratch->index.readRecord(scratch->page.ordinals[i], scratch->record) ||
-        !scratch->query.readDisplay(scratch->index, scratch->record, scratch->title, sizeof(scratch->title),
+    if (!session->index.readRecord(scratch->page.ordinals[i], scratch->record) ||
+        !session->query.readDisplay(session->index, scratch->record, scratch->title, sizeof(scratch->title),
                                     scratch->author, sizeof(scratch->author)) ||
-        !scratch->index.readPath(scratch->record, scratch->path, sizeof(scratch->path))) {
+        !session->index.readPath(scratch->record, scratch->path, sizeof(scratch->path))) {
+      session->reset();
       error(server, 503, "library_read_failed");
       return;
     }
@@ -152,17 +164,18 @@ void handleLibraryGet(WebServer& server) {
   server.send(200, "application/json; charset=utf-8", "");
   auto& prefix = scratch->json;
   const bool dirty =
-      library::isLibraryIndexDirty() || scratch->index.header().metadataEnabled != (SETTINGS.libraryUseMetadata != 0);
+      library::isLibraryIndexDirty() || session->index.header().metadataEnabled != (SETTINGS.libraryUseMetadata != 0);
   snprintf(prefix, sizeof(prefix),
            "{\"total\":%u,\"offset\":%u,\"limit\":%u,\"count\":%u,\"dirty\":%s,\"degraded\":%s,\"items\":[",
            scratch->page.total, offset, limit, scratch->page.count, dirty ? "true" : "false",
            scratch->page.degraded ? "true" : "false");
   server.sendContent(prefix, strlen(prefix));
   for (uint16_t i = 0; i < scratch->page.count; ++i) {
-    if (!scratch->index.readRecord(scratch->page.ordinals[i], scratch->record) ||
-        !scratch->query.readDisplay(scratch->index, scratch->record, scratch->title, sizeof(scratch->title),
+    if (!session->index.readRecord(scratch->page.ordinals[i], scratch->record) ||
+        !session->query.readDisplay(session->index, scratch->record, scratch->title, sizeof(scratch->title),
                                     scratch->author, sizeof(scratch->author)) ||
-        !scratch->index.readPath(scratch->record, scratch->path, sizeof(scratch->path))) {
+        !session->index.readPath(scratch->record, scratch->path, sizeof(scratch->path))) {
+      session->reset();
       server.client().stop();
       return;  // incomplete chunked response must fail
     }
@@ -183,11 +196,12 @@ void handleLibraryGet(WebServer& server) {
   server.sendContent("", 0);
 }
 
-void handleLibraryRebuild(WebServer& server, const library::BuildCallbacks& outer) {
+void handleLibraryRebuild(WebServer& server, const library::BuildCallbacks& outer, LibraryWebQuerySession* session) {
   if (server.method() != HTTP_POST) {
     error(server, 405, "method_not_allowed");
     return;
   }
+  if (session) session->reset();
   library::BuildStats stats;
   RebuildContext context{server, outer};
   const library::BuildCallbacks callbacks{&context, &cancelRebuild, &progressRebuild};
@@ -207,7 +221,9 @@ void handleLibraryRebuild(WebServer& server, const library::BuildCallbacks& oute
   server.send(200, "application/json; charset=utf-8", response);
 }
 
-void registerLibraryWebApi(WebServer& server, const library::BuildCallbacks& callbacks) {
-  server.on("/api/library", HTTP_GET, [&server] { handleLibraryGet(server); });
-  server.on("/api/library/rebuild", HTTP_POST, [&server, callbacks] { handleLibraryRebuild(server, callbacks); });
+void registerLibraryWebApi(WebServer& server, const library::BuildCallbacks& callbacks,
+                           LibraryWebQuerySession* session) {
+  server.on("/api/library", HTTP_GET, [&server, session] { handleLibraryGet(server, session); });
+  server.on("/api/library/rebuild", HTTP_POST,
+            [&server, callbacks, session] { handleLibraryRebuild(server, callbacks, session); });
 }

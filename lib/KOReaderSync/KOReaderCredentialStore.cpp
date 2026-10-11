@@ -85,7 +85,7 @@ bool KOReaderCredentialStore::fromJson(JsonVariantConst doc) {
 
 bool KOReaderCredentialStore::loadFromFile() {
   // Try JSON first
-  if (Storage.exists(getFilePath())) {
+  if (hasDocFile(getFilePath())) {
     return PersistableStore<KOReaderCredentialStore>::loadFromFile();
   }
 

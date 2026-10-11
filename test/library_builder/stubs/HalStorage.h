@@ -141,6 +141,7 @@ class HalFile {
   uint64_t fileSize64() const { return node ? node->bytes.size() : 0; }
   size_t fileSize() const { return static_cast<size_t>(fileSize64()); }
   size_t position() const { return pos; }
+  int available() const { return node ? static_cast<int>(node->bytes.size() - std::min(pos, node->bytes.size())) : 0; }
   bool seekSet(const size_t offset) {
     fake::seeks++;
     if (!node || (node->directory && fake::failDirectorySeek) || (!node->directory && offset > node->bytes.size())) {

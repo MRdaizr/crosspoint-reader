@@ -1,0 +1,2 @@
+# git apply must match the LF source files in the downloaded SdFat archive.
+scripts/sdfat_patches/*.patch text eol=lf

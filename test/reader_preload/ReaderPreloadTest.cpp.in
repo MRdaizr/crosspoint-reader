@@ -1,0 +1,109 @@
+#include <Logging.h>
+#include <Memory.h>
+#include <gtest/gtest.h>
+
+#include <cstdint>
+#include <memory>
+
+static bool failNextCheckedObject = false;
+void* operator new(std::size_t bytes, const std::nothrow_t&) noexcept {
+  if (failNextCheckedObject) {
+    failNextCheckedObject = false;
+    return nullptr;
+  }
+  return ::operator new(bytes);
+}
+struct HeapFixture {
+  unsigned free = 64 * 1024, largest = 32 * 1024;
+  unsigned getFreeHeap() const { return free; }
+  unsigned getMaxAllocHeap() const { return largest; }
+} ESP;
+struct ReaderRenderSpec {};
+struct GfxRenderer {};
+struct Epub {
+  int getSpineItemsCount() const { return 2; }
+};
+struct Section {
+  static inline bool cached = false, partial = false, startSucceeds = true;
+  static inline unsigned constructions = 0;
+  int pageCount = 10, currentPage = 8;
+  Section() = default;
+  Section(const std::shared_ptr<Epub>&, int, GfxRenderer&) { ++constructions; }
+  bool isBuilding() const { return false; }
+  bool loadSectionFile(const ReaderRenderSpec&) { return cached; }
+  bool isPartial() const { return partial; }
+  template <typename F>
+  bool beginIncrementalBuild(const ReaderRenderSpec&, const F&) {
+    return startSucceeds;
+  }
+};
+class EpubReaderActivity {
+ public:
+  static constexpr unsigned BUILD_MIN_FREE_HEAP = 32 * 1024, BUILD_MIN_MAX_ALLOC = 16 * 1024;
+  std::shared_ptr<Epub> epub = std::make_shared<Epub>();
+  std::unique_ptr<Section> section = std::make_unique<Section>();
+  std::unique_ptr<Section> nextChapterPreload;
+  int currentSpineIndex = 0, nextChapterPreloadSpineIndex = -1;
+  GfxRenderer renderer;
+  ReaderRenderSpec currentReaderRenderSpec(uint16_t, uint16_t) const { return {}; }
+  void clearNextChapterPreload() {
+    nextChapterPreload.reset();
+    nextChapterPreloadSpineIndex = -1;
+  }
+  void updatePreloadProgress(uint8_t) {}
+  void silentIndexNextChapterIfNeeded(uint16_t, uint16_t);
+};
+// clang-format off
+@PRELOAD_METHOD@
+// clang-format on
+
+class ReaderPreloadTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    ESP = {};
+    Section::cached = Section::partial = false;
+    Section::startSucceeds = true;
+    Section::constructions = 0;
+    failNextCheckedObject = false;
+  }
+};
+TEST_F(ReaderPreloadTest, LowOrFragmentedHeapSkipsConstructionAndPreservesPage) {
+  EpubReaderActivity reader;
+  ESP.free = 31 * 1024;
+  reader.silentIndexNextChapterIfNeeded(480, 800);
+  ESP.free = 64 * 1024;
+  ESP.largest = 15 * 1024;
+  reader.silentIndexNextChapterIfNeeded(480, 800);
+  EXPECT_EQ(Section::constructions, 0u);
+  EXPECT_FALSE(reader.nextChapterPreload);
+  EXPECT_EQ(reader.section->currentPage, 8);
+}
+TEST_F(ReaderPreloadTest, FailedCheckedAllocationKeepsReaderUsable) {
+  EpubReaderActivity reader;
+  failNextCheckedObject = true;
+  reader.silentIndexNextChapterIfNeeded(480, 800);
+  EXPECT_FALSE(reader.nextChapterPreload);
+  EXPECT_EQ(reader.nextChapterPreloadSpineIndex, -1);
+  EXPECT_EQ(reader.section->currentPage, 8);
+  reader.silentIndexNextChapterIfNeeded(480, 800);
+  EXPECT_TRUE(reader.nextChapterPreload);
+}
+TEST_F(ReaderPreloadTest, ReusesSingleSectionForCacheCheckAndBuildAndDropsFailedBuild) {
+  EpubReaderActivity reader;
+  Section::cached = true;
+  reader.silentIndexNextChapterIfNeeded(480, 800);
+  EXPECT_FALSE(reader.nextChapterPreload);
+  EXPECT_EQ(Section::constructions, 1u);
+  Section::partial = true;
+  reader.silentIndexNextChapterIfNeeded(480, 800);
+  EXPECT_TRUE(reader.nextChapterPreload);
+  EXPECT_EQ(reader.nextChapterPreloadSpineIndex, 1);
+  EXPECT_EQ(Section::constructions, 2u);
+  reader.silentIndexNextChapterIfNeeded(480, 800);
+  EXPECT_EQ(Section::constructions, 2u);
+  reader.clearNextChapterPreload();
+  Section::startSucceeds = false;
+  reader.silentIndexNextChapterIfNeeded(480, 800);
+  EXPECT_FALSE(reader.nextChapterPreload);
+  EXPECT_EQ(reader.section->currentPage, 8);
+}

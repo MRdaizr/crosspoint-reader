@@ -84,6 +84,7 @@ bool buildLibraryIndex(const char* rootPath, BuildStats& stats, bool readMetadat
 // Use before opening the live path after power loss. Never installs a partial stage.
 bool recoverLibraryIndex();
 bool isLibraryIndexBuilding();
+uint32_t libraryIndexGeneration();
 
 // Live index path, shared by the builder and activity.
 const char* libraryIndexPath();

@@ -25,6 +25,7 @@ class TextBlock final : public Block {
   uint16_t numWords = 0;
   uint16_t textBytes = 0;
   bool focusPresent = false;
+  bool rubyPresent = false;
   bool isValid = false;
   BlockStyle blockStyle;
   std::unique_ptr<uint8_t[]> arena;

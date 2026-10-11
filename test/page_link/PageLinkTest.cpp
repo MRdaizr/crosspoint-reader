@@ -422,6 +422,47 @@ void selector() {
 }
 }  // namespace
 
+namespace {
+void rubyStorageAndTruncatedText() {
+  const std::vector<std::string> words = {"plain", "words", "日本"};
+  const std::vector<int16_t> positions = {0, 40, 80};
+  const std::vector<EpdFontFamily::Style> styles(3, EpdFontFamily::REGULAR);
+  const auto roundTrip = [&](const std::vector<std::string>& ruby) {
+    TextBlock block(words, positions, styles, {}, {}, leftStyle(), ruby);
+    CHECK(block.valid());
+    HalFile file;
+    CHECK(file.open(CACHE.c_str(), "wb"));
+    CHECK(block.serialize(file));
+    file.close();
+    CHECK(file.open(CACHE.c_str(), "rb"));
+    return TextBlock::deserialize(file);
+  };
+  auto plain = roundTrip({});
+  CHECK(plain && !plain->hasRuby());
+  CHECK(plain->getRubyTexts().capacity() == 0);
+  TextBlock emptyRuby(words, positions, styles, {}, {}, leftStyle(), std::vector<std::string>(3));
+  CHECK(emptyRuby.valid() && emptyRuby.getRubyTexts().capacity() == 0);
+  auto annotated = roundTrip({"", "", "にほん"});
+  CHECK(annotated && annotated->hasRuby());
+  CHECK(annotated->getRubyTexts().size() == 3);
+  CHECK(annotated->getRubyTexts()[2] == "にほん");
+  CHECK(annotated->getRubyShift(20) == 10 && plain->getRubyShift(20) == 0);
+  HalFile file;
+  CHECK(file.open(CACHE.c_str(), "rb"));
+  std::vector<uint8_t> bytes(file.size());
+  CHECK(file.read(bytes.data(), bytes.size()) == bytes.size());
+  file.close();
+  for (size_t size = 0; size < bytes.size(); ++size) {
+    CHECK(file.open(CACHE.c_str(), "wb"));
+    CHECK(file.write(bytes.data(), size) == size);
+    file.close();
+    CHECK(file.open(CACHE.c_str(), "rb"));
+    CHECK(!TextBlock::deserialize(file));
+    file.close();
+  }
+}
+}  // namespace
+
 int main() {
   const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
   std::error_code error;
@@ -437,6 +478,7 @@ int main() {
   targetsAndBounds();
   checkedAllocations();
   serialization();
+  rubyStorageAndTruncatedText();
   layoutIdentity();
   parserAndIncrementalReplay();
   selector();

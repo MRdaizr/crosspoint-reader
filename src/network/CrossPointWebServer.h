@@ -24,6 +24,8 @@ struct FileInfo {
   bool isDirectory;
 };
 
+struct LibraryWebQuerySession;
+
 class CrossPointWebServer {
  public:
   struct WsUploadStatus {
@@ -96,6 +98,7 @@ class CrossPointWebServer {
 
  private:
   std::unique_ptr<WebServer> server = nullptr;
+  std::unique_ptr<LibraryWebQuerySession> libraryQuerySession;
   std::unique_ptr<WebSocketsServer> wsServer = nullptr;
   bool running = false;
   bool apMode = false;  // true when running in AP mode, false for STA mode

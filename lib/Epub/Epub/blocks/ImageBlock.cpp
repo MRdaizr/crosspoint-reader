@@ -66,12 +66,12 @@ void rememberImageFailure(const std::string& path) {
 // grayscale band. Keep one bounded pixel-cache payload in RAM for the later
 // passes. If the payload does not fit, rendering falls back to the streaming
 // path below and remains correct under memory pressure.
-constexpr size_t PXC_CHUNK_SHIFT = 14;       // 16 KiB chunks
+constexpr size_t PXC_CHUNK_SHIFT = 14;  // 16 KiB chunks
 constexpr size_t PXC_CHUNK_SIZE = 1u << PXC_CHUNK_SHIFT;
-constexpr size_t PXC_MAX_CHUNKS = 6;         // 96 KiB maximum per page render
+constexpr size_t PXC_MAX_CHUNKS = 6;  // 96 KiB maximum per page render
 constexpr size_t PXC_HEAP_RESERVE = 24 * 1024;
 constexpr size_t PXC_MAX_ALLOC_RESERVE = 8 * 1024;
-constexpr int PXC_MAX_BYTES_PER_ROW = 208;   // 832px panel, rounded to 4 pixels
+constexpr int PXC_MAX_BYTES_PER_ROW = 208;  // 832px panel, rounded to 4 pixels
 
 std::unique_ptr<uint8_t[]> pxcChunks[PXC_MAX_CHUNKS];
 uint64_t pxcSlotHash = 0;
@@ -98,8 +98,8 @@ const uint8_t* pxcRowPtr(const size_t rowStart, const int bytesPerRow, uint8_t* 
   return tempRow;
 }
 
-bool loadPxcSlot(const uint64_t cacheHash, HalFile& cacheFile, const uint16_t cachedWidth,
-                 const uint16_t cachedHeight, const int bytesPerRow) {
+bool loadPxcSlot(const uint64_t cacheHash, HalFile& cacheFile, const uint16_t cachedWidth, const uint16_t cachedHeight,
+                 const int bytesPerRow) {
   releasePxcSlot();
   if (bytesPerRow <= 0 || bytesPerRow > PXC_MAX_BYTES_PER_ROW) return false;
 
@@ -109,8 +109,7 @@ bool loadPxcSlot(const uint64_t cacheHash, HalFile& cacheFile, const uint16_t ca
 
   for (size_t i = 0; i < chunkCount; ++i) {
     const size_t want = remaining < PXC_CHUNK_SIZE ? remaining : PXC_CHUNK_SIZE;
-    if (ESP.getFreeHeap() < remaining + PXC_HEAP_RESERVE ||
-        ESP.getMaxAllocHeap() < want + PXC_MAX_ALLOC_RESERVE) {
+    if (ESP.getFreeHeap() < remaining + PXC_HEAP_RESERVE || ESP.getMaxAllocHeap() < want + PXC_MAX_ALLOC_RESERVE) {
       releasePxcSlot();
       return false;
     }
@@ -443,10 +442,11 @@ bool ImageBlock::serialize(HalFile& file) {
 std::unique_ptr<ImageBlock> ImageBlock::deserialize(HalFile& file) {
   std::string path;
   std::string src;
-  serialization::readString(file, path);
-  serialization::readString(file, src);
-  int16_t w, h;
-  serialization::readPod(file, w);
-  serialization::readPod(file, h);
+  int16_t w = 0, h = 0;
+  if (!serialization::readString(file, path) || !serialization::readString(file, src) ||
+      !serialization::readPod(file, w) || !serialization::readPod(file, h) || path.empty() || w <= 0 || h <= 0) {
+    LOG_ERR("IMG", "Deserialization failed: invalid image record");
+    return nullptr;
+  }
   return std::unique_ptr<ImageBlock>(new (std::nothrow) ImageBlock(path, src, w, h));
 }

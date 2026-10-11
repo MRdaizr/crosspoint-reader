@@ -472,6 +472,11 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
           const std::string idref = atts[i + 1];
           std::string href;
           bool found = false;
+          const auto rejectItemRead = [self] {
+            LOG_ERR("COF", "Invalid or incomplete manifest item cache");
+            self->parseFailed = true;
+            XML_StopParser(self->parser, XML_FALSE);
+          };
 
           if (self->useItemIndex) {
             // Fast path: binary search
@@ -486,11 +491,17 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
 
             // Check for match (may need to check a few due to hash collisions)
             while (it != self->itemIndex->end() && it->idHash == targetHash) {
-              self->tempItemStore.seek(it->fileOffset);
               std::string itemId;
-              serialization::readString(self->tempItemStore, itemId);
+              if (!self->tempItemStore.seek(it->fileOffset) ||
+                  !serialization::readString(self->tempItemStore, itemId)) {
+                rejectItemRead();
+                return;
+              }
               if (itemId == idref) {
-                serialization::readString(self->tempItemStore, href);
+                if (!serialization::readString(self->tempItemStore, href)) {
+                  rejectItemRead();
+                  return;
+                }
                 found = true;
                 break;
               }
@@ -500,11 +511,17 @@ void XMLCALL ContentOpfParser::startElement(void* userData, const XML_Char* name
             // Slow path: linear scan (for small manifests, keeps original behavior)
             // TODO: This lookup is slow as need to scan through all items each time.
             //       It can take up to 200ms per item when getting to 1500 items.
-            self->tempItemStore.seek(0);
+            if (!self->tempItemStore.seek(0)) {
+              rejectItemRead();
+              return;
+            }
             std::string itemId;
             while (self->tempItemStore.available()) {
-              serialization::readString(self->tempItemStore, itemId);
-              serialization::readString(self->tempItemStore, href);
+              if (!serialization::readString(self->tempItemStore, itemId) ||
+                  !serialization::readString(self->tempItemStore, href)) {
+                rejectItemRead();
+                return;
+              }
               if (itemId == idref) {
                 found = true;
                 break;

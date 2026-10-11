@@ -20,6 +20,7 @@ class HalStorage {
   bool exactRename = false;
   int renameFailures = 0;
   size_t maxRead = SIZE_MAX, readBytes = 0, maxReadRequested = 0;
+  size_t invalidCloseCalls = 0;
   static HalStorage& getInstance() {
     static HalStorage value;
     return value;
@@ -34,6 +35,7 @@ class HalStorage {
     renameFailures = 0;
     maxRead = SIZE_MAX;
     readBytes = maxReadRequested = 0;
+    invalidCloseCalls = 0;
   }
   bool exists(const char* path) const { return files.count(path) || directories.count(path); }
   bool mkdir(const char* path) {
@@ -112,6 +114,10 @@ class HalFile : public Print {
     return read(&b, 1) == 1 ? b : -1;
   }
   size_t size() const { return record ? record->bytes.size() : 0; }
+  size_t position() const { return offset; }
+  int available() const { return static_cast<int>(size() - std::min(offset, size())); }
+  bool isDirectory() const { return false; }
+  explicit operator bool() const { return record != nullptr; }
   uint64_t fileSize64() const { return size(); }
   uint32_t modificationTime() const { return record ? record->time : 0; }
   bool seek(size_t n) {
@@ -121,6 +127,7 @@ class HalFile : public Print {
   }
   void flush() {}
   bool close() {
+    if (!record) ++Storage.invalidCloseCalls;
     record = nullptr;
     return Storage.failClose.empty() || path.find(Storage.failClose) == std::string::npos;
   }

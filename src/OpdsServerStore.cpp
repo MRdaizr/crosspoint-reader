@@ -45,7 +45,7 @@ bool OpdsServerStore::fromJson(JsonVariantConst doc) {
 }
 
 bool OpdsServerStore::loadFromFile() {
-  if (Storage.exists(getFilePath())) {
+  if (hasDocFile(getFilePath())) {
     return PersistableStore<OpdsServerStore>::loadFromFile();
   }
 

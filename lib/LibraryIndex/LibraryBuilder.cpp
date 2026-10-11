@@ -34,6 +34,7 @@ constexpr char CACHE_DIR[] = "/.crosspoint";
 std::atomic<bool> dirtyInMemory{false};
 std::atomic<uint32_t> dirtyGeneration{0};
 std::atomic<bool> building{false};
+std::atomic<uint32_t> indexGeneration{0};
 
 struct BuildSession {
   BuildStats& stats;
@@ -1306,12 +1307,15 @@ bool markLibraryIndexDirty() {
 bool isLibraryIndexDirty() { return dirtyInMemory || Storage.exists(DIRTY_PATH); }
 
 bool isLibraryIndexBuilding() { return building.load(); }
+uint32_t libraryIndexGeneration() { return indexGeneration.load(); }
 
 bool recoverLibraryIndex() {
   bool expected = false;
   if (!building.compare_exchange_strong(expected, true)) return false;
   BuildGuard guard;
-  return recoverInterruptedInstall();
+  const bool recovered = recoverInterruptedInstall();
+  if (recovered) ++indexGeneration;
+  return recovered;
 }
 
 bool buildLibraryIndex(const char* rootPath, BuildStats& stats, const bool readMetadata,
@@ -1709,6 +1713,7 @@ bool buildLibraryIndex(const char* rootPath, BuildStats& stats, const bool readM
 
   stats.walkMs = millis() - startMs;
   stats.indexReplaced = ok;
+  if (ok) ++indexGeneration;
   LOG_INF("LIBIDX",
           "%s: %u books, %u folders, %u parsed, %u metadata reused, replaced %u, %u dup dropped, %u unreadable, %ums",
           ok ? "built" : "FAILED", static_cast<unsigned>(stats.books), static_cast<unsigned>(stats.folders),

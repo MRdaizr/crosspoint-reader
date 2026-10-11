@@ -4,11 +4,13 @@ inline uint32_t navigatorTestMillis = 0;
 inline uint32_t millis() { return navigatorTestMillis; }
 class MappedInputManager {
  public:
-  enum class Button { NavNext, NavPrevious, Left, Right };
-  bool down[4] = {}, pressed[4] = {}, released[4] = {};
+  enum class Button { NavNext, NavPrevious, Left, Right, Back, Confirm };
+  bool down[6] = {}, pressed[6] = {}, released[6] = {};
   uint32_t heldMs = 0;
+  bool touch = false;
   bool isPressed(Button button) const { return down[static_cast<unsigned>(button)]; }
   bool wasPressed(Button button) const { return pressed[static_cast<unsigned>(button)]; }
   bool wasReleased(Button button) const { return released[static_cast<unsigned>(button)]; }
   uint32_t getHeldTime() const { return heldMs; }
+  bool hasTouch() const { return touch; }
 };

@@ -899,7 +899,10 @@ void CrossPointWebServer::begin() {
 
   server->on("/api/status", HTTP_GET, [this] { handleStatus(); });
   server->on("/api/files", HTTP_GET, [this] { handleFileListData(); });
-  server->on("/api/library", HTTP_GET, [this] { handleLibraryGet(*server); });
+  server->on("/api/library", HTTP_GET, [this] {
+    if (!libraryQuerySession) libraryQuerySession = makeUniqueNoThrow<LibraryWebQuerySession>();
+    handleLibraryGet(*server, libraryQuerySession.get());
+  });
   server->on("/api/library/rebuild", HTTP_POST, [this] {
     if (wsUploadInProgress) {
       server->send(409, "application/json", "{\"error\":\"upload_in_progress\"}");
@@ -919,7 +922,7 @@ void CrossPointWebServer::begin() {
         },
         [](void*, library::BuildPhase, uint16_t, uint16_t) { resetTaskWatchdogIfSubscribed(); }};
     suspendPluginTransferServices();
-    handleLibraryRebuild(*server, callbacks);  // synchronous; never re-enter handleClient
+    handleLibraryRebuild(*server, callbacks, libraryQuerySession.get());  // synchronous; never re-enter handleClient
     resumePluginTransferServices();
   });
   server->on("/download", HTTP_GET, [this] { handleDownload(); });
@@ -1046,6 +1049,7 @@ void CrossPointWebServer::abortWsUpload(const char* tag) {
 }
 
 void CrossPointWebServer::stop() {
+  libraryQuerySession.reset();
   pluginJobs.reset();
   pluginSession[0] = '\0';
   if (pluginUpload.file.isOpen()) pluginUpload.file.close();

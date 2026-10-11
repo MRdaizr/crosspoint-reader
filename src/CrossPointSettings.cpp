@@ -348,7 +348,7 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
 
 bool CrossPointSettings::loadFromFile() {
   // Try JSON first
-  if (Storage.exists(getFilePath())) {
+  if (hasDocFile(getFilePath())) {
     const bool result = PersistableStore<CrossPointSettings>::loadFromFile();
     migrateLanguageBinaryFile();
     return result;

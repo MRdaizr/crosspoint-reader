@@ -13,16 +13,8 @@
 bool BookmarkFile::load(const std::string& bookPath, std::vector<BookmarkEntry>& bookmarks) {
   bookmarks.clear();
   const std::string path = BookmarkUtil::getBookmarkPath(bookPath);
-  if (!Storage.exists(path.c_str())) return false;
-  HalFile bookmarkFile;
-  if (!Storage.openFileForRead("BKM", path, bookmarkFile)) return false;
-  constexpr size_t MAX_BOOKMARK_FILE_BYTES = 64 * 1024;
-  const size_t fileSize = bookmarkFile.fileSize();
-  bookmarkFile.close();
-  if (fileSize > MAX_BOOKMARK_FILE_BYTES) {
-    LOG_ERR("BKM", "Bookmark file too large: %zu bytes", fileSize);
-    return false;
-  }
+  // The shared bounded reader also recovers a lone .bak after interrupted
+  // publication; an existence precheck here would bypass that recovery.
   JsonDocument doc;
   if (!PersistableStoreBase::readDocFromFile(path.c_str(), doc)) return false;
 

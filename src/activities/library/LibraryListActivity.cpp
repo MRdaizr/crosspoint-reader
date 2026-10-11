@@ -208,7 +208,7 @@ void LibraryListActivity::buildScreen(UiScreen& screen) {
   syncTabListViewport(screen, props, true);
   const int first = activeNav().top;
   const int count =
-      std::min({listCount() - first, activeNav().visibleRows, static_cast<int>(library::LIBRARY_PAGE_LIMIT)});
+      std::min({listCount() - first, activeNav().visibleRows + 1, static_cast<int>(library::LIBRARY_PAGE_LIMIT)});
   if (!loadWindow(first, count)) {
     dataFailed = true;
     screen.centeredText(tr(STR_LIBRARY_READ_FAILED));
@@ -235,6 +235,37 @@ void LibraryListActivity::onTabAction(const int which) {
   requestUpdate();
 }
 void LibraryListActivity::stepTab(const int direction) { onTabAction((tab + direction + tabCount()) % tabCount()); }
+
+void LibraryListActivity::navigateButtons() {
+  const int count = listCount();
+  if (mappedInput.wasPressed(MappedInputManager::Button::NavNext) ||
+      mappedInput.wasPressed(MappedInputManager::Button::NavPrevious)) {
+    navigationStartedOnTabs = ringPos() == 0;
+  }
+  // Down wraps within the rows so the cursor stays in the list.
+  buttonNavigator.onNextPress([this, count] {
+    if (count > 0) moveRingTo(ringPos() == count ? 1 : ringPos() + 1);
+  });
+  buttonNavigator.onPreviousPress([this, count] { moveRingTo(ButtonNavigator::previousIndex(ringPos(), count + 1)); });
+  // Holds on the tab band switch tabs; holds in the list jump by a page.
+  buttonNavigator.onNextContinuous([this, count] {
+    if (navigationStartedOnTabs) {
+      activeNav().selected = 0;
+      stepTab(1);
+    } else if (count > 0) {
+      moveRingTo(ButtonNavigator::nextPageIndex(ringPos() - 1, count, activeNav().inputPageRows()) + 1);
+    }
+  });
+  buttonNavigator.onPreviousContinuous([this, count] {
+    if (navigationStartedOnTabs) {
+      activeNav().selected = 0;
+      stepTab(-1);
+    } else if (count > 0) {
+      moveRingTo(ButtonNavigator::previousPageIndex(std::max(0, ringPos() - 1), count, activeNav().inputPageRows()) +
+                 1);
+    }
+  });
+}
 
 bool LibraryListActivity::handleButtons() {
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {

@@ -1,0 +1,261 @@
+#include <ButtonNavigator.h>
+#include <FreeInkUI.h>
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <string>
+
+namespace fui = freeink::ui;
+
+// Only the device-specific edges are stubbed; the methods below are extracted
+// from the activity sources at configure time and use the real SDK ListNav.
+class UITheme {
+ public:
+  struct Metrics {
+    int listRowHeight = 20;
+    int listWithSubtitleRowHeight = 20;
+  };
+  static UITheme& getInstance() {
+    static UITheme instance;
+    return instance;
+  }
+  Metrics getMetrics() const { return {}; }
+};
+
+class UiScreen {
+ public:
+  fui::Rect body() const { return {0, 0, 160, 60}; }
+  struct Theme {
+    int16_t rowHeight = 20;
+    int16_t listRowGap = 0;
+  };
+  Theme theme() const { return {}; }
+};
+
+class UiListActivity {
+ public:
+  MappedInputManager mappedInput;
+  ButtonNavigator buttonNavigator;
+  fui::ListNav nav;
+  int updates = 0;
+  int count = 12;
+  int listCount() const { return count; }
+  fui::ListNav& activeNav() { return nav; }
+  void requestUpdate() { ++updates; }
+  void moveSelectionTo(int index);
+  void navigateButtons();
+  void syncListViewport(UiScreen& screen, fui::ListProps& props, bool hasSubtitle = false, int selectionOffset = 0);
+};
+
+class UiTabListActivity : public UiListActivity {
+ public:
+  bool navigationStartedOnTabs = false;
+  int tabSteps = 0;
+  int ringPos() const { return nav.selected.load(); }
+  void stepTab(int direction) { tabSteps += direction; }
+  void moveRingTo(int index);
+  void navigateButtons();
+  void syncTabListViewport(UiScreen& screen, fui::ListProps& props, bool hasSubtitle = false);
+};
+
+class LibraryListActivity : public UiTabListActivity {
+ public:
+  void navigateButtons();
+};
+
+class FileBrowserActivity : public UiListActivity {
+ public:
+  enum class Mode { Books, PickFirmware };
+  Mode mode = Mode::Books;
+  std::string basepath = "/books";
+  bool lockLongPressBack = false;
+  int loads = 0;
+  int routingClosed = 0;
+  void closeRouting() { ++routingClosed; }
+  void loadFiles() { ++loads; }
+  bool handleCustomInput();
+};
+
+class RenderLock {
+ public:
+  static inline int acquisitions = 0;
+  explicit RenderLock(UiListActivity& activity) {
+    ++acquisitions;
+    navigatorTestMillis += 1000;
+    activity.mappedInput.heldMs += 1000;
+  }
+};
+
+constexpr unsigned long GO_HOME_MS = 1000;
+// clang-format off
+@MOVE_SELECTION@
+@NAVIGATE_BUTTONS@
+@NAVIGATE_RING@
+@SYNC_LIST_VIEWPORT@
+@SYNC_TAB_VIEWPORT@
+@FILE_CUSTOM_INPUT@
+@LIBRARY_BUTTONS@
+
+class ListNavigationTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    navigatorTestMillis = 0;
+    RenderLock::acquisitions = 0;
+  }
+};
+
+TEST_F(ListNavigationTest, FileBrowserShortDownMovesOnceDuringSlowRefresh) {
+  FileBrowserActivity browser;
+  ButtonNavigator::setMappedInputManager(browser.mappedInput);
+  browser.nav.visibleRows = 3;
+  browser.mappedInput.down[0] = browser.mappedInput.pressed[0] = true;
+  EXPECT_FALSE(browser.handleCustomInput());
+  browser.navigateButtons();
+  EXPECT_EQ(browser.nav.selected.load(), 1);
+
+  // Before debounce publishes the release, a poll still sees the old down
+  // level. This poll must not wait a full refresh and turn it into a hold.
+  browser.mappedInput.pressed[0] = false;
+  navigatorTestMillis = browser.mappedInput.heldMs = 100;
+  EXPECT_FALSE(browser.handleCustomInput());
+  browser.navigateButtons();
+  browser.mappedInput.down[0] = false;
+  browser.mappedInput.released[0] = true;
+  EXPECT_FALSE(browser.handleCustomInput());
+  browser.navigateButtons();
+  EXPECT_EQ(browser.nav.selected.load(), 1);
+  EXPECT_EQ(browser.updates, 1);
+  EXPECT_EQ(RenderLock::acquisitions, 0);
+}
+
+TEST_F(ListNavigationTest, FileBrowserLongBackStillLoadsRootUnderLock) {
+  FileBrowserActivity browser;
+  browser.mappedInput.down[static_cast<unsigned>(MappedInputManager::Button::Back)] = true;
+  browser.mappedInput.heldMs = GO_HOME_MS;
+  EXPECT_FALSE(browser.handleCustomInput());
+  browser.mappedInput.down[static_cast<unsigned>(MappedInputManager::Button::Back)] = false;
+  browser.mappedInput.released[static_cast<unsigned>(MappedInputManager::Button::Back)] = true;
+  EXPECT_TRUE(browser.handleCustomInput());
+  EXPECT_EQ(browser.basepath, "/");
+  EXPECT_EQ(browser.loads, 1);
+  EXPECT_EQ(browser.routingClosed, 1);
+  EXPECT_EQ(browser.updates, 1);
+  EXPECT_EQ(RenderLock::acquisitions, 1);
+}
+
+TEST_F(ListNavigationTest, TabViewportFollowsLastRowUsingLayoutFeedback) {
+  UiTabListActivity activity;
+  UiScreen screen;
+  activity.nav.requestSelection(activity.count);
+  fui::ListProps props;
+  activity.syncTabListViewport(screen, props, true);
+  EXPECT_EQ(props.selectedIndex, activity.count - 1);
+  ASSERT_EQ(props.nav, &activity.nav);
+  EXPECT_EQ(props.topIndex, 9);
+
+  // Title + author need 24px; only two rows fit the estimated three-row band.
+  props.nav->onListRendered(props.topIndex, 2, false);
+  ASSERT_TRUE(activity.nav.consumeRebuildNeeded());
+  activity.syncTabListViewport(screen, props, true);
+  EXPECT_EQ(props.topIndex, 10);
+  EXPECT_EQ(props.selectedIndex, 11);
+  props.nav->onListRendered(props.topIndex, 2, true);
+  EXPECT_FALSE(activity.nav.followPending);
+  EXPECT_FALSE(activity.nav.consumeRebuildNeeded());
+  EXPECT_EQ(activity.nav.selected.load(), activity.count);
+}
+
+TEST_F(ListNavigationTest, RingWrapReturnsToTabsAndUpRestoresLastRow) {
+  UiTabListActivity activity;
+  UiScreen screen;
+  fui::ListProps props;
+  activity.nav.requestSelection(activity.count);
+  activity.syncTabListViewport(screen, props);
+  activity.nav.requestSelection(ButtonNavigator::nextIndex(activity.nav.selected, activity.count + 1));
+  activity.syncTabListViewport(screen, props);
+  EXPECT_EQ(props.selectedIndex, -1);
+  EXPECT_EQ(props.topIndex, 0);
+  EXPECT_FALSE(activity.nav.followPending);
+  activity.nav.requestSelection(ButtonNavigator::previousIndex(activity.nav.selected, activity.count + 1));
+  activity.syncTabListViewport(screen, props);
+  EXPECT_EQ(props.selectedIndex, activity.count - 1);
+  EXPECT_GE(props.selectedIndex, props.topIndex);
+  EXPECT_LT(props.selectedIndex, props.topIndex + activity.nav.visibleRows);
+}
+
+TEST_F(ListNavigationTest, LibraryDownAtLastRowWrapsWithinRows) {
+  LibraryListActivity activity;
+  ButtonNavigator::setMappedInputManager(activity.mappedInput);
+  UiScreen screen;
+  fui::ListProps props;
+  activity.nav.requestSelection(activity.count);
+  activity.syncTabListViewport(screen, props, true);
+  for (int i = 0; i < 4; ++i) {
+    activity.mappedInput.down[0] = activity.mappedInput.pressed[0] = true;
+    activity.navigateButtons();
+    activity.syncTabListViewport(screen, props, true);
+    EXPECT_EQ(activity.ringPos(), i + 1);
+    EXPECT_EQ(props.selectedIndex, i);
+    activity.mappedInput.down[0] = activity.mappedInput.pressed[0] = false;
+    activity.mappedInput.released[0] = true;
+    activity.navigateButtons();
+    activity.mappedInput.released[0] = false;
+  }
+  activity.mappedInput.down[1] = activity.mappedInput.pressed[1] = true;
+  activity.navigateButtons();
+  EXPECT_EQ(activity.ringPos(), 3);
+}
+
+TEST_F(ListNavigationTest, LibraryPreviousStillReachesTabBand) {
+  LibraryListActivity activity;
+  ButtonNavigator::setMappedInputManager(activity.mappedInput);
+  activity.nav.requestSelection(1);
+  activity.mappedInput.down[1] = activity.mappedInput.pressed[1] = true;
+  activity.navigateButtons();
+  EXPECT_EQ(activity.ringPos(), 0);
+}
+
+TEST_F(ListNavigationTest, LibraryHeldDownPagesThroughRowsWithoutSwitchingTabs) {
+  LibraryListActivity activity;
+  ButtonNavigator::setMappedInputManager(activity.mappedInput);
+  activity.nav.onListRendered(0, 3, true);
+  activity.nav.requestSelection(activity.count);
+  activity.mappedInput.down[0] = activity.mappedInput.pressed[0] = true;
+  activity.navigateButtons();
+  activity.mappedInput.pressed[0] = false;
+  for (int i = 1; i <= 3; ++i) {
+    navigatorTestMillis = activity.mappedInput.heldMs = i * 600;
+    activity.navigateButtons();
+    EXPECT_EQ(activity.ringPos(), 1 + i * 3);
+    EXPECT_EQ(activity.tabSteps, 0);
+  }
+}
+
+TEST_F(ListNavigationTest, LibraryHoldOnTabsStillSwitchesTabs) {
+  LibraryListActivity activity;
+  ButtonNavigator::setMappedInputManager(activity.mappedInput);
+  activity.nav.requestSelection(0);
+  activity.mappedInput.down[0] = activity.mappedInput.pressed[0] = true;
+  activity.navigateButtons();
+  activity.mappedInput.pressed[0] = false;
+  navigatorTestMillis = activity.mappedInput.heldMs = 600;
+  activity.navigateButtons();
+  EXPECT_EQ(activity.ringPos(), 0);
+  EXPECT_EQ(activity.tabSteps, 1);
+}
+
+TEST_F(ListNavigationTest, ShrinkingTabClampsRingToLastRemainingRow) {
+  UiTabListActivity activity;
+  UiScreen screen;
+  fui::ListProps props;
+  activity.nav.requestSelection(12);
+  activity.count = 2;
+  activity.syncTabListViewport(screen, props);
+  EXPECT_EQ(activity.nav.selected.load(), 2);
+  EXPECT_EQ(props.selectedIndex, 1);
+  activity.count = 0;
+  activity.syncTabListViewport(screen, props);
+  EXPECT_EQ(activity.nav.selected.load(), 0);
+  EXPECT_EQ(props.selectedIndex, -1);
+}
+// clang-format on

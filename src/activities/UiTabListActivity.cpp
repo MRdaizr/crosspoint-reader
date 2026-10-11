@@ -50,8 +50,7 @@ void UiTabListActivity::moveRingTo(const int ringIndex) {
   // already resolves the ring's viewport under followOnBuild, so the main task
   // sets the position and leaves `top` to the render task that owns it.
   auto& n = activeNav();
-  n.selected = ringIndex;
-  n.followOnBuild = true;
+  n.requestSelection(ringIndex);
   requestUpdate();
 }
 
@@ -80,37 +79,7 @@ void UiTabListActivity::navigateButtons() {
 }
 
 void UiTabListActivity::syncTabListViewport(UiScreen& screen, fui::ListProps& props, const bool hasSubtitle) {
-  const int count = listCount();
-  auto& n = activeNav();
-  int16_t rowHeight = screen.theme().rowHeight;
-  if (!mappedInput.hasTouch()) {
-    // Non-touch hardware (X3/X4) keeps the original, denser per-theme row
-    // height instead of FreeInkUI's touch-target-sized default (see
-    // UiListActivity::syncListViewport, the non-tab counterpart of this).
-    const auto& metrics = UITheme::getInstance().getMetrics();
-    rowHeight = static_cast<int16_t>(hasSubtitle ? metrics.listWithSubtitleRowHeight : metrics.listRowHeight);
-    props.rowHeight = rowHeight;
-  }
-  const uint16_t rows = fui::listVisibleRows(screen.body(), rowHeight, screen.theme().listRowGap);
-  n.visibleRows = rows > 0 ? rows : 1;
-  if (n.followOnBuild) {
-    // Screen entry, tab switch, or a ring move: show the tab's remembered
-    // selection, or the top when the tab bar holds the focus.
-    n.followOnBuild = false;
-    n.top = n.selected > 0 ? static_cast<int>(fui::listTopIndexFor(
-                                 static_cast<int16_t>(n.selected - 1), static_cast<uint16_t>(n.top < 0 ? 0 : n.top),
-                                 static_cast<uint16_t>(n.visibleRows), static_cast<uint16_t>(count)))
-                           : 0;
-  }
-  n.scrollBy(0, count);  // clamp to range
-  // A dynamic tab can shrink its item list while it is focused (for example
-  // when a setting is removed or an SD-backed list disappears).  scrollBy()
-  // clamps the viewport but intentionally leaves the selection untouched;
-  // clamp it as well before publishing the FUI props so the next render and
-  // confirm event never address an item past the new list end.
-  if (n.selected > count) n.selected = count;
-  props.topIndex = static_cast<uint16_t>(n.top);
-  props.selectedIndex = static_cast<int16_t>(n.selected - 1);  // -1 = tab band focused
+  syncListViewport(screen, props, hasSubtitle, 1);
 }
 
 void UiTabListActivity::buildTabBar(UiScreen& screen) {

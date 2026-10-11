@@ -31,6 +31,9 @@ class PersistableStoreBase {
  public:
   static bool writeDocToFile(const char* path, const JsonDocument& doc);
   static bool readDocFromFile(const char* path, JsonDocument& doc);
+  // Custom binary-migration loaders must also recognize an interrupted JSON
+  // publication, otherwise they bypass recovery when only the backup exists.
+  static bool hasDocFile(const char* path);
 
  protected:
   static std::string extractPassword(JsonVariantConst doc, bool& needsResave);

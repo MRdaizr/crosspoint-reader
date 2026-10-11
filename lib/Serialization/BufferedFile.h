@@ -2,6 +2,7 @@
 
 #include <HalStorage.h>
 #include <Memory.h>
+#include <Serialization.h>
 
 #include <algorithm>
 #include <cstring>
@@ -93,6 +94,8 @@ class BufferedFileReader {
 
   size_t position() const { return bufStart + off; }
 
+  size_t available() const { return static_cast<size_t>(std::max(0, file.available())) + fill - off; }
+
   bool seek(const size_t target) {
     if (cap != 0 && target >= bufStart && target < bufStart + fill) {
       off = target - bufStart;
@@ -120,8 +123,20 @@ void writePod(BufferedFileWriter& out, const T& value) {
 }
 
 template <typename T>
-void readPod(BufferedFileReader& in, T& value) {
-  in.read(&value, sizeof(T));
+bool readPod(BufferedFileReader& in, T& value) {
+  if constexpr (std::is_same_v<T, bool>) {
+    uint8_t raw = 0;
+    if (!readPod(in, raw) || raw > 1) {
+      value = false;
+      return false;
+    }
+    value = raw != 0;
+    return true;
+  } else {
+    if (in.read(&value, sizeof(T)) == sizeof(T)) return true;
+    value = T{};
+    return false;
+  }
 }
 
 inline void writeString(BufferedFileWriter& out, const std::string& s) {
@@ -130,11 +145,16 @@ inline void writeString(BufferedFileWriter& out, const std::string& s) {
   if (len > 0) out.write(s.data(), len);
 }
 
-inline void readString(BufferedFileReader& in, std::string& s) {
-  uint32_t len;
-  readPod(in, len);
+inline bool readString(BufferedFileReader& in, std::string& s, const size_t maxBytes = MAX_STRING_BYTES) {
+  s.clear();
+  uint32_t len = 0;
+  if (!readPod(in, len) || len > maxBytes || len > in.available() ||
+      (len > s.capacity() && !canAllocate(size_t(len) + 1)))
+    return false;
   s.resize(len);
-  if (len > 0) in.read(&s[0], len);
+  if (!len || in.read(s.data(), len) == len) return true;
+  s.clear();
+  return false;
 }
 
 }  // namespace serialization

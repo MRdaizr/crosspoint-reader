@@ -105,7 +105,7 @@ bool WifiCredentialStore::loadFromFile() {
   if (loaded) return true;
 
   // Try the current PersistableStore JSON format first.
-  if (Storage.exists(getFilePath())) {
+  if (hasDocFile(getFilePath())) {
     const bool result = PersistableStore<WifiCredentialStore>::loadFromFile();
     loaded = true;
     return result;
@@ -132,9 +132,7 @@ bool WifiCredentialStore::loadFromFile() {
   return false;
 }
 
-bool WifiCredentialStore::ensureLoaded() const {
-  return const_cast<WifiCredentialStore*>(this)->loadFromFile();
-}
+bool WifiCredentialStore::ensureLoaded() const { return const_cast<WifiCredentialStore*>(this)->loadFromFile(); }
 
 void WifiCredentialStore::toJson(JsonDocument& doc) const {
   const auto state = snapshot();
@@ -218,8 +216,8 @@ bool WifiCredentialStore::fromJson(JsonVariantConst doc) {
         cred.password = obfuscation::deobfuscateFromBase64(encoded, MAX_PASSWORD_LENGTH, &decodeOk, &tooLong);
         decodedOk = decodeOk && cred.password.size() <= MAX_PASSWORD_LENGTH;
         if (!decodedOk) {
-          LOG_ERR("WCS", "Discarding Wi-Fi password with %s for '%s'",
-                  tooLong ? "oversized data" : "decode failure", cred.ssid.c_str());
+          LOG_ERR("WCS", "Discarding Wi-Fi password with %s for '%s'", tooLong ? "oversized data" : "decode failure",
+                  cred.ssid.c_str());
           cred.password.clear();
         }
       } else {

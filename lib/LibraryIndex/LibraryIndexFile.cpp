@@ -50,6 +50,7 @@ bool LibraryIndexFile::openImpl(const char* path, const bool acceptStaleFold) {
     return false;
   }
   opened = true;
+  ++openGeneration;
   return true;
 }
 

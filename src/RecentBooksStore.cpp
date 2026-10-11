@@ -182,7 +182,7 @@ RecentBook RecentBooksStore::getDataFromBook(std::string path) const {
 
 bool RecentBooksStore::loadFromFile() {
   // Try JSON first
-  if (Storage.exists(getFilePath())) {
+  if (hasDocFile(getFilePath())) {
     return PersistableStore<RecentBooksStore>::loadFromFile();
   }
 

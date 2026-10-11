@@ -25,6 +25,7 @@ class LibraryListActivity final : public UiTabListActivity {
   void activateIndex(int row) override;
   int tabCount() const override { return 3; }
   int activeTab() const override { return tab; }
+  void navigateButtons() override;
   const char* tabLabel(int index) const override;
   void onTabAction(int index) override;
   void stepTab(int direction) override;

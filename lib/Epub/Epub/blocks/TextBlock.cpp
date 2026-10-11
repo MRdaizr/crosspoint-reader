@@ -142,19 +142,15 @@ TextBlock::TextBlock(const std::vector<std::string>& inputWords, const std::vect
       isValid = false;
       return;
     }
+    rubyPresent |= !ruby.empty();
   }
   if (!hasRuby()) {
-    rubyTexts.clear();
+    std::vector<std::string>().swap(rubyTexts);
   }
   isValid = true;
 }
 
-bool TextBlock::hasRuby() const {
-  for (const auto& ruby : rubyTexts) {
-    if (!ruby.empty()) return true;
-  }
-  return false;
-}
+bool TextBlock::hasRuby() const { return rubyPresent; }
 
 const char* TextBlock::wordText(const size_t index) const {
   if (!isValid || index >= numWords || !textOffsets || !textData) return "";
@@ -176,6 +172,7 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
 
   const bool scanning = renderer.isFontCacheScanning();
   const int ascender = renderer.getFontAscenderSize(fontId);
+  const int rubyShift = getRubyShift(ascender);
   for (size_t i = 0; i < numWords; i++) {
     const char* word = wordText(i);
     const size_t wordLen = wordTextLen(i);
@@ -185,7 +182,6 @@ void TextBlock::render(const GfxRenderer& renderer, const int fontId, const int 
         static_cast<BidiUtils::BidiBaseDir>(BidiUtils::detectParagraphLevel(word, blockStyle.isRtl ? 1 : 0));
     const uint8_t boundary = focusBoundary(i);
 
-    const int rubyShift = getRubyShift(ascender);
     int wordY = y + rubyShift;
     if ((currentStyle & EpdFontFamily::SUP) != 0) {
       wordY -= ascender * 2 / 5;
@@ -290,10 +286,9 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   uint16_t wordCount = 0;
   uint8_t hasFocus = 0;
   uint16_t serializedTextBytes = 0;
-  serialization::readPod(file, wordCount);
-  serialization::readPod(file, hasFocus);
-  serialization::readPod(file, serializedTextBytes);
-  if (wordCount > MAX_WORDS || hasFocus > 1) {
+  if (!serialization::readPod(file, wordCount) || !serialization::readPod(file, hasFocus) ||
+      !serialization::readPod(file, serializedTextBytes) || wordCount > MAX_WORDS || hasFocus > 1 ||
+      wordCount > serializedTextBytes) {
     LOG_ERR("TXB", "Deserialization failed: invalid header (words=%u, focus=%u)", wordCount, hasFocus);
     return nullptr;
   }
@@ -308,14 +303,15 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
   block->textBytes = serializedTextBytes;
   block->focusPresent = hasFocus != 0;
   if (wordCount > 0) {
-    block->arena = makeUniqueNoThrow<uint8_t[]>(arenaSize(wordCount, serializedTextBytes, block->focusPresent));
+    const size_t bytes = arenaSize(wordCount, serializedTextBytes, block->focusPresent);
+    if (file.available() < 0 || bytes > static_cast<size_t>(file.available())) return nullptr;
+    block->arena = makeUniqueNoThrow<uint8_t[]>(bytes);
     if (!block->arena) {
       LOG_ERR("TXB", "Deserialization failed: text block arena allocation");
       return nullptr;
     }
     block->bindArenaPointers();
-    const size_t bytes = arenaSize(wordCount, serializedTextBytes, block->focusPresent);
-    if (file.read(block->arena.get(), bytes) != static_cast<int>(bytes)) {
+    if (static_cast<size_t>(file.read(block->arena.get(), bytes)) != bytes) {
       LOG_ERR("TXB", "Deserialization failed: short arena read");
       return nullptr;
     }
@@ -334,42 +330,48 @@ std::unique_ptr<TextBlock> TextBlock::deserialize(HalFile& file) {
     block->isValid = true;
   }
 
-  block->rubyTexts.resize(wordCount);
-  for (auto& ruby : block->rubyTexts) {
+  // Preserve the v34+ record format, but ordinary pages never allocate a ruby
+  // string table. Allocate the indexed table only on the first actual ruby.
+  for (size_t i = 0; i < wordCount; ++i) {
     uint32_t rubyBytes = 0;
-    serialization::readPod(file, rubyBytes);
-    if (rubyBytes > MAX_RUBY_BYTES) {
+    if (!serialization::readPod(file, rubyBytes) || rubyBytes > MAX_RUBY_BYTES || file.available() < 0 ||
+        rubyBytes > static_cast<size_t>(file.available())) {
       LOG_ERR("TXB", "Deserialization failed: ruby annotation too large");
       return nullptr;
     }
+    if (!rubyBytes) continue;
+    if (block->rubyTexts.empty()) {
+      if (!serialization::canAllocate(size_t(wordCount) * sizeof(std::string))) return nullptr;
+      block->rubyTexts.resize(wordCount);
+    }
+    auto& ruby = block->rubyTexts[i];
+    if (rubyBytes > ruby.capacity() && !serialization::canAllocate(size_t(rubyBytes) + 1)) return nullptr;
     ruby.resize(rubyBytes);
-    if (rubyBytes > 0 && file.read(&ruby[0], rubyBytes) != static_cast<int>(rubyBytes)) {
+    if (static_cast<size_t>(file.read(ruby.data(), rubyBytes)) != rubyBytes) {
       LOG_ERR("TXB", "Deserialization failed: short ruby annotation read");
       return nullptr;
     }
-  }
-  if (!block->hasRuby()) {
-    block->rubyTexts.clear();
+    block->rubyPresent = true;
   }
 
-  serialization::readPod(file, block->blockStyle.alignment);
-  serialization::readPod(file, block->blockStyle.textAlignDefined);
-  serialization::readPod(file, block->blockStyle.marginTop);
-  serialization::readPod(file, block->blockStyle.marginBottom);
-  serialization::readPod(file, block->blockStyle.marginLeft);
-  serialization::readPod(file, block->blockStyle.marginRight);
-  serialization::readPod(file, block->blockStyle.paddingTop);
-  serialization::readPod(file, block->blockStyle.paddingBottom);
-  serialization::readPod(file, block->blockStyle.paddingLeft);
-  serialization::readPod(file, block->blockStyle.paddingRight);
-  serialization::readPod(file, block->blockStyle.textIndent);
-  serialization::readPod(file, block->blockStyle.textIndentDefined);
-  serialization::readPod(file, block->blockStyle.isRtl);
-  serialization::readPod(file, block->blockStyle.directionDefined);
-  if (file.read(&block->blockStyle.characterSpacing, sizeof(block->blockStyle.characterSpacing)) !=
-          sizeof(block->blockStyle.characterSpacing) ||
-      block->blockStyle.characterSpacing < -2 || block->blockStyle.characterSpacing > 2) {
-    LOG_ERR("TXB", "Deserialization failed: invalid tracking payload");
+  if (!serialization::readPod(file, block->blockStyle.alignment) ||
+      !serialization::readPod(file, block->blockStyle.textAlignDefined) ||
+      !serialization::readPod(file, block->blockStyle.marginTop) ||
+      !serialization::readPod(file, block->blockStyle.marginBottom) ||
+      !serialization::readPod(file, block->blockStyle.marginLeft) ||
+      !serialization::readPod(file, block->blockStyle.marginRight) ||
+      !serialization::readPod(file, block->blockStyle.paddingTop) ||
+      !serialization::readPod(file, block->blockStyle.paddingBottom) ||
+      !serialization::readPod(file, block->blockStyle.paddingLeft) ||
+      !serialization::readPod(file, block->blockStyle.paddingRight) ||
+      !serialization::readPod(file, block->blockStyle.textIndent) ||
+      !serialization::readPod(file, block->blockStyle.textIndentDefined) ||
+      !serialization::readPod(file, block->blockStyle.isRtl) ||
+      !serialization::readPod(file, block->blockStyle.directionDefined) ||
+      !serialization::readPod(file, block->blockStyle.characterSpacing) ||
+      block->blockStyle.alignment > CssTextAlign::None || block->blockStyle.characterSpacing < -2 ||
+      block->blockStyle.characterSpacing > 2) {
+    LOG_ERR("TXB", "Deserialization failed: invalid or incomplete style payload");
     return nullptr;
   }
   block->isValid = true;

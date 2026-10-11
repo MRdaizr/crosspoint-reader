@@ -57,6 +57,8 @@ class LibraryIndexFile {
   ClixValidity validity() const { return lastValidity; }
   const ClixHeader& header() const { return head; }
   uint16_t bookCount() const { return opened ? head.bookCount : 0; }
+  // A reopened handle may refer to a replacement with an identical header.
+  uint64_t generation() const { return openGeneration; }
   bool ranksDegraded() const { return opened && (head.flags & CLIX_FLAG_RANKS_DEGRADED) != 0; }
   bool dedupDegraded() const { return opened && (head.flags & CLIX_FLAG_DEDUP_DEGRADED) != 0; }
 
@@ -106,6 +108,7 @@ class LibraryIndexFile {
   HalFile file;
   ClixHeader head{};
   bool opened = false;
+  uint64_t openGeneration = 0;
   bool readFailed = false;
   ClixValidity lastValidity = ClixValidity::BadMagic;
 };

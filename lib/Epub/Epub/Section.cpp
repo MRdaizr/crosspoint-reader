@@ -1205,49 +1205,49 @@ std::unique_ptr<Page> Section::loadPageAt(const int page) const {
   }
 
   uint8_t version = 0;
-  serialization::readPod(cached, version);
+  if (!serialization::readPod(cached, version)) return nullptr;
   if (version != SECTION_FILE_VERSION && version != SECTION_FILE_PARTIAL_VERSION) {
     cached.close();
     return nullptr;
   }
 
-  cached.seek(HEADER_SIZE - sizeof(uint32_t) * 5 - sizeof(uint16_t));
+  if (!cached.seek(HEADER_SIZE - sizeof(uint32_t) * 5 - sizeof(uint16_t))) return nullptr;
   uint16_t cachedPageCount = 0;
-  serialization::readPod(cached, cachedPageCount);
+  if (!serialization::readPod(cached, cachedPageCount)) return nullptr;
   if (page >= cachedPageCount) {
     cached.close();
     return nullptr;
   }
 
-  cached.seek(HEADER_SIZE - sizeof(uint32_t) * 5);
+  if (!cached.seek(HEADER_SIZE - sizeof(uint32_t) * 5)) return nullptr;
   uint32_t lutOffset = 0;
-  serialization::readPod(cached, lutOffset);
-  const uint32_t lutEntry = lutOffset + static_cast<uint32_t>(page) * sizeof(uint32_t);
+  if (!serialization::readPod(cached, lutOffset)) return nullptr;
+  const uint64_t lutEntry = uint64_t(lutOffset) + static_cast<uint32_t>(page) * sizeof(uint32_t);
   if (lutOffset < HEADER_SIZE || lutEntry + sizeof(uint32_t) > cached.size()) {
     cached.close();
     return nullptr;
   }
-  cached.seek(lutEntry);
+  if (!cached.seek(static_cast<size_t>(lutEntry))) return nullptr;
   uint32_t pagePos = 0;
-  serialization::readPod(cached, pagePos);
+  if (!serialization::readPod(cached, pagePos)) return nullptr;
   if (pagePos < HEADER_SIZE || pagePos >= cached.size()) {
     cached.close();
     return nullptr;
   }
-  cached.seek(pagePos);
+  if (!cached.seek(pagePos)) return nullptr;
   auto result = Page::deserialize(cached);
 
   if (result) {
-    cached.seek(HEADER_SIZE - sizeof(uint32_t));
+    if (!cached.seek(HEADER_SIZE - sizeof(uint32_t))) return nullptr;
     uint32_t visibleLutOffset = 0;
-    serialization::readPod(cached, visibleLutOffset);
-    const uint32_t visibleEntry = visibleLutOffset + static_cast<uint32_t>(page) * sizeof(uint32_t);
+    if (!serialization::readPod(cached, visibleLutOffset)) return nullptr;
+    const uint64_t visibleEntry = uint64_t(visibleLutOffset) + static_cast<uint32_t>(page) * sizeof(uint32_t);
     if (visibleLutOffset < HEADER_SIZE || visibleEntry + sizeof(uint32_t) > cached.size()) {
       result.reset();
     } else {
-      cached.seek(visibleEntry);
+      if (!cached.seek(static_cast<size_t>(visibleEntry))) return nullptr;
       uint32_t visibleTextOffset = 0;
-      serialization::readPod(cached, visibleTextOffset);
+      if (!serialization::readPod(cached, visibleTextOffset)) return nullptr;
       result->visibleTextOffset = visibleTextOffset;
     }
   }
@@ -1402,22 +1402,22 @@ std::optional<uint16_t> Section::getPageForAnchor(const std::string& anchor) con
     f.close();
     return std::nullopt;
   }
-  f.seek(HEADER_SIZE - sizeof(uint32_t) * 4);
-  uint32_t anchorMapOffset;
-  serialization::readPod(f, anchorMapOffset);
+  if (!f.seek(HEADER_SIZE - sizeof(uint32_t) * 4)) return std::nullopt;
+  uint32_t anchorMapOffset = 0;
+  if (!serialization::readPod(f, anchorMapOffset)) return std::nullopt;
   if (anchorMapOffset == 0 || anchorMapOffset >= fileSize) {
     f.close();
     return std::nullopt;
   }
 
-  f.seek(anchorMapOffset);
-  uint16_t count;
-  serialization::readPod(f, count);
+  if (!f.seek(anchorMapOffset)) return std::nullopt;
+  uint16_t count = 0;
+  if (!serialization::readPod(f, count) || uint64_t(count) * 6 > static_cast<uint64_t>(f.available()))
+    return std::nullopt;
   for (uint16_t i = 0; i < count; i++) {
     std::string key;
-    uint16_t page;
-    serialization::readString(f, key);
-    serialization::readPod(f, page);
+    uint16_t page = 0;
+    if (!serialization::readString(f, key) || !serialization::readPod(f, page)) return std::nullopt;
     if (key == anchor) {
       f.close();
       return page;

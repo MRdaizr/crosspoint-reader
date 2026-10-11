@@ -100,8 +100,7 @@ void UiListActivity::moveSelectionTo(const int index) {
   // state with no queue, so a press that started and ended inside that window
   // was never seen at all.
   auto& n = activeNav();
-  n.selected = index;
-  n.followOnBuild = true;  // the next build pulls the viewport to it
+  n.requestSelection(index);
   requestUpdate();
 }
 
@@ -181,15 +180,16 @@ void UiListActivity::navigateButtons() {
   // feedback corrects the viewport.
   buttonNavigator.onNextContinuous([this] {
     const auto& n = activeNav();
-    moveSelectionTo(ButtonNavigator::nextPageIndex(n.selected, listCount(), n.pageRows()));
+    moveSelectionTo(ButtonNavigator::nextPageIndex(n.selected, listCount(), n.inputPageRows()));
   });
   buttonNavigator.onPreviousContinuous([this] {
     const auto& n = activeNav();
-    moveSelectionTo(ButtonNavigator::previousPageIndex(n.selected, listCount(), n.pageRows()));
+    moveSelectionTo(ButtonNavigator::previousPageIndex(n.selected, listCount(), n.inputPageRows()));
   });
 }
 
-void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, const bool hasSubtitle) {
+void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, const bool hasSubtitle,
+                                      const int selectionOffset) {
   props.partialTrailingRow = true;
   auto& n = activeNav();
   const int prevTop = n.top;
@@ -209,7 +209,7 @@ void UiListActivity::syncListViewport(UiScreen& screen, fui::ListProps& props, c
     // A label that must wrap (maxLines > 1) grows only its own row: list()
     // sizes wrapped items per-row, so the dense height stays for the rest.
   }
-  n.syncToProps(screen.body(), rowHeight, screen.theme().listRowGap, listCount(), props);
+  n.syncToProps(screen.body(), rowHeight, screen.theme().listRowGap, listCount(), props, selectionOffset);
 
   // When the selection is already visible in the current viewport (based on
   // the measured drawnRows rather than the unweighted visibleRows estimate),

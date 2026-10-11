@@ -255,12 +255,12 @@ bool FileBrowserActivity::removeDirFile(const std::string& fullPath) {
 bool FileBrowserActivity::handleCustomInput() {
   // Long press BACK (1s+) goes to root folder (Books mode only).
   // In firmware-pick mode we keep navigation simple: short Back = up dir / cancel.
-  bool canGoHome = false;
-  {
-    RenderLock lock(*this);
-    canGoHome = mode == Mode::Books && basepath != "/" && !lockLongPressBack;
-  }
-  if (canGoHome && mappedInput.isPressed(MappedInputManager::Button::Back) && mappedInput.getHeldTime() >= GO_HOME_MS) {
+  // These fields are only changed by the input task. Waiting for the render
+  // lock here stalls every input pass during an e-ink refresh, leaving a
+  // short navigation press sampled as held long enough to repeat.
+  const bool canGoHome = mode == Mode::Books && basepath != "/" && !lockLongPressBack;
+  if (canGoHome && mappedInput.wasReleased(MappedInputManager::Button::Back) &&
+      mappedInput.getHeldTime() >= GO_HOME_MS) {
     {
       RenderLock lock(*this);
       closeRouting();
@@ -275,7 +275,6 @@ bool FileBrowserActivity::handleCustomInput() {
   }
 
   if (lockLongPressBack && mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-    RenderLock lock(*this);
     lockLongPressBack = false;
     return true;
   }

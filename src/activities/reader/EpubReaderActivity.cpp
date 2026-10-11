@@ -1734,14 +1734,22 @@ void EpubReaderActivity::silentIndexNextChapterIfNeeded(const uint16_t viewportW
   }
   clearNextChapterPreload();
 
-  Section cachedNextSection(epub, nextSpineIndex, renderer);
+  // Preloading is optional. Preserve the displayed page when heap pressure
+  // cannot support another Section and its path strings.
+  if (ESP.getFreeHeap() < BUILD_MIN_FREE_HEAP || ESP.getMaxAllocHeap() < BUILD_MIN_MAX_ALLOC) return;
+  nextChapterPreload = makeUniqueNoThrow<Section>(epub, nextSpineIndex, renderer);
+  if (!nextChapterPreload) {
+    LOG_ERR("ERS", "OOM: next-chapter preload");
+    return;
+  }
   const ReaderRenderSpec renderSpec = currentReaderRenderSpec(viewportWidth, viewportHeight);
-  if (cachedNextSection.loadSectionFile(renderSpec)) {
-    if (!cachedNextSection.isPartial()) return;
+  if (nextChapterPreload->loadSectionFile(renderSpec)) {
+    if (!nextChapterPreload->isPartial()) {
+      clearNextChapterPreload();
+      return;
+    }
     LOG_DBG("ERS", "Next chapter has a partial section cache; extending it in preload");
   }
-
-  nextChapterPreload = std::make_unique<Section>(epub, nextSpineIndex, renderer);
   const auto preloadProgressFn = [this](const uint8_t progress) { updatePreloadProgress(progress); };
   if (!nextChapterPreload->beginIncrementalBuild(renderSpec, preloadProgressFn)) {
     LOG_ERR("ERS", "Failed to start next-chapter preload: %d", nextSpineIndex);

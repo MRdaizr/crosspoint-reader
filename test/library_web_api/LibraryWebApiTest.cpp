@@ -29,13 +29,14 @@ std::vector<std::string> paths(const JsonResponse& reply) {
 class LibraryWebApiTest : public ::testing::Test {
  protected:
   WebServer server;
+  LibraryWebQuerySession querySession;
   void SetUp() override {
     fake::reset();
     bookMetadata.clear();
     SETTINGS.libraryUseMetadata = 1;
     book("/Books/original.epub", "Original Library", "Shelf Author", 10);
     build();  // also clears the production dirty state left by the prior test
-    registerLibraryWebApi(server);
+    registerLibraryWebApi(server, {}, &querySession);
   }
   void book(const std::string& path, const std::string& title, const std::string& author, uint32_t time = 1) {
     fake::add(path, "epub bytes", time);
@@ -108,6 +109,28 @@ TEST_F(LibraryWebApiTest, GetIsReadOnlyEvenWithDirtyMarkerAndChangedBook) {
   EXPECT_EQ(server.headers["Cache-Control"], "no-store");
   EXPECT_EQ(server.contentLength, CONTENT_LENGTH_UNKNOWN);
   EXPECT_TRUE(server.terminated);
+}
+
+TEST_F(LibraryWebApiTest, SearchPaginationReusesBoundedSessionAndRebuildInvalidatesIt) {
+  for (unsigned i = 0; i < 200; ++i) {
+    char name[64];
+    std::snprintf(name, sizeof(name), "/Books/needle%03u.epub", i);
+    book(name, "needle " + std::to_string(i), "Writer");
+  }
+  build();
+  const WebServer::Arguments args = {{"query", "needle"}, {"sort", "title"}, {"direction", "asc"}, {"limit", "16"}};
+  EXPECT_EQ(readOnlyGet(args).get("total"), "200");
+  fake::resetIoCounters();
+  auto next = args;
+  next["offset"] = "16";
+  EXPECT_EQ(readOnlyGet(next).get("count"), "16");
+  EXPECT_LT(fake::reads, 400u);
+  EXPECT_EQ(fake::delays, 0u);
+  const auto generation = library::libraryIndexGeneration();
+  book("/Books/added.epub", "needle new", "Writer");
+  build();
+  EXPECT_NE(library::libraryIndexGeneration(), generation);
+  EXPECT_EQ(readOnlyGet(args).get("total"), "201");
 }
 
 TEST_F(LibraryWebApiTest, MissingIndexDoesNotAutoBuildOrPromoteBackup) {

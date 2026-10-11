@@ -35,7 +35,9 @@ bool LibraryQuery::matches(LibraryIndexFile& index, const ClixRecord& record, co
 bool LibraryQuery::run(LibraryIndexFile& index, const std::string_view query, const SortOrder order,
                        const uint16_t offset, const uint16_t limit, QueryPage& page) {
   page = QueryPage{};
-  if (!index.isOpen() || query.size() > LIBRARY_QUERY_BYTES || !limit || limit > LIBRARY_PAGE_LIMIT) {
+  if (!index.isOpen() || index.ioFailed() || query.size() > LIBRARY_QUERY_BYTES || !limit ||
+      limit > LIBRARY_PAGE_LIMIT) {
+    cacheValid = false;
     LOG_ERR("LIBQ", "invalid query, page limit, or closed index");
     return false;
   }
@@ -51,6 +53,24 @@ bool LibraryQuery::run(LibraryIndexFile& index, const std::string_view query, co
     }
     return true;  // ordinary shelves touch only the requested page
   }
+  if (cacheValid && cachedIndex == &index && cachedGeneration == index.generation() && cachedOrder == order &&
+      cachedNeedleLen == needleLen && memcmp(cachedNeedle, needle, needleLen) == 0) {
+    page.total = cachedTotal;
+    uint16_t hit = 0;
+    for (uint16_t row = 0; row < index.bookCount() && page.count < limit; ++row) {
+      if (!(matchedRows[row / 8] & (1u << (row % 8)))) continue;
+      if (hit++ < offset) continue;
+      const uint16_t ordinal = index.ordinalForRow(order, row);
+      if (ordinal == 0xFFFF) {
+        cacheValid = false;
+        return false;
+      }
+      page.ordinals[page.count++] = ordinal;
+    }
+    return true;
+  }
+  cacheValid = false;
+  memset(matchedRows, 0, sizeof(matchedRows));
   for (uint16_t row = 0; row < index.bookCount(); ++row) {
     if ((row & 31u) == 0) {
 #ifdef ARDUINO
@@ -64,9 +84,17 @@ bool LibraryQuery::run(LibraryIndexFile& index, const std::string_view query, co
     const bool hit = matches(index, record, foldedQuery);
     if (index.ioFailed()) return false;
     if (!hit) continue;
+    matchedRows[row / 8] |= static_cast<uint8_t>(1u << (row % 8));
     if (page.total >= offset && page.count < limit) page.ordinals[page.count++] = ordinal;
     ++page.total;
   }
+  cachedIndex = &index;
+  cachedGeneration = index.generation();
+  cachedOrder = order;
+  cachedTotal = page.total;
+  cachedNeedleLen = needleLen;
+  memcpy(cachedNeedle, needle, needleLen);
+  cacheValid = true;
   return true;
 }
 }  // namespace library
