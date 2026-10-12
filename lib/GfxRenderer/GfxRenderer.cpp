@@ -1633,6 +1633,7 @@ void GfxRenderer::displayWindow(const int x, const int y, const int width, const
 
 void GfxRenderer::releaseFrameBufferForBuild() {
   if (frameBuffer == nullptr) return;
+  ++frameBufferLoans;
   uint32_t size = 0;
   uint8_t* scratch = display.lendFrameBufferStorage(&size);
   frameBuffer = nullptr;

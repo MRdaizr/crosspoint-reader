@@ -36,7 +36,7 @@ class EndOfBookOptions final : private UiAppHost {
   GfxRenderer& renderer;
   std::string folder;
   std::vector<std::string> names;
-  int selector = 0;
+  std::atomic<int> selector{0};
   std::atomic<bool> isLoaded{false};
 
   static constexpr size_t MAX_ROWS = MAX_SUGGESTIONS + 1;

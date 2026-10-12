@@ -39,6 +39,8 @@ struct Section {
 };
 class EpubReaderActivity {
  public:
+  enum class Overlay { None, Toolbar };
+  Overlay overlay = Overlay::None;
   static constexpr unsigned BUILD_MIN_FREE_HEAP = 32 * 1024, BUILD_MIN_MAX_ALLOC = 16 * 1024;
   std::shared_ptr<Epub> epub = std::make_shared<Epub>();
   std::unique_ptr<Section> section = std::make_unique<Section>();
@@ -67,6 +69,15 @@ class ReaderPreloadTest : public ::testing::Test {
     failNextCheckedObject = false;
   }
 };
+TEST_F(ReaderPreloadTest, OverlayPreservesBackingPageWithoutStartingPreload) {
+  EpubReaderActivity reader;
+  reader.overlay = EpubReaderActivity::Overlay::Toolbar;
+  reader.silentIndexNextChapterIfNeeded(480, 800);
+  EXPECT_EQ(Section::constructions, 0u);
+  EXPECT_FALSE(reader.nextChapterPreload);
+  EXPECT_EQ(reader.section->currentPage, 8);
+}
+
 TEST_F(ReaderPreloadTest, LowOrFragmentedHeapSkipsConstructionAndPreservesPage) {
   EpubReaderActivity reader;
   ESP.free = 31 * 1024;

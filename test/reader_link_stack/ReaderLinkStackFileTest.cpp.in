@@ -1,0 +1,100 @@
+#include <HalStorage.h>
+#include <Logging.h>
+#include <gtest/gtest.h>
+
+#include <memory>
+
+#include "src/util/ReaderLinkStack.h"
+
+struct Epub {
+  std::string getCachePath() const { return "/cache"; }
+  int getSpineItemsCount() const { return 10; }
+};
+
+class EpubReaderActivity {
+ public:
+  std::shared_ptr<Epub> epub = std::make_shared<Epub>();
+  readerlinks::Position savedPositions[readerlinks::MAX_DEPTH] = {{1, 10}, {2, 20}};
+  int footnoteDepth = 2;
+  bool saveLinkStack() const;
+  void loadLinkStack();
+};
+
+// clang-format off
+@LINK_METHODS@
+// clang-format on
+
+class ReaderLinkStackFileTest : public ::testing::Test {
+ protected:
+  const std::string path = "/cache/links.bin";
+  void SetUp() override { Storage.reset(); }
+};
+
+TEST_F(ReaderLinkStackFileTest, RoundTripConsumesPersistedStackOnce) {
+  EpubReaderActivity reader;
+  ASSERT_TRUE(reader.saveLinkStack());
+  EXPECT_EQ(Storage.files[path].bytes.size(), 9u);
+  reader.footnoteDepth = 0;
+  reader.loadLinkStack();
+  ASSERT_EQ(reader.footnoteDepth, 2);
+  EXPECT_EQ(reader.savedPositions[1].pageNumber, 20);
+  EXPECT_FALSE(Storage.exists(path.c_str()));
+  reader.loadLinkStack();
+  EXPECT_EQ(reader.footnoteDepth, 0);
+}
+
+TEST_F(ReaderLinkStackFileTest, EmptyStackClearsCanonicalTemporaryAndBackup) {
+  for (const auto& suffix : {"", ".bak", ".tmp"}) Storage.files[path + suffix] = {"old", 1};
+  EpubReaderActivity reader;
+  reader.footnoteDepth = 0;
+  EXPECT_TRUE(reader.saveLinkStack());
+  EXPECT_TRUE(Storage.files.empty());
+}
+
+TEST_F(ReaderLinkStackFileTest, ShortWriteAndCloseFailurePreservePreviousStack) {
+  Storage.files[path] = {"previous", 1};
+  EpubReaderActivity reader;
+  Storage.failWrite = ".tmp";
+  EXPECT_FALSE(reader.saveLinkStack());
+  EXPECT_EQ(Storage.files[path].bytes, "previous");
+  Storage.failWrite.clear();
+  Storage.failClose = ".tmp";
+  EXPECT_FALSE(reader.saveLinkStack());
+  EXPECT_EQ(Storage.files[path].bytes, "previous");
+}
+
+TEST_F(ReaderLinkStackFileTest, FailedPublicationRollsBackPreviousStack) {
+  Storage.files[path] = {"previous", 1};
+  Storage.failRename = path;
+  Storage.exactRename = true;
+  Storage.renameFailures = 1;
+  EpubReaderActivity reader;
+  EXPECT_FALSE(reader.saveLinkStack());
+  EXPECT_EQ(Storage.files[path].bytes, "previous");
+}
+
+TEST_F(ReaderLinkStackFileTest, RecoversBackupAndDiscardsUnpublishedTemporary) {
+  EpubReaderActivity reader;
+  ASSERT_TRUE(reader.saveLinkStack());
+  ASSERT_TRUE(Storage.rename(path.c_str(), (path + ".bak").c_str()));
+  Storage.files[path + ".tmp"] = {"partial", 1};
+  reader.footnoteDepth = 0;
+  reader.loadLinkStack();
+  EXPECT_EQ(reader.footnoteDepth, 2);
+  EXPECT_TRUE(Storage.files.empty());
+}
+
+TEST_F(ReaderLinkStackFileTest, RejectsTrailingBytesAndShortReads) {
+  EpubReaderActivity reader;
+  ASSERT_TRUE(reader.saveLinkStack());
+  Storage.files[path].bytes += "trailing";
+  reader.loadLinkStack();
+  EXPECT_EQ(reader.footnoteDepth, 0);
+  EXPECT_TRUE(Storage.files.empty());
+  reader.footnoteDepth = 2;
+  ASSERT_TRUE(reader.saveLinkStack());
+  Storage.maxRead = 2;
+  reader.loadLinkStack();
+  EXPECT_EQ(reader.footnoteDepth, 0);
+  EXPECT_TRUE(Storage.files.empty());
+}

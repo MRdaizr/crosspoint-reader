@@ -15,6 +15,17 @@ Files containing the legacy `fontSize` slot are accepted once, mapped to the
 equivalent point size, and rewritten. This setting migration does not change
 the EPUB section version.
 
+## `links.bin`
+
+Reader link return positions are stored separately from `progress.bin`, which
+continues to hold the page being viewed. The payload is one depth byte followed
+by that many little-endian `u16 spineIndex, u16 pageNumber` pairs, oldest first.
+At most three positions are stored (13 bytes); page 65535 is reserved and rejected.
+The reader validates the complete payload and spine bounds before restoring it.
+It consumes the file and its temporary/backup siblings once on entry. An exit or
+sync writes the active stack again via `links.bin.tmp` and `Storage.replaceFile`;
+an empty stack clears all three files.
+
 ## `book.bin`
 
 ### Version 10

@@ -32,7 +32,7 @@ void EndOfBookOptions::loadOnce(const std::string& currentBookPath) {
 
   folder = FsHelpers::extractFolderPath(currentBookPath);
   names = NextBookFinder::findNextBooks(currentBookPath, MAX_SUGGESTIONS);
-  selector = 0;
+  selector.store(0, std::memory_order_relaxed);
   if (!names.empty()) {
     resetUi();
     app.on(ACTION_ROW, &EndOfBookOptions::onRowEvent, this);
@@ -61,9 +61,7 @@ void EndOfBookOptions::buildRowItems() {
   }
 }
 
-bool EndOfBookOptions::menuActive() const {
-  return isLoaded.load(std::memory_order_acquire) && !names.empty();
-}
+bool EndOfBookOptions::menuActive() const { return isLoaded.load(std::memory_order_acquire) && !names.empty(); }
 
 std::string EndOfBookOptions::fullPath(const size_t index) const {
   if (index >= names.size()) return {};
@@ -73,7 +71,7 @@ std::string EndOfBookOptions::fullPath(const size_t index) const {
 void EndOfBookOptions::onRowEvent(const fui::ActionEvent& event, void* user) {
   auto* self = static_cast<EndOfBookOptions*>(user);
   if (event.value < 0 || event.value > static_cast<int16_t>(self->names.size())) return;
-  self->selector = event.value;
+  self->selector.store(event.value, std::memory_order_relaxed);
   self->app.clearTapFlash();
   self->tappedRow = event.value;
 }
@@ -91,8 +89,9 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
   if (route.routed && app.invalidated()) return Action::Redraw;
 
   if (input.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (selector < static_cast<int>(names.size())) {
-      if (openPath) *openPath = fullPath(static_cast<size_t>(selector));
+    const int selected = selector.load(std::memory_order_relaxed);
+    if (selected < static_cast<int>(names.size())) {
+      if (openPath) *openPath = fullPath(static_cast<size_t>(selected));
       return Action::OpenBook;
     }
     return Action::GoHome;
@@ -107,11 +106,13 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
   };
   const int itemCount = static_cast<int>(names.size()) + 1;
   if (triggered(MappedInputManager::Button::NavPrevious)) {
-    selector = ButtonNavigator::previousIndex(selector, itemCount);
+    selector.store(ButtonNavigator::previousIndex(selector.load(std::memory_order_relaxed), itemCount),
+                   std::memory_order_relaxed);
     return Action::Redraw;
   }
   if (triggered(MappedInputManager::Button::NavNext)) {
-    selector = ButtonNavigator::nextIndex(selector, itemCount);
+    selector.store(ButtonNavigator::nextIndex(selector.load(std::memory_order_relaxed), itemCount),
+                   std::memory_order_relaxed);
     return Action::Redraw;
   }
   return Action::None;
@@ -127,16 +128,15 @@ void EndOfBookOptions::buildListScreen(UiScreen& screen) {
   const int titleY = safe.y + safe.height / 8;
   const int subtitleY = titleY + renderer.getLineHeight(UI_12_FONT_ID) + metrics.verticalSpacing;
   const int listTop = subtitleY + renderer.getLineHeight(UI_10_FONT_ID) + metrics.verticalSpacing * 2;
-  screen.setContentMargin(fui::Insets{static_cast<int16_t>(listTop),
-                                      static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
-                                      static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height) +
-                                                           metrics.verticalSpacing),
-                                      static_cast<int16_t>(safe.x)});
+  screen.setContentMargin(fui::Insets{
+      static_cast<int16_t>(listTop), static_cast<int16_t>(renderer.getScreenWidth() - (safe.x + safe.width)),
+      static_cast<int16_t>(renderer.getScreenHeight() - (safe.y + safe.height) + metrics.verticalSpacing),
+      static_cast<int16_t>(safe.x)});
 
   fui::ListProps props;
   props.items = rowItems;
   props.count = static_cast<uint16_t>(rowCount);
-  props.selectedIndex = static_cast<int16_t>(selector);
+  props.selectedIndex = static_cast<int16_t>(selector.load(std::memory_order_relaxed));
   props.action = ACTION_ROW;
   props.inputMask = fui::InputTouch;
   if (!gpio.hasTouch()) props.rowHeight = static_cast<int16_t>(metrics.listRowHeight);

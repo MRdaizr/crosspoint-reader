@@ -65,9 +65,9 @@ class ReleaseJsonParser {
   bool tagFound;
   bool firmwareFound;
 
-  char currentAssetName[32];
+  char currentAssetName[48];
   char currentAssetUrl[512];
   size_t currentAssetSize;
 
-  char firmwareAssetName[32];
+  char firmwareAssetName[48];
 };

@@ -11,6 +11,7 @@
 #include "driver/temperature_sensor.h"
 #include "esp_debug_helpers.h"
 #include "esp_mac.h"
+#include "esp_memory_utils.h"
 #include "esp_private/esp_cpu_internal.h"
 #include "esp_private/esp_system_attr.h"
 #include "esp_private/panic_internal.h"
@@ -54,10 +55,16 @@ void IRAM_ATTR __wrap_panic_print_backtrace(const void* frame, int core) {
   }
 
   // Copied from components/esp_system/port/arch/riscv/panic_arch.c
-  uint32_t sp = (uint32_t)((RvExcFrame*)frame)->sp;
+  const uint32_t sp = (uint32_t)((RvExcFrame*)frame)->sp;
+  constexpr uint32_t captureBytes = 1024;
+  if ((sp & (alignof(uint32_t) - 1)) != 0 || !esp_stack_ptr_is_sane(sp) || sp > UINT32_MAX - captureBytes ||
+      !esp_ptr_in_dram(reinterpret_cast<const void*>(sp + captureBytes - 1))) {
+    __real_panic_print_backtrace(frame, core);
+    return;
+  }
   const int per_line = 8;
   int depth = 0;
-  for (int x = 0; x < 1024; x += per_line * sizeof(uint32_t)) {
+  for (uint32_t x = 0; x < captureBytes; x += per_line * sizeof(uint32_t)) {
     uint32_t* spp = (uint32_t*)(sp + x);
     // panic_print_hex(sp + x);
     // panic_print_str(": ");
@@ -179,6 +186,31 @@ HeapInfo getHeapInfo() {
           static_cast<uint32_t>(ESP.getMaxAllocHeap())};
 }
 
+static const char* resetReasonName(const esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_PANIC:
+      return "PANIC (exception/abort)";
+    case ESP_RST_CPU_LOCKUP:
+      return "CPU_LOCKUP";
+    case ESP_RST_INT_WDT:
+      return "INT_WDT";
+    case ESP_RST_TASK_WDT:
+      return "TASK_WDT";
+    case ESP_RST_WDT:
+      return "WDT (other)";
+    case ESP_RST_BROWNOUT:
+      return "BROWNOUT";
+    case ESP_RST_POWERON:
+      return "POWERON";
+    case ESP_RST_SW:
+      return "SW";
+    case ESP_RST_DEEPSLEEP:
+      return "DEEPSLEEP";
+    default:
+      return "OTHER";
+  }
+}
+
 std::string getPanicInfo(bool full) {
   if (!full) {
     return panicMessage;
@@ -186,6 +218,7 @@ std::string getPanicInfo(bool full) {
     std::string info;
 
     info += "CrossPoint version: " CROSSPOINT_VERSION;
+    info += "\n\nReset reason: " + std::string(resetReasonName(esp_reset_reason()));
     info += "\n\nPanic reason: " + std::string(panicMessage);
     info += "\n\nLast logs:\n" + getLastLogs();
     info += "\n\nStack memory:\n";

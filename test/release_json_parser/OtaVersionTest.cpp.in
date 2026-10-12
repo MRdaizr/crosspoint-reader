@@ -1,0 +1,62 @@
+#include <Logging.h>
+#include <gtest/gtest.h>
+
+#include <cstdio>
+#include <cstring>
+#include <string>
+
+static const char* runningVersion = "1.6.0";
+#define CROSSPOINT_VERSION runningVersion
+
+class OtaUpdater {
+ public:
+  bool updateAvailable = true;
+  std::string latestVersion = "1.6.1";
+  bool isUpdateNewer() const;
+};
+
+// clang-format off
+@VERSION_METHOD@
+// clang-format on
+
+class OtaVersionTest : public ::testing::Test {
+ protected:
+  void SetUp() override { runningVersion = "1.6.0"; }
+};
+
+TEST_F(OtaVersionTest, AcceptsVPrefixAndComparesVersionSegments) {
+  OtaUpdater updater;
+  updater.latestVersion = "v1.6.1";
+  EXPECT_TRUE(updater.isUpdateNewer());
+  updater.latestVersion = "V1.5.99";
+  EXPECT_FALSE(updater.isUpdateNewer());
+  updater.latestVersion = "2.0.0";
+  EXPECT_TRUE(updater.isUpdateNewer());
+}
+
+TEST_F(OtaVersionTest, RejectsIncompleteMalformedAndNegativeReleaseVersions) {
+  OtaUpdater updater;
+  for (const auto* version : {"", "invalid", "v1.6", "-1.6.1", "1.-6.1", "1.6.-1"}) {
+    updater.latestVersion = version;
+    EXPECT_FALSE(updater.isUpdateNewer()) << version;
+  }
+}
+
+TEST_F(OtaVersionTest, RefusesUpdateWithoutValidRunningVersionOrAvailableRelease) {
+  OtaUpdater updater;
+  runningVersion = "invalid";
+  EXPECT_FALSE(updater.isUpdateNewer());
+  runningVersion = "1.6.0";
+  updater.updateAvailable = false;
+  EXPECT_FALSE(updater.isUpdateNewer());
+}
+
+TEST_F(OtaVersionTest, EqualOfficialVersionOnlyReplacesReleaseCandidate) {
+  OtaUpdater updater;
+  updater.latestVersion = "1.6.0";
+  EXPECT_FALSE(updater.isUpdateNewer());
+  runningVersion = "v1.6.0-rc.1";
+  EXPECT_TRUE(updater.isUpdateNewer());
+  updater.latestVersion = "v1.6.0-rc.1";
+  EXPECT_FALSE(updater.isUpdateNewer());
+}

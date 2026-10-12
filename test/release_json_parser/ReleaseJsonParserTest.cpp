@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 
@@ -543,6 +544,32 @@ TEST(ReleaseJsonParser, FirmwareBinExactMatch) {
   EXPECT_TRUE(p.foundFirmware());
   EXPECT_STREQ(p.getFirmwareUrl(), "https://exact");
   EXPECT_EQ(p.getFirmwareSize(), 200u);
+}
+
+TEST(ReleaseJsonParser, ReleaseAssetRejectsWrongBoardVersionAndLongSharedPrefix) {
+  const char* json = R"({"tag_name":"1.6.1-rc.20261011","assets":[
+    {"name":"crosspoint-1.6.1-rc.20261011-x3-x4.bin","browser_download_url":"https://correct","size":100},
+    {"name":"crosspoint-1.6.1-rc.20261011-x4pro.bin","browser_download_url":"https://wrong-board","size":200},
+    {"name":"crosspoint-1.6.0-rc.20261011-x3-x4.bin","browser_download_url":"https://wrong-version","size":300}
+  ]})";
+  for (size_t chunk = 1; chunk <= strlen(json); ++chunk) {
+    ReleaseJsonParser p;
+    p.setFirmwareAssetName("crosspoint-1.6.1-rc.20261011-x3-x4.bin");
+    for (size_t offset = 0; offset < strlen(json); offset += chunk) {
+      p.feed(json + offset, std::min(chunk, strlen(json) - offset));
+    }
+    ASSERT_TRUE(p.foundFirmware()) << chunk;
+    EXPECT_STREQ(p.getFirmwareUrl(), "https://correct") << chunk;
+    EXPECT_EQ(p.getFirmwareSize(), 100u);
+  }
+}
+
+TEST(ReleaseJsonParser, DisabledAssetNameDoesNotMatchEmptyName) {
+  ReleaseJsonParser p;
+  p.setFirmwareAssetName("");
+  const char* json = R"({"assets":[{"name":"","browser_download_url":"https://wrong","size":1}]})";
+  p.feed(json, strlen(json));
+  EXPECT_FALSE(p.foundFirmware());
 }
 
 TEST(ReleaseJsonParser, LargeSize) {

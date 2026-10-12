@@ -17,6 +17,7 @@
 #include "ReaderActivity.h"
 #include "ReaderToolbarUi.h"
 #include "components/OptionPopup.h"
+#include "util/ReaderLinkStack.h"
 
 class EpubReaderActivity final : public ReaderActivity {
   std::shared_ptr<Epub> epub;
@@ -115,11 +116,8 @@ class EpubReaderActivity final : public ReaderActivity {
   std::vector<FootnoteEntry> currentPageFootnotes;
   PageLinks currentPageLinks;
   int linkSpineIndex = -1, linkPageNumber = -1;
-  struct SavedPosition {
-    int spineIndex;
-    int pageNumber;
-  };
-  static constexpr int MAX_FOOTNOTE_DEPTH = 3;
+  using SavedPosition = readerlinks::Position;
+  static constexpr int MAX_FOOTNOTE_DEPTH = readerlinks::MAX_DEPTH;
   SavedPosition savedPositions[MAX_FOOTNOTE_DEPTH] = {};
   int footnoteDepth = 0;
 
@@ -170,6 +168,8 @@ class EpubReaderActivity final : public ReaderActivity {
 
   // Footnote navigation
   void navigateToHref(const std::string& href, bool savePosition = false);
+  bool saveLinkStack() const;
+  void loadLinkStack();
   void restoreSavedPosition();
   void openPageLinks();
   bool handlePageLinkTap();

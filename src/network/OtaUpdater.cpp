@@ -13,6 +13,7 @@
 // clang-format on
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -29,15 +30,35 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   // Stream the ~32KB release JSON straight into the parser. Buffering the whole
   // body would add a growing allocation on top of the TLS session's heap.
   ReleaseJsonParser releaseParser;
+  releaseParser.setFirmwareAssetName("");
   const bool isX4 = board_tag::boardNameLen() == 2 && memcmp(board_tag::boardName(), "x4", 2) == 0;
-  char assetName[48] = "firmware.bin";
+  // Two captured references fit the callback's small-object storage.
+  struct AssetSelection {
+    char suffix[20] = "-x3-x4";
+    char name[48] = {};
+    bool ready = false;
+  } asset;
   if (!isX4) {
-    snprintf(assetName, sizeof(assetName), "firmware-%.*s.bin", static_cast<int>(board_tag::boardNameLen()),
+    snprintf(asset.suffix, sizeof(asset.suffix), "-%.*s", static_cast<int>(board_tag::boardNameLen()),
              board_tag::boardName());
   }
-  releaseParser.setFirmwareAssetName(assetName);
-  const bool ok = HttpDownloader::fetchUrl(latestReleaseUrl, [&releaseParser](const uint8_t* data, size_t len) {
-    releaseParser.feed(reinterpret_cast<const char*>(data), len);
+  const bool ok = HttpDownloader::fetchUrl(latestReleaseUrl, [&releaseParser, &asset](const uint8_t* data, size_t len) {
+    size_t offset = 0;
+    while (!asset.ready && offset < len) {
+      releaseParser.feed(reinterpret_cast<const char*>(data + offset), 1);
+      ++offset;
+      if (releaseParser.foundTag()) {
+        const int written =
+            snprintf(asset.name, sizeof(asset.name), "crosspoint-%s%s.bin", releaseParser.getTagName(), asset.suffix);
+        if (written < 0 || static_cast<size_t>(written) >= sizeof(asset.name)) {
+          LOG_ERR("OTA", "Release asset name is too long");
+          return false;
+        }
+        releaseParser.setFirmwareAssetName(asset.name);
+        asset.ready = true;
+      }
+    }
+    if (offset < len) releaseParser.feed(reinterpret_cast<const char*>(data + offset), len - offset);
     return true;
   });
   if (!ok) {
@@ -54,7 +75,7 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
   }
 
   if (!releaseParser.foundFirmware()) {
-    LOG_INF("OTA", "No %s asset in latest release", assetName);
+    LOG_INF("OTA", "No %s asset in latest release", asset.name);
     return NO_UPDATE;
   }
 
@@ -74,14 +95,21 @@ bool OtaUpdater::isUpdateNewer() const {
     return false;
   }
 
-  int currentMajor, currentMinor, currentPatch;
-  int latestMajor, latestMinor, latestPatch;
+  int currentMajor = 0, currentMinor = 0, currentPatch = 0;
+  int latestMajor = 0, latestMinor = 0, latestPatch = 0;
 
-  const auto currentVersion = CROSSPOINT_VERSION;
+  const char* currentVersion = CROSSPOINT_VERSION;
+  const char* releaseVersion = latestVersion.c_str();
+  if (*currentVersion == 'v' || *currentVersion == 'V') ++currentVersion;
+  if (*releaseVersion == 'v' || *releaseVersion == 'V') ++releaseVersion;
 
   // semantic version check (only match on 3 segments)
-  sscanf(latestVersion.c_str(), "%d.%d.%d", &latestMajor, &latestMinor, &latestPatch);
-  sscanf(currentVersion, "%d.%d.%d", &currentMajor, &currentMinor, &currentPatch);
+  if (sscanf(releaseVersion, "%d.%d.%d", &latestMajor, &latestMinor, &latestPatch) != 3 ||
+      sscanf(currentVersion, "%d.%d.%d", &currentMajor, &currentMinor, &currentPatch) != 3 || latestMajor < 0 ||
+      latestMinor < 0 || latestPatch < 0 || currentMajor < 0 || currentMinor < 0 || currentPatch < 0) {
+    LOG_ERR("OTA", "Cannot compare invalid firmware versions");
+    return false;
+  }
 
   if (latestMajor != currentMajor) return latestMajor > currentMajor;
   if (latestMinor != currentMinor) return latestMinor > currentMinor;

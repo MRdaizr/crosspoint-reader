@@ -974,6 +974,14 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
             bool gotDimensions = headerProbe.getDimensions(dims);
 
             if (!gotDimensions) {
+              GfxRenderer::FrameBufferLoan probeLoan(self->renderer);
+              ImageDimsProbe retryProbe;
+              self->epub->readItemContentsToStream(resolvedPath, retryProbe, IMAGE_PROBE_CHUNK_SIZE,
+                                                   /*allowEarlyStop=*/true);
+              gotDimensions = retryProbe.getDimensions(dims);
+            }
+
+            if (!gotDimensions) {
               // A few encoders place their dimensions unusually late. Fall
               // back to a one-time extraction so the page can still be laid
               // out; the normal path remains lazy.
@@ -985,8 +993,11 @@ void XMLCALL ChapterHtmlSlimParser::startElement(void* userData, const XML_Char*
               HalFile cachedImageFile;
               bool extractSuccess = false;
               if (Storage.openFileForWrite("EHP", cachedImagePath, cachedImageFile)) {
-                extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile,
-                                                                      IMAGE_FALLBACK_EXTRACTION_CHUNK_SIZE);
+                {
+                  GfxRenderer::FrameBufferLoan extractLoan(self->renderer);
+                  extractSuccess = self->epub->readItemContentsToStream(resolvedPath, cachedImageFile,
+                                                                        IMAGE_FALLBACK_EXTRACTION_CHUNK_SIZE);
+                }
                 cachedImageFile.flush();
                 cachedImageFile.close();
               }
